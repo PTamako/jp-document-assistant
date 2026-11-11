@@ -52,6 +52,7 @@ export async function gmailRevoke(){
 export async function gmailApi(path,accessToken,fetcher=fetch){
   if(typeof accessToken!=='string'||accessToken.length<12||accessToken.length>8192)
     throw new Error('Gmail 授权无效');
+  if(typeof path!=='string'||/^[a-z]+:\/\//i.test(path))throw new Error('Gmail API 地址无效');
   const url=new URL(path.startsWith('?')?API+path:API+'/'+path);
   if(url.origin!=='https://gmail.googleapis.com'||!url.pathname.startsWith('/gmail/v1/users/me/messages'))
     throw new Error('Gmail API 地址无效');
@@ -87,7 +88,8 @@ function mimeDataPart(part,depth=0){
   if(part.filename||part.body?.attachmentId)return [];
   const kind=String(part.mimeType||'').toLowerCase();
   if(['text/plain','text/html'].includes(kind)&&typeof part.body?.data==='string')
-    return [{kind,data:part.body.data}];
+    return [{kind,data:part.body.data,charset:
+      (/charset\s*=\s*["']?([a-zA-Z0-9._-]+)/i.exec(header(part.headers,'content-type'))||[])[1]||'utf-8'}];
   if(!Array.isArray(part.parts))return [];
   return part.parts.slice(0,32).flatMap(child=>mimeDataPart(child,depth+1));
 }
@@ -105,7 +107,7 @@ export function gmailPayloadToDocument(payload){
   // parser. Never request attachmentId or load HTML images/resources.
   const source=['From: '+header(headers,'from'),'Subject: '+header(headers,'subject'),
     'Date: '+header(headers,'date'),'MIME-Version: 1.0',
-    'Content-Type: '+body.kind+'; charset="utf-8"',
+    'Content-Type: '+body.kind+'; charset="'+body.charset+'"',
     'Content-Transfer-Encoding: base64','',''+padded].join('\r\n');
   const doc=extractEml(new TextEncoder().encode(source));
   return {...doc,source_type:'gmail',

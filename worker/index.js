@@ -32,7 +32,7 @@ function protectedResponse(resp){
   h.set('X-Content-Type-Options','nosniff');
   h.set('X-Frame-Options','DENY');
   h.set('Permissions-Policy','camera=(self), microphone=(), geolocation=()');
-  if(!h.has('Content-Security-Policy'))h.set('Content-Security-Policy',"default-src 'self'; img-src 'self' blob: data:; script-src 'self' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://apis.google.com; font-src 'self'; object-src 'none'; frame-src 'self' blob: https://accounts.google.com https://docs.google.com https://drive.google.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  if(!h.has('Content-Security-Policy'))h.set('Content-Security-Policy',"default-src 'self'; img-src 'self' blob: data:; script-src 'self' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://gmail.googleapis.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://apis.google.com; font-src 'self'; object-src 'none'; frame-src 'self' blob: https://accounts.google.com https://docs.google.com https://drive.google.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
   return new Response(resp.body,{status:resp.status,statusText:resp.statusText,headers:h});
 }
 function requireBinding(env,key){ if(!env[key]) bad(`尚未配置 ${key}，操作不可用`,'NOT_CONFIGURED',503); }
