@@ -189,3 +189,8 @@
 - 在统一账号会话清空时立即 Abort 上一账号默认 API 与私有原件 GET；旧响应已由 epoch 丢弃。新账号使用全新 AbortController，禁止旧账号网络请求完成后向页面写入。
 - 私人 ZIP 导出使用账号快照绑定 API、R2 下载 AbortSignal，且在实际向设备发起文件下载前再次校验账号世代；恢复批次沿用原有固定 epoch 防跨用户中途写入。
 - Google Drive TXT/EML/Office 下载后的异步解析新增会话检查，不让旧账号的选择结果重新出现在新账号编辑表单。
+
+## 部署前静态准入门禁（2026-11-11）
+
+- 新增 CI 回归 tests/release-preflight.test.js：在未审批阶段强制唯一 Worker/Static Assets、唯一 D1/R2 Binding、占位符不误当真实 ID、workers_dev 与 preview_urls 关闭、不存在 Cron/KV/Queues/DO/其他资源。
+- 校验 GitHub Actions 仅运行只读 CI，没有生产 Secrets、远端 D1 迁移、部署或自动 Preview；检查 Cookie Strict+HttpOnly、CSRF、私有 API no-store、无 R2 LIST 等静态边界。审批后如决定开通正式 workers.dev 域名，需同步改变审批模板和受控测试。
