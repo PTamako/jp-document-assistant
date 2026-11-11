@@ -485,3 +485,16 @@ test('DOCX text-layer analysis and optional R2 original respect user retention c
   assert.equal(rejected.response.status,415);
   assert.equal(env._blobs.size,1);
 });
+
+test('Office original with corrupt compressed XML is denied before any R2 put',async()=>{
+ const {fileOf}=await import('./helpers/office-fixture.js');
+ const env=makeEnv(),owner=await boot(env);
+ const bad=await fileOf('corrupt.docx',[
+  ['word/document.xml','<!DOCTYPE x [<!ENTITY s SYSTEM "file:///etc/passwd">]><w:document>&s;</w:document>']
+ ],true);
+ const f=new FormData();f.append('file',bad);f.append('retention','original');
+ const result=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:f});
+ assert.equal(result.response.status,415);
+ assert.equal(env._blobs.size,0);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM storage_objects').get().n),0);
+});
