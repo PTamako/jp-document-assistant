@@ -27,7 +27,7 @@ jobs:
             {name:'jpda-health',url:'https://jp-document-assistant.yupan6706.workers.dev/api/health',status:200,check:d=>d?.ok===true&&d?.service==='document-assistant'&&d?.ai_ocr==='experimental'},
             {name:'jpda-first-account',url:'https://jp-document-assistant.yupan6706.workers.dev/api/auth/status',status:200,check:d=>d?.ok===true&&d?.initialized===true},
             {name:'jpda-private-api',url:'https://jp-document-assistant.yupan6706.workers.dev/api/me',status:401},
-            {name:'homeflow-no-unauthorized-write',url:'https://homeflow.yupan6706.workers.dev/api/bridge/document-assistant',method:'POST',status:404},
+            {name:'homeflow-no-unauthorized-write',url:'https://homeflow.yupan6706.workers.dev/api/bridge/document-assistant',method:'POST',status:401},
             {name:'kakebo-no-unauthorized-write',url:'https://kakeibo-f17.pages.dev/api/bridge/document-assistant',method:'POST',status:401},
             {name:'zhixue-no-unauthorized-write',url:'https://it-study-platform.yupan6706.workers.dev/api/bridge/document-assistant',method:'POST',status:401}
           ];
