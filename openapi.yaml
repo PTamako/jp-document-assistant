@@ -1855,7 +1855,7 @@ paths:
   /api/auth/sessions:
     get:
       tags: [Auth]
-      summary: 只列出当前用户未撤销且未过期的登录会话（每页五条）
+      summary: 列出当前用户未撤销且未过期的登录会话（每页五条）
       operationId: listOwnSessions
       parameters:
       - name: offset
@@ -1863,13 +1863,13 @@ paths:
         schema: {type: integer, minimum: 0}
       responses:
         '200':
-          description: 返回会话 ID、登录时间、到期时间以及是否为当前会话；不返回 Cookie 或哈希
+          description: 返回 ID、登录时间、到期时间、是否当前会话；不返回 Cookie
         '401':
           $ref: '#/components/responses/Error'
   /api/auth/sessions/revoke:
     post:
       tags: [Auth]
-      summary: 撤销当前用户的另一登录会话，不能撤销其他家庭成员或当前会话
+      summary: 仅可撤销自己账号的其他会话
       operationId: revokeOwnSession
       parameters:
       - name: X-CSRF-Token
@@ -1884,63 +1884,11 @@ paths:
               type: object
               required: [session_id]
               properties:
-                session_id: {type: string, pattern: '^[a-fA-F0-9]{32}
-    post:
-      tags:
-      - Auth
-      summary: 验证当前密码，更新凭证，并撤销该用户全部会话（需要重新登录）
-      operationId: changePassword
-      parameters:
-      - name: X-CSRF-Token
-        in: header
-        required: true
-        schema:
-          type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [current_password, new_password]
-              properties:
-                current_password: {type: string}
-                new_password: {type: string, minLength: 12, maxLength: 128}
-      responses:
-        '200':
-          description: 已更改密码并撤销所有旧会话
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '403':
-          $ref: '#/components/responses/Error'
-        '409':
-          $ref: '#/components/responses/Error'
-        '429':
-          $ref: '#/components/responses/Error'
-components:
-  securitySchemes:
-    sessionCookie:
-      type: apiKey
-      in: cookie
-      name: __Host-da_session
-      description: 由服务端颁发、HttpOnly Secure SameSite，须提供同源及 X-CSRF-Token 才能写入。
-  responses:
-    Error:
-      description: 安全失败，code/message；绝不返回敏感日志
-      content:
-        application/json:
-          schema:
-            type: object
-            properties:
-              ok:
-                type: boolean
-              code:
-                type: string
-              message:
-                type: string
-}
+                session_id:
+                  type: string
+                  minLength: 32
+                  maxLength: 32
+                  pattern: '^[a-fA-F0-9]{32}$'
       responses:
         '200':
           description: 已撤销
@@ -1953,7 +1901,7 @@ components:
   /api/auth/sessions/revoke-others:
     post:
       tags: [Auth]
-      summary: 撤销当前账号除当前登录外所有有效会话
+      summary: 撤销当前账户的其他会话而保留当前设备
       operationId: revokeOtherOwnSessions
       parameters:
       - name: X-CSRF-Token
@@ -1962,7 +1910,7 @@ components:
         schema: {type: string}
       responses:
         '200':
-          description: 返回实际撤销会话数，当前登录保持有效
+          description: 返回被撤销的有效会话数量
         '403':
           $ref: '#/components/responses/Error'
   /api/auth/change-password:
