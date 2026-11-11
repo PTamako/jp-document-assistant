@@ -15,14 +15,15 @@ class OpenApiContractTests(unittest.TestCase):
     def test_only_actual_v011_routes_are_documented(self):
         self.assertIn('openapi: 3.1.0', SPEC)
         paths = re.findall(r'^  (/api/[^:\n]+):\s*$', SPEC, re.M)
-        self.assertEqual(len(paths),44)
+        self.assertEqual(len(paths),45)
         self.assertEqual(len(paths),len(set(paths)))
         self.assertNotIn('/api/auth/start',paths)
         self.assertNotIn('/api/auth/complete',paths)
         self.assertNotIn('/api/connections/{provider}/authorize',paths)
         for name in ['/api/auth/bootstrap','/api/auth/login','/api/household/join',
                      '/api/documents/{documentId}/attachments/{attachmentId}/permanent-delete',
-                     '/api/storage/cleanup-orphans','/api/backups/import-confirm']:
+                     '/api/storage/cleanup-orphans','/api/backups/import-confirm',
+                     '/api/documents/{documentId}/attachments/order']:
             self.assertIn(name,paths)
         self.assertIn("path==='/api/storage/cleanup-orphans'",WORKER)
         self.assertIn("path==='/api/auth/bootstrap'",WORKER)
@@ -31,8 +32,8 @@ class OpenApiContractTests(unittest.TestCase):
     def test_operations_are_unique_and_security_boundary_documented(self):
         operations = re.findall(r'^    (get|post|patch|put|delete):\s*$', SPEC, re.M)
         ids=re.findall(r'^      operationId:\s*(\S+)\s*$',SPEC,re.M)
-        self.assertEqual(len(operations),45)
-        self.assertEqual(len(ids),45)
+        self.assertEqual(len(operations),46)
+        self.assertEqual(len(ids),46)
         self.assertEqual(len(ids),len(set(ids)))
         self.assertIn('X-CSRF-Token',SPEC)
         self.assertIn('Idempotency-Key',SPEC)

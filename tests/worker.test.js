@@ -428,3 +428,29 @@ test('user-selected EML is decoded in RAM, then explicitly imported as private t
   assert.equal(env.DB.sql.prepare('SELECT source_type FROM document_sources LIMIT 1').get().source_type,'mail_forward');
   assert.equal(env._blobs.size,0);
 });
+
+
+test('owner reorders active attachment IDs with version CAS; no R2 operation',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const form=bytes=>{const f=new FormData();f.append('file',new File([new Uint8Array([255,216,255,224,...bytes])],`page-${bytes[0]}.jpg`,{type:'image/jpeg'}));f.append('retention','original');return f;};
+  const first=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:form([11,22])});
+  const id=first.data.document_id;
+  assert.equal((await req(env,`/api/documents/${id}/attachments`,{method:'POST',...auth(owner),form:form([33,44])})).response.status,201);
+  const before=(await req(env,`/api/documents/${id}`,auth(owner))).data.document;
+  const ids=before.attachments.map(x=>x.id);
+  assert.equal(ids.length,2);
+  let r2Reads=0,r2Writes=0;
+  const originals={...env.DOCUMENTS};
+  env.DOCUMENTS.get=async(...args)=>{r2Reads++;return originals.get(...args)};
+  env.DOCUMENTS.put=async(...args)=>{r2Writes++;return originals.put(...args)};
+  const update=()=>req(env,`/api/documents/${id}/attachments/order`,{method:'PATCH',...auth(owner),data:{version:before.version,attachment_ids:[ids[1],ids[0]]}});
+  const result=await update();
+  assert.equal(result.response.status,200,JSON.stringify(result.data));
+  const after=(await req(env,`/api/documents/${id}`,auth(owner))).data.document;
+  assert.deepEqual(after.attachments.map(x=>x.id),[ids[1],ids[0]]);
+  assert.equal(after.version,before.version+1);
+  const repeat=await update();assert.equal(repeat.response.status,409);
+  const invalid=await req(env,`/api/documents/${id}/attachments/order`,{method:'PATCH',...auth(owner),data:{version:after.version,attachment_ids:[ids[0],ids[0]]}});
+  assert.equal(invalid.response.status,400);
+  assert.equal(r2Reads,0);assert.equal(r2Writes,0);
+});

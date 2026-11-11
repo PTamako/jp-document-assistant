@@ -140,6 +140,21 @@ async function trashAttachment(a){if(!current.value)return;busy.value=true;try{
   await api(`/api/documents/${current.value.id}/attachments/${a.id}/trash`,{method:'POST',body:{}});
   const id=current.value.id;await openDoc(id);flash('附件已移入回收站，文字结果保留');
 }catch(e){problem(e);}finally{busy.value=false;}}
+async function moveAttachment(attachment,step){
+  if(!current.value||busy.value)return;
+  const old=current.value.attachments||[],index=old.findIndex(x=>x.id===attachment.id);
+  const next=index+step;if(index<0||next<0||next>=old.length)return;
+  const reordered=[...old];[reordered[index],reordered[next]]=[reordered[next],reordered[index]];
+  busy.value=true;
+  try{
+    const result=await api(`/api/documents/${current.value.id}/attachments/order`,{
+      method:'PATCH',body:{version:current.value.version,attachment_ids:reordered.map(x=>x.id)}
+    });
+    // Keep original view open without reloading all document metadata or R2.
+    current.value={...current.value,attachments:reordered,version:result.version};
+    flash('附件顺序已更新，未重新读取图片');
+  }catch(e){problem(e);}finally{busy.value=false;}
+}
 async function deleteAttachment(){if(!pendingAttachment.value)return;busy.value=true;try{
  const a=pendingAttachment.value;const result=await api(`/api/documents/${a.document_id}/attachments/${a.id}/permanent-delete`,{method:'POST',body:{confirm:'DELETE_FOREVER'}});
  pendingAttachment.value=null;sheet.value='recycle';await refreshTrash();flash(result.warning||'附件记录已清理，最后一个引用的 R2 原件同步删除');
@@ -280,7 +295,7 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
       <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button" @click="amountVisible=!amountVisible">{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>原文：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':'截止日：'+item.payload.due_on}}</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div><p class="fine-print">HomeFlow 负责任务提醒，家計簿负责收支。这里不会自动写入。</p></section>
       <section v-if="detailTab==='study'"><h3 class="section-title">值得记住的日文词语</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id"><strong>{{item.payload.term}}</strong><p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入</button></div><div v-if="!detailCandidates.some(c=>c.candidate_kind==='vocabulary')" class="empty">尚未找到可复用词语。</div></section>
-      <section v-if="detailTab==='original'"><div class="content-card"><h3>原文与原件</h3><p class="multiline" v-if="current.extracted_text_ja">{{current.extracted_text_ja}}</p><p v-else class="muted">原文尚未提取。你可以主动查看私有附件，查看时才会请求 R2。</p><button class="secondary full" @click="editText">人工输入 / 修正 OCR 文字</button><button class="secondary full" @click="extraFileInput?.click()">＋ 添加扫描页或附件</button><input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" /><div class="attachment-row" v-for="a in current.attachments" :key="a.id"><button class="secondary" @click="showOriginal(a)">查看 · {{a.file_label}}</button><button class="secondary small" @click="runOcr(a)">尝试 OCR</button><button class="secondary small danger-text" @click="trashAttachment(a)">移入回收站</button></div></div><p class="fine-print">不在后台预取原图或保存至本机持久缓存。</p></section>
+      <section v-if="detailTab==='original'"><div class="content-card"><h3>原文与原件</h3><p class="multiline" v-if="current.extracted_text_ja">{{current.extracted_text_ja}}</p><p v-else class="muted">原文尚未提取。你可以主动查看私有附件，查看时才会请求 R2。</p><button class="secondary full" @click="editText">人工输入 / 修正 OCR 文字</button><button class="secondary full" @click="extraFileInput?.click()">＋ 添加扫描页或附件</button><input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" /><div class="attachment-row" v-for="(a,i) in current.attachments" :key="a.id"><button class="secondary" @click="showOriginal(a)">查看 · {{a.file_label}}</button><button class="secondary small" :disabled="busy||i===0" :aria-label="`将${a.file_label}上移一页`" @click="moveAttachment(a,-1)">↑</button><button class="secondary small" :disabled="busy||i===current.attachments.length-1" :aria-label="`将${a.file_label}下移一页`" @click="moveAttachment(a,1)">↓</button><button class="secondary small" @click="runOcr(a)">尝试 OCR</button><button class="secondary small danger-text" @click="trashAttachment(a)">移入回收站</button></div></div><p class="fine-print">不在后台预取原图或保存至本机持久缓存。</p></section>
     </div>
   </div>
 

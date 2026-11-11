@@ -1092,6 +1092,58 @@ paths:
               required:
               - file
               - retention
+  /api/documents/{documentId}/attachments/order:
+    patch:
+      tags:
+      - Documents
+      summary: 仅拥有者可按稳定附件 ID 重排全部有效扫描页；版本冲突拒绝，不读取 R2
+      operationId: reorderDocumentAttachments
+      responses:
+        '200':
+          description: 附件顺序已更新，返回新文书版本号
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: integer
+                  minimum: 1
+                attachment_ids:
+                  type: array
+                  minItems: 2
+                  maxItems: 30
+                  uniqueItems: true
+                  items:
+                    type: string
+                    pattern: ^[a-f0-9]{32}$
+              required:
+              - version
+              - attachment_ids
   /api/documents/{documentId}/attachments/recycle:
     get:
       tags:

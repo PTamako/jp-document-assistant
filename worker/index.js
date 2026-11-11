@@ -535,6 +535,35 @@ async function route(request,env){
       const d=await readJson(request,2000);if(d.confirm!=='DELETE_FOREVER')bad('需要二次确认','CONFIRM_REQUIRED',409);
       return permanentlyDelete(env,p,id);
     }
+    if(method==='PATCH'&&rest==='attachments/order'){
+      const d=await ownedDocument(env.DB,id,p,'active');
+      const body=await readJson(request,4000),ids=body.attachment_ids;
+      if(!Number.isSafeInteger(body.version)||body.version!==d.version)
+        bad('文书已由其他操作修改，请刷新后重新排序','VERSION_CONFLICT',409);
+      if(!Array.isArray(ids)||ids.length<2||ids.length>30||
+          !ids.every(x=>typeof x==='string'&&/^[a-f0-9]{32}$/.test(x))||new Set(ids).size!==ids.length)
+        bad('附件顺序列表无效');
+      const existing=await dbAll(env.DB,"SELECT id FROM attachments WHERE document_id=? AND state='active' ORDER BY sort_order,id",id);
+      if(ids.length!==existing.length||!existing.every(a=>ids.includes(a.id)))
+        bad('附件列表已发生变化，请刷新后重新排序','ATTACHMENT_CONFLICT',409);
+      const now=isoNow(),params=ids.map(()=>'?').join(',');
+      // First statement acts as an atomic version+membership claim. D1 batch
+      // makes the entire reorder all-or-nothing; changes() chains the write
+      // gate so a lost CAS cannot reorder any of the attachments.
+      const statements=[[
+        `UPDATE documents SET version=version+1,updated_at=? WHERE id=? AND owner_id=? AND version=? AND lifecycle='active'
+          AND (SELECT COUNT(*) FROM attachments WHERE document_id=? AND state='active')=?
+          AND NOT EXISTS(SELECT 1 FROM attachments WHERE document_id=? AND state='active' AND id NOT IN (${params}))`,
+        now,id,p.user_id,d.version,id,ids.length,id,...ids
+      ]];
+      ids.forEach((aid,index)=>statements.push([
+        `UPDATE attachments SET sort_order=?,updated_at=? WHERE id=? AND document_id=? AND state='active' AND changes()=1`,
+        index,now,aid,id
+      ]));
+      const output=await batch(env.DB,statements);
+      if(output.some(v=>v.meta?.changes!==1))bad('附件列表已被其他设备修改，请刷新','ATTACHMENT_CONFLICT',409);
+      return json({ok:true,version:d.version+1,attachment_ids:ids});
+    }
     if(method==='POST'&&rest==='attachments')return attachPage(request,env,p,id);
     if(method==='GET'&&rest==='attachments/recycle')return attachmentList(env,p,id);
     if(method==='POST'&&rest==='attachments/restore-upload')return restoreUpload(request,env,p,id);
