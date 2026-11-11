@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {gmailPage,gmailSelected,gmailPayloadToDocument,gmailApi,gmailConnected,gmailForget} from '../web/src/gmail-import.js';
+import {readFileSync} from 'node:fs';
 const token='fake-token-for-readonly-tests';
 const headers={Subject:'料金のお知らせ',From:'notice@example.invalid',Date:'Wed, 11 Nov 2026 12:30:00 +0900'};
 const meta={headers:Object.entries(headers).map(([name,value])=>({name,value}))};
@@ -63,4 +64,14 @@ test('Gmail invalid ID, URL, oversized payload, unauthorized requests fail close
   assert.throws(()=>gmailPayloadToDocument({mimeType:'text/plain',headers:meta.headers,
     body:{data:'A'.repeat(1400001)}}),/过大|编码/);
   gmailForget();assert.equal(gmailConnected(),false);
+});
+
+
+test('OAuth scope contract explicitly excludes previously granted scopes and browser persistent storage',()=>{
+  const source=readFileSync(new URL('../web/src/gmail-import.js',import.meta.url),'utf8');
+  assert.match(source,/scope:SCOPE,include_granted_scopes:false/);
+  assert.match(source,/hasGrantedAllScopes\(reply,SCOPE\)/);
+  assert.match(source,/error_callback:/);
+  assert.doesNotMatch(source,/localStorage|indexedDB|sessionStorage|document\.cookie/);
+  assert.match(source,/gmailForget\(\)/);
 });

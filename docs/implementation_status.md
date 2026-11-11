@@ -160,3 +160,7 @@
 
 - 新增 AES-GCM + PBKDF2 用户 ZIP 备份真实本地往返、错误密码、密文单字节篡改、无效加密文件头测试。
 - 新增原件缺失、SHA-256 原件内容被篡改、跨不受支持版本（明确拒绝而不伪装成功）的 ZIP 完整性测试；验证受损备份在写入 D1/R2 前失败。尚不代表所有历史 schema_version 能跨版本恢复，旧版适配仍待明确真实格式。
+
+## 2026-11-11 Gmail 账户范围收紧（本次提交待 CI）
+
+- 检查 Google 官方 token model 文档后明确 include_granted_scopes=false、hasGrantedAllScopes 验证范围；取消弹窗时提示，且 Gmail Token 在文书助手换账号/新登录及组件卸载时清除。Google revoke 撤销的是应用授权集合，已在配置文档披露。

@@ -27,17 +27,20 @@ export async function gmailAuthorize(){
   return new Promise((resolve,reject)=>{
     const client=window.google.accounts.oauth2.initTokenClient({
       client_id:import.meta.env.VITE_GOOGLE_CLIENT_ID,
-      scope:SCOPE,
+      scope:SCOPE,include_granted_scopes:false,
+      error_callback:()=>reject(new Error('Gmail 授权窗口被关闭或无法打开，请手动重试')),
       callback:reply=>{
         if(version!==initial)return reject(new Error('已切换用户，会话授权被取消'));
         if(reply?.error||!reply?.access_token)return reject(new Error('Gmail 只读授权未完成'));
+        if(!window.google.accounts.oauth2.hasGrantedAllScopes(reply,SCOPE))
+          return reject(new Error('未授予 Gmail 只读权限，任何邮件均未读取'));
         token=reply.access_token;
         expires=Date.now()+Math.max(0,Number(reply.expires_in)||0)*1000;
         if(!gmailConnected()){gmailForget();return reject(new Error('Gmail 授权无效或已过期'));}
         resolve({authorized:true});
       }
     });
-    try{client.requestAccessToken({prompt:'consent'});}catch{reject(new Error('浏览器阻止了 Gmail 授权弹窗，请在 Safari 中重试'));}
+    try{client.requestAccessToken({prompt:'consent',include_granted_scopes:false});}catch{reject(new Error('浏览器阻止了 Gmail 授权弹窗，请在 Safari 中重试'));}
   });
 }
 export async function gmailRevoke(){

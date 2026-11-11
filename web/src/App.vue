@@ -94,10 +94,11 @@ function clearGmailSession(){
   gmailItems.value=[];gmailNext.value=null;
 }
 async function boot(){
-  try {const d=await api('/api/me');user.value=d.user;csrf.value=d.csrf_token;await selectTab('today');}
+  try {const d=await api('/api/me');if(user.value?.id&&user.value.id!==d.user.id)clearGmailSession();user.value=d.user;csrf.value=d.csrf_token;await selectTab('today');}
   catch {user.value=null;clearGmailSession();}
 }
 async function submitAuth(){
+  clearGmailSession(); // Prevent a subsequent App account from inheriting prior Gmail OAuth state.
   busy.value=true;error.value='';
   try {
     const path={login:'/api/auth/login',bootstrap:'/api/auth/bootstrap',join:'/api/household/join'}[authMode.value];
@@ -402,7 +403,7 @@ const dueState=(v)=>{if(!v)return '待确认';const today=new Date().toLocaleDat
 const labelFor=(key)=>fieldLabel[key]||key;
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 onMounted(boot);
-onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
+onBeforeUnmount(()=>{clearGmailSession();revokeOriginal();fileDraft.value=null;});
 </script>
 
 <template>

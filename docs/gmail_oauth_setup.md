@@ -22,3 +22,9 @@
 https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get
 https://developers.google.com/identity/oauth2/web/reference/js-reference
 https://developers.google.com/workspace/gmail/api/auth/scopes
+
+## Google 权限细分与家庭成员切换（2026-11-11）
+
+- 单独设置 include_granted_scopes=false，并通过官方 hasGrantedAllScopes 验证本次授权确实包含 Gmail readonly，防止以之前 Google Drive 权限冒充 Gmail 授权或意外扩大本次 Access Token 范围。
+- 文书助手新登录、返回不同 App 用户、退出、改密和 Vue 组件卸载都清空 Gmail Access Token 与内存列表。Google 授权窗口取消/失败必须返回可操作错误，不能假装已连接。
+- 注意 Google Identity Services 的 revoke 可能撤销**同一 OAuth 应用已同意的全部 Scope**，不仅 Gmail。用户需要知道可能同时影响 Google Drive Picker 的既有授权。
