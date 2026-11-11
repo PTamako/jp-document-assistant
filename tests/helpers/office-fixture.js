@@ -24,6 +24,6 @@ export function zipEntries(entries,compressed=false){
 }
 export async function fileOf(name,parts,compressed=false){
  const zip=zipEntries([['[Content_Types].xml',ct],...parts],compressed);
- const type=name.endsWith('.docx')?'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+ const type=name.endsWith('.docx')?'application/vnd.openxmlformats-officedocument.wordprocessingml.document':name.endsWith('.pptx')?'application/vnd.openxmlformats-officedocument.presentationml.presentation':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
  return new File([await zip.arrayBuffer()],name,{type});
 }
