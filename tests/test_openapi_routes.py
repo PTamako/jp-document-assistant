@@ -14,6 +14,8 @@ WORKER = (ROOT/'worker/index.js').read_text(encoding='utf-8')
 class OpenApiContractTests(unittest.TestCase):
     def test_only_actual_v011_routes_are_documented(self):
         self.assertIn('openapi: 3.1.0', SPEC)
+        self.assertEqual(SPEC.count('\ncomponents:\n'),1)
+        self.assertNotIn('\n}\n      responses:',SPEC)
         paths = re.findall(r'^  (/api/[^:\n]+):\s*$', SPEC, re.M)
         self.assertEqual(len(paths),50)
         self.assertEqual(len(paths),len(set(paths)))

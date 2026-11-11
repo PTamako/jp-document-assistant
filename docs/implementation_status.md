@@ -84,3 +84,9 @@
 - 同时运行新的 SQLite/Node 测试后更新验收结果。生产数据与正式 Worker/R2/D1 均未修改。
 
 - Google Drive 原件导入时显式记录用户选择的来源类型，保存到 `document_sources.source_type=google_drive`；拒绝非白名单来源，未确认上传前不访问 R2，新增 Worker 回归测试。此为来源声明，不代表验证文件的法律时效。
+
+## OpenAPI 严格校验（本轮补齐，待最新 CI）
+
+- 修正日历订阅新增时遗留的错位 `change-password`、重复 `components`、孤立的响应对象。保留 50 条真实路径与 51 个 operationId。
+- 新增 YAML 解析器真实读取 OpenAPI 3.1 文档，CI 会拒绝不完整语法、重复键，并检验 Google Drive 来源、OCR 手动重试及 UTC 预算的响应契约。
+- 此次修改尚需以实际最新 GitHub Actions 的完整结果验收；不自动部署或迁移生产数据。

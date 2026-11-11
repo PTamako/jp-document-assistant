@@ -438,7 +438,7 @@ paths:
     post:
       tags:
       - Imports
-      summary: 主动上传 JPEG/PNG/WebP/PDF 私有 R2；无 OCR 时保留人工修正
+      summary: 用户确认后私有上传 JPEG/PNG/WebP/PDF/DOCX/XLSX/PPTX；文字层优先，禁止自动 OCR
       operationId: importFile
       responses:
         '201':
@@ -471,8 +471,14 @@ paths:
                   format: binary
                 retention:
                   type: string
-                  enum:
-                  - original
+                  enum: [original]
+                extracted_text:
+                  type: string
+                  maxLength: 100000
+                source_type:
+                  type: string
+                  enum: [local_file, image, google_drive]
+                  description: 用户声明的文件来源，不能作为官方真实性证明
               required:
               - file
               - retention
@@ -785,6 +791,10 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
       parameters:
@@ -810,6 +820,12 @@ paths:
                   type: boolean
                 attachment_id:
                   type: string
+                  pattern: '^[a-f0-9]{32}
+              - confirm
+              - attachment_id
+                retry_stale:
+                  type: boolean
+                  description: pending 超过24小时后再次明确同意尝试，默认 false
               required:
               - confirm
               - attachment_id
@@ -1804,7 +1820,28 @@ paths:
       operationId: getUsage
       responses:
         '200':
-          description: 成功；实际响应字段以 schema 或代码验收为准
+          description: 按日本日期的用户统计、UTC 本应用总预算，全账号余额仍未知
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  local_today:
+                    type: object
+                    properties:
+                      ai_calls: {type: integer}
+                      imported_files: {type: integer}
+                  app_utc_day:
+                    type: object
+                    properties:
+                      day_utc: {type: string, format: date}
+                      calls: {type: integer}
+                      reserved: {type: integer}
+                      limit: {type: integer}
+                  cloudflare_account_remaining: {type: 'null'}
+                  cloudflare_account_remaining_status:
+                    type: string
+                    enum: [unknown]
         '400':
           $ref: '#/components/responses/Error'
         '401':
@@ -1815,35 +1852,6 @@ paths:
           $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
-components:
-  securitySchemes:
-    sessionCookie:
-      type: apiKey
-      in: cookie
-      name: __Host-da_session
-      description: 由服务端颁发、HttpOnly Secure SameSite，须提供同源及 X-CSRF-Token 才能写入。
-  responses:
-    Error:
-      description: 安全失败，code/message；绝不返回敏感日志
-      content:
-        application/json:
-          schema:
-            type: object
-            properties:
-              ok:
-                type: boolean
-              code:
-                type: string
-              message:
-                type: string
-}
-      responses:
-        '200':
-          description: 已确认日期的 UTF-8 ICS；不允许缓存
-          content:
-            text/calendar:
-              schema: {type: string}
-        '404': {description: 未知或已撤销 Token}
   /api/auth/change-password:
     post:
       tags:
