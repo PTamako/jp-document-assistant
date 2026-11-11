@@ -720,3 +720,31 @@ test('R2 DELETE succeeds but attachment cleanup fails: retry physically and logi
  assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM attachments").get().n,0);
  assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM storage_objects").get().n,0);
 });
+
+
+test('password change checks old password, revokes own sessions and preserves household member credentials',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const invite=await req(env,'/api/household/invites',{method:'POST',...auth(owner),data:{invitee_email:'b@example.com'}});
+ const join=await req(env,'/api/household/join',{method:'POST',data:{invite_token:invite.data.invite_token,email:'b@example.com',password:'member-long-secret123'}});
+ assert.equal(join.response.status,201);
+ const memberCookie=join.response.headers.get('set-cookie').split(';')[0];
+ const wrong=await req(env,'/api/auth/change-password',{method:'POST',...auth(owner),
+   data:{current_password:'not-the-real-password',new_password:'new-secure-password-6789'}});
+ assert.equal(wrong.response.status,401);
+ const same=await req(env,'/api/auth/change-password',{method:'POST',...auth(owner),
+   data:{current_password:'owner-long-secret123',new_password:'owner-long-secret123'}});
+ assert.equal(same.response.status,409);
+ const changed=await req(env,'/api/auth/change-password',{method:'POST',...auth(owner),
+   data:{current_password:'owner-long-secret123',new_password:'new-secure-password-6789'}});
+ assert.equal(changed.response.status,200,JSON.stringify(changed.data));
+ assert.equal(changed.data.reauth_required,true);
+ assert.match(changed.response.headers.get('set-cookie'),/Max-Age=0/);
+ assert.equal((await req(env,'/api/me',auth(owner))).response.status,401);
+ assert.equal((await req(env,'/api/me',{cookie:memberCookie})).response.status,200);
+ const oldLogin=await req(env,'/api/auth/login',{method:'POST',
+   data:{email:'a@example.com',password:'owner-long-secret123'}});
+ assert.equal(oldLogin.response.status,401);
+ const fresh=await req(env,'/api/auth/login',{method:'POST',
+   data:{email:'a@example.com',password:'new-secure-password-6789'}});
+ assert.equal(fresh.response.status,200,JSON.stringify(fresh.data));
+});

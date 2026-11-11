@@ -424,6 +424,29 @@ async function route(request,env){
     await dbRun(env.DB,'UPDATE sessions SET revoked_at=? WHERE secret_hash=?',isoNow(),await hashString(cookie));
     return json({ok:true},200,{'Set-Cookie':clearingCookie()});
   }
+  if(method==='POST'&&path==='/api/auth/change-password'){
+    const data=await readJson(request,6000);
+    if(!validatePassword(data.new_password))bad('新密码必须是12～128位','INVALID_PASSWORD',400);
+    if(typeof data.current_password!=='string')bad('请输入当前密码','INVALID_PASSWORD',400);
+    const identity=await hashString('password-change:'+p.user_id);
+    const throttle=await dbFirst(env.DB,'SELECT blocked_until FROM auth_throttle WHERE identity_hash=?',identity);
+    if(throttle?.blocked_until&&throttle.blocked_until>isoNow())
+      bad('密码核验次数过多，请稍后再试','RATE_LIMITED',429);
+    const stored=await dbFirst(env.DB,'SELECT password_salt,password_hash,iterations FROM password_credentials WHERE user_id=?',p.user_id);
+    if(!stored||!(await checkPassword(data.current_password,stored))){
+      await recordThrottle(env,identity,true);
+      bad('当前密码不正确','INVALID_CREDENTIALS',401);
+    }
+    if(await checkPassword(data.new_password,stored))bad('新密码不能与旧密码相同','PASSWORD_REUSED',409);
+    const credentials=await newCredential(data.new_password),now=isoNow();
+    await batch(env.DB,[
+      ['UPDATE password_credentials SET password_salt=?,password_hash=?,iterations=?,updated_at=? WHERE user_id=?',
+        credentials.password_salt,credentials.password_hash,credentials.iterations,now,p.user_id],
+      ['UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL',now,p.user_id]
+    ]);
+    await recordThrottle(env,identity,false);
+    return json({ok:true,reauth_required:true},200,{'Set-Cookie':clearingCookie()});
+  }
   if(method==='POST'&&path==='/api/household/invites'){
     if(p.role!=='owner')bad('仅家庭管理员可以邀请','FORBIDDEN',403);
     const data=await readJson(request,5000),email=normalizedEmail(data.invitee_email);

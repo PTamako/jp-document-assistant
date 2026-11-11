@@ -152,6 +152,41 @@ paths:
               - email
               - password
               - invite_token
+  /api/auth/change-password:
+    post:
+      tags:
+      - Auth
+      summary: 验证当前密码，更新凭证，并撤销该用户全部会话（需要重新登录）
+      operationId: changePassword
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: {type: string}
+                new_password: {type: string, minLength: 12, maxLength: 128}
+      responses:
+        '200':
+          description: 已更改密码并撤销所有旧会话
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
   /api/auth/logout:
     post:
       tags:

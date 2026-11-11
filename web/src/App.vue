@@ -7,6 +7,7 @@ import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
+const passwordDraft=reactive({current_password:'',new_password:'',confirm_password:''});
 const tabs=[{id:'today',name:'今日',icon:'◉'},{id:'docs',name:'文书',icon:'▤'},{id:'links',name:'联动',icon:'◇'},{id:'mine',name:'我的',icon:'☰'}];
 const pages=reactive({today:{items:[],next:0,loaded:false},docs:{items:[],next:0,loaded:false},links:{items:[],next:0,loaded:false}});
 const loadingPage=ref(false),search=ref(''),category=ref('');
@@ -52,6 +53,20 @@ async function submitAuth(){
     await boot();flash('登录成功');
   } catch(e){problem(e);} finally {busy.value=false;}
 }
+async function changePassword(){
+ if(passwordDraft.new_password.length<12||passwordDraft.new_password!==passwordDraft.confirm_password){
+   problem(new Error('新密码必须至少12位，且两次输入一致'));return;
+ }
+ busy.value=true;
+ try{
+   await api('/api/auth/change-password',{method:'POST',
+     body:{current_password:passwordDraft.current_password,new_password:passwordDraft.new_password}});
+   closeSheet();csrf.value='';user.value=null;auth.password='';
+   revokeOriginal();current.value=null;
+   for(const p of Object.values(pages)){p.items=[];p.next=0;p.loaded=false;}
+   flash('密码已更改，所有旧登录会话已注销。请使用新密码重新登录。');
+ }catch(e){problem(e);}finally{busy.value=false;}
+}
 async function logout(){
   try{await api('/api/auth/logout',{method:'POST'});}catch{}
   revokeOriginal();current.value=null;csrf.value='';user.value=null;auth.password='';
@@ -87,7 +102,7 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;ocrAttachmentPending.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;ocrAttachmentPending.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){inputMode.value=mode;sheet.value='import';}
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;
@@ -308,6 +323,7 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
         <button class="settings-line" @click="loadUsage">刷新服务用量 <span>↻</span></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">重试无引用 R2 原件清理 <span>↻</span></button>
         <div class="info-note" v-if="usage">Cloudflare 全账号免费额度：<strong>未确认</strong>。本地统计 AI 调用 {{usage.local_today.ai_calls}} 次，不代表全账号剩余额度。</div>
+        <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <span>›</span></button>
         <button class="settings-line" @click="logout">退出当前账号 <span>›</span></button>
         <p class="fine-print">原件按需从私有 R2 读取；删除文书不会删除其他三个 App 的已确认数据。</p>
       </section>
@@ -347,6 +363,12 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
       <template v-else-if="sheet==='recycle'"><h2>回收站</h2><p class="muted">保留直到手动永久清理，删除后不能直接恢复。</p><div v-if="!trashItems.length" class="empty">回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
       <template v-else-if="sheet==='permanent'"><h2 class="danger-text">永久删除文书？</h2><p>将从 D1 清理私人内容，并在没有其他文书引用该原件时同步物理删除 R2 文件。不能撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" :disabled="busy" @click="permanentDelete">确认永久删除</button></div></template>
+      <template v-else-if="sheet==='changePassword'"><h2>修改登录密码</h2>
+        <p class="fine-print">更改后此账号在所有设备上的旧会话都将失效，必须使用新密码重新登录；不会影响家人账号。</p>
+        <label class="form-label">当前密码<input v-model="passwordDraft.current_password" type="password" autocomplete="current-password" /></label>
+        <label class="form-label">新密码（至少12位）<input v-model="passwordDraft.new_password" type="password" autocomplete="new-password" /></label>
+        <label class="form-label">确认新密码<input v-model="passwordDraft.confirm_password" type="password" autocomplete="new-password" /></label>
+        <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!passwordDraft.current_password||passwordDraft.new_password.length<12||passwordDraft.new_password!==passwordDraft.confirm_password" @click="changePassword">修改并退出旧会话</button></div></template>
       <template v-else-if="sheet==='invite'"><h2>邀请家人</h2><p class="muted">一个家庭最多两人，邀请仅对指定邮箱有效。</p><label class="form-label">对方邮箱<input v-model="inviteEmail" type="email" placeholder="family@example.com" /></label><button class="primary full" @click="issueInvite" :disabled="busy">生成 48 小时邀请码</button><label v-if="inviteToken" class="form-label">仅复制给家人使用<input :value="inviteToken" readonly @focus="$event.target.select()" /></label><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='ocrConfirm'"><h2>确认本次图片识别</h2><p>仅将这张私有图片发送至 Cloudflare Workers AI。可能消耗与其他应用共用的免费额度，账户余额仍未确认；此功能默认关闭，只有管理员启用后可用。</p><p class="fine-print">相同图片会复用已完成的识别候选。结果不能作为账单付款、实际收入或政策现行有效性的证明；须对照原图核对。</p><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="confirmRunOcr">确认尝试 OCR</button></div></template>
       <template v-else-if="sheet==='editText'"><h2>人工核对日文原文</h2><p class="fine-print">请对照原图确认。修改文字将重新生成全部候选字段，先前审核的字段会被重置，不会自动记账或创建任务。</p><textarea v-model="editTextDraft" rows="10" placeholder="请输入或粘贴日文内容"></textarea><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!editTextDraft.trim()" @click="saveSourceText">保存并重新分析</button></div></template>
