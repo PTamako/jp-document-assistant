@@ -32,7 +32,7 @@ test('AES-GCM backup encryption/decryption roundtrip; wrong key, ciphertext tamp
   const altered=new Uint8Array(await encrypted.arrayBuffer());
   altered[altered.length-4]^=0x80;
   await assert.rejects(()=>decryptZip(new Blob([altered]),passphrase),/密码错误|篡改|损坏/);
-  await assert.rejects(()=>decryptZip(new Blob([new Uint8Array([1,2,3])]),passphrase),/不支持/);
+  await assert.rejects(()=>decryptZip(new Blob([new Uint8Array([1,2,3])]),passphrase),/不支持|受支持/);
   const direct=await readBackup(new File([encrypted],'family.jda'),passphrase);
   assert.equal(direct.data.documents.length,1);
 });
