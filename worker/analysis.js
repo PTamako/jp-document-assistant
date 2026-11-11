@@ -68,9 +68,39 @@ export function extractDates(text) {
   }
   return all.sort((a,b)=>a.index-b.index);
 }
+// Source-backed clauses: never infer that this file is legally current or that the user qualifies.
+const criticalClauses=[
+ ['対象外',/対象外/,'此条件或商品被排除，不能据此认定符合资格','核对对象清单与适用期间'],
+ ['併用不可',/併用不可/,'此优惠不能与指定优惠同时使用','核对具体不得叠加的券或活动'],
+ ['必着',/必着/,'资料必须在截止日前送达，而非仅寄出','核对送达方式和截止时刻'],
+ ['消印有効',/消印有効/,'以规定日期内的邮戳为准，不一定要求当天送达','确认适用邮寄方式'],
+ ['上限に達し次第',/上限に達し次第/,'达到人数或额度上限后可能提前结束','核对活动是否仍开放'],
+ ['エントリー',/エントリー(?:が必要|必須|してください)?/,'可能需要预先报名，购买本身不代表满足资格','核对报名状态及确认记录'],
+ ['自動更新',/自動更新/,'合同或服务可能到期自动续订','核对续订时间与取消方式'],
+ ['解約期限',/解約期限/,'取消服务可能有最晚期限','核对正式解约方式及通知时限'],
+ ['違約金',/違約金/,'提前解约或违反条款可能产生费用','核对适用条件及金额，不自动推定收费'],
+ ['別途料金',/別途料金/,'部分项目可能另外计费','核对项目及是否包含税费'],
+ ['原則として',/原則として/,'文字表达原则规则，可能另有例外','继续查看但书与特殊条件'],
+ ['例外',/例外/,'存在一般规则之外的条件','人工核实是否符合例外'],
+ ['申請が必要',/申請が必要/,'可能需要主动申请，不代表自动享有','核对对象、材料、申请渠道与期限'],
+ ['使用上の注意',/使用上の注意/,'产品有需要遵守的安全注意事项','阅读全文并遵守官方说明'],
+ ['禁止',/禁止/,'可能存在禁止操作','核对对象、条件及例外'],
+ ['施行',/施行/,'提及生效日期，不代表此文件当前仍有效','向官方确认现行版本']
+];
+export function interpretCriticalClauses(raw,{limit=12}={}){
+ const lines=String(raw||'').split(/\r?\n/),found=[];
+ for(const [term,re,meaning_zh,action_zh] of criticalClauses){
+   const line=lines.find(x=>re.test(x));if(!line)continue;
+   found.push({term,source_quote:line.trim().replace(/\s+/g,' ').slice(0,220),
+     meaning_zh,action_zh,verified:false});
+   if(found.length>=limit)break;
+ }
+ return found;
+}
 export function parseJapaneseText(raw) {
   const text = String(raw || '').slice(0,100000);
   const category = classifyText(text);
+  const clauses=interpretCriticalClauses(text);
   const issues=[];
   const dates=extractDates(text);
   const fields=[];
@@ -99,9 +129,20 @@ export function parseJapaneseText(raw) {
   if(category==='travel'||category==='hotel')issues.push('预订确认不等于付款或入住；请对照票号/旅客/日期，不公开个人行程');
   if(category==='bank')issues.push('信用卡授权、确定金额、月度合计和退款是不同事件，不能仅凭邮件重复记入支出');
   if(category==='policy'||category==='terms')issues.push('仅解释用户提供的原文，未核验政府或发行机构最新版本，不替代专业建议');
+  const sourceDate=dates.find(d=>!d.weekday_mismatch&&/(?:発行日|公布日|公表日|改訂日|更新日)/.test(d.source_quote));
+  const policyVersion={source_document_date:sourceDate?.date||null,
+    source_date_quote:sourceDate?.source_quote||null,official_current_verified_at:null};
   const vocabulary=gloss.filter(([term])=>text.includes(term)).slice(0,8).map(([term,meaning_zh,reading])=>({term,reading,meaning_zh}));
   const labels={salary:'工资／奖金',bank:'银行／信用卡',tax:'缴纳／税务',insurance:'保险',medical:'医疗通知',government:'行政手续',utility:'水电燃气',housing:'住房／合同',campaign:'活动／优惠',policy:'法规／政策',terms:'合同／使用条款',manual:'使用说明',travel:'航班／旅行',hotel:'酒店预约',shopping:'购物订单',delivery:'配送／订单',other:'其他文书'};
   const summary_zh=`检测到「${labels[category]}」相关表述；以下字段仅为规则提取结果，仍需核对日文原文。`;
-  const explanation_zh=[`文书类别建议：${labels[category]}`,...fields.map(f=>`${f.field_key==='due_date'?'疑似截止日':f.field_key==='net_salary'?'疑似实发金额':f.field_key==='gross_salary'?'疑似应发金额':f.field_key==='total_deductions'?'疑似扣款合计':'疑似金额'}：${f.normalized_value}${f.value_type==='money'?' 日元':''}（未核验）`),...issues.map(x=>`注意：${x}`),'此版本只进行规则抽取，并非完整机器翻译、OCR 或法律效力核实。'].join('\n');
-  return {category,summary_zh,explanation_zh,fields,issues,vocabulary,analysis_status:'needs_review'};
+  const clauseLines=clauses.length?
+   ['关键条款（逐条核对日文原文，未确认个人资格）：',
+    ...clauses.map(c=>'· '+c.term+'｜日文证据：「'+c.source_quote+'」｜中文：'+c.meaning_zh+'｜建议：'+c.action_zh)]:[];
+  const versionLines=['policy','government','terms','campaign'].includes(category)?
+   [policyVersion.source_document_date?
+      '原文版本／发布日期线索：'+policyVersion.source_document_date+'（'+policyVersion.source_date_quote+'）':
+      '原文版本／发布日期：无法确定，请手动核对',
+    '官方现行有效性：尚未核验（official_current_verified_at = null）；不得据此判定个人权益或现行法律。']: [];
+  const explanation_zh=[`文书类别建议：${labels[category]}`,...fields.map(f=>`${f.field_key==='due_date'?'疑似截止日':f.field_key==='net_salary'?'疑似实发金额':f.field_key==='gross_salary'?'疑似应发金额':f.field_key==='total_deductions'?'疑似扣款合计':'疑似金额'}：${f.normalized_value}${f.value_type==='money'?' 日元':''}（未核验）`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`),'此版本只进行有来源的规则抽取，并非完整机器翻译、OCR 或法律效力核实。'].join('\n');
+  return {category,summary_zh,explanation_zh,fields,issues,vocabulary,clauses,policyVersion,analysis_status:'needs_review'};
 }
