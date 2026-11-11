@@ -523,3 +523,97 @@ test('policy source date stays distinct from official verification through encry
  assert.equal(verified.source_document_date,'2026-11-11');
  assert.equal(verified.official_current_verified_at,null);
 });
+
+
+test('OCR same-image candidate cache prevents duplicate AI and R2 calls; no financial fields auto-approved',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const raw=new Uint8Array([255,216,255,224,12,9,18,48,71,45,55,90]);
+ const f=new FormData();f.append('file',new File([raw],'private.jpg',{type:'image/jpeg'}));f.append('retention','original');
+ const uploaded=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:f});
+ assert.equal(uploaded.response.status,201,JSON.stringify(uploaded.data));
+ const id=uploaded.data.document_id;
+ const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const aid=doc.attachments[0].id;
+ env.ENABLE_EXPERIMENTAL_OCR='true';
+ env.OCR_CALLS_PER_USER_DAY='2';
+ let aiCalls=0,r2Reads=0;
+ env.AI={async run(model,input){
+   aiCalls++;assert.ok(input.image.startsWith('data:image/jpeg;base64,'));
+   assert.equal(input.task,'query');assert.equal(input.reasoning,false);
+   return {answer:'納付期限：令和8年11月30日\n請求金額：1,200円',metrics:{input_tokens:300,output_tokens:55}};
+ }};
+ env.DOCUMENTS.get=async key=>{
+   r2Reads++;
+   const stored=env._blobs.get(key);
+   return stored?{arrayBuffer:async()=>stored.buffer.slice(stored.byteOffset,stored.byteOffset+stored.byteLength)}:null;
+ };
+ const body={method:'POST',...auth(owner),data:{confirm:true,attachment_id:aid}};
+ const first=await req(env,'/api/documents/'+id+'/ocr',body);
+ assert.equal(first.response.status,200,JSON.stringify(first.data));
+ assert.equal(first.data.cached,false);
+ assert.equal(first.data.verified,false);
+ assert.equal(first.data.needs_human_review,true);
+ assert.ok(first.data.usage.neurons_estimated>0);
+ const second=await req(env,'/api/documents/'+id+'/ocr',body);
+ assert.equal(second.response.status,200,JSON.stringify(second.data));
+ assert.equal(second.data.cached,true);
+ assert.equal(second.data.text,first.data.text);
+ assert.equal(aiCalls,1);assert.equal(r2Reads,1);
+ assert.equal(env.DB.sql.prepare("SELECT state FROM ocr_attempts").get().state,'success');
+ assert.equal(env.DB.sql.prepare("SELECT ai_calls FROM usage_daily").get().ai_calls,1);
+ const unchanged=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(unchanged.extracted_text_ja,null);
+ assert.equal(unchanged.fields.length,0);
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments/'+aid+'/trash',
+  {method:'POST',...auth(owner),data:{}})).response.status,200);
+ const gone=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/permanent-delete',
+  {method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(gone.response.status,200,JSON.stringify(gone.data));
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM ocr_attempts").get().n,0);
+});
+test('empty OCR response is cached without fake text and cannot repeatedly consume AI quota',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const raw=new Uint8Array([255,216,255,224,10,20,30,40]);
+ const f=new FormData();f.append('file',new File([raw],'small.jpg',{type:'image/jpeg'}));f.append('retention','original');
+ const uploaded=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:f});
+ const id=uploaded.data.document_id;
+ const detail=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const aid=detail.attachments[0].id;
+ env.ENABLE_EXPERIMENTAL_OCR='true';
+ let calls=0,r2Reads=0;
+ env.AI={async run(){calls++;return {success:true,result:{}};}};
+ env.DOCUMENTS.get=async key=>{
+  r2Reads++;const b=env._blobs.get(key);
+  return {arrayBuffer:async()=>b.buffer.slice(b.byteOffset,b.byteOffset+b.length)};
+ };
+ const options={method:'POST',...auth(owner),data:{confirm:true,attachment_id:aid}};
+ const first=await req(env,'/api/documents/'+id+'/ocr',options);
+ assert.equal(first.response.status,422,JSON.stringify(first.data));
+ assert.equal(first.data.code,'OCR_EMPTY');
+ const repeated=await req(env,'/api/documents/'+id+'/ocr',options);
+ assert.equal(repeated.response.status,422);
+ assert.equal(repeated.data.code,'OCR_EMPTY_CACHED');
+ assert.equal(calls,1);assert.equal(r2Reads,1);
+ assert.equal(env.DB.sql.prepare("SELECT state,candidate_text_ja FROM ocr_attempts").get().candidate_text_ja,null);
+ assert.equal(env.DB.sql.prepare("SELECT ai_calls FROM usage_daily").get().ai_calls,1);
+});
+test('wrong-owner OCR access cannot read R2 or model and empty quota never fetches original',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const f=new FormData();f.append('file',new File([new Uint8Array([255,216,255,224,17])],'x.jpg',{type:'image/jpeg'}));f.append('retention','original');
+ const up=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:f});
+ const id=up.data.document_id;
+ const aid=(await req(env,'/api/documents/'+id,auth(owner))).data.document.attachments[0].id;
+ const invited=await req(env,'/api/household/invites',{method:'POST',...auth(owner),data:{invitee_email:'b@example.invalid'}});
+ const joined=await req(env,'/api/household/join',{method:'POST',data:{invite_token:invited.data.invite_token,email:'b@example.invalid',password:'member-long-secret123'}});
+ const other={cookie:joined.response.headers.get('set-cookie').split(';')[0],csrf:joined.data.csrf_token};
+ env.ENABLE_EXPERIMENTAL_OCR='true';env.OCR_CALLS_PER_USER_DAY='0';
+ let reads=0,calls=0;
+ env.AI={async run(){calls++;return {answer:'日本語テキスト'};}};
+ env.DOCUMENTS.get=async()=>{reads++;throw Error('must not be read')};
+ const badOwner=await req(env,'/api/documents/'+id+'/ocr',{method:'POST',...auth(other),data:{confirm:true,attachment_id:aid}});
+ assert.equal(badOwner.response.status,404);
+ const budget=await req(env,'/api/documents/'+id+'/ocr',{method:'POST',...auth(owner),data:{confirm:true,attachment_id:aid}});
+ assert.equal(budget.response.status,503);
+ assert.equal(budget.data.code,'OCR_BUDGET_DISABLED');
+ assert.equal(reads,0);assert.equal(calls,0);
+});
