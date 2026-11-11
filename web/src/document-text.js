@@ -192,7 +192,7 @@ export async function validateOfficeBytes(bytes,mime){
  if(mime===docx&&!/<w:document(?:\s|>)/.test(mainXml))invalid('Word 主文档无效');
  if(mime===xlsx&&!/<(?:\w+:)?workbook(?:\s|\/?>)/.test(mainXml))invalid('Excel 工作簿结构无效');
  if(mime===pptx){
-   if(!/<p:presentation(?:\s|>)/.test(mainXml))invalid('PPTX 演示文稿结构无效');
+   if(!/<p:presentation(?:\s|\/?>)/.test(mainXml))invalid('PPTX 演示文稿结构无效');
    if(![...map.keys()].some(n=>/^ppt\/slides\/slide[1-9]\d*\.xml$/.test(n)))
      invalid('PPTX 没有幻灯片');
  }
