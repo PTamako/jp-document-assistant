@@ -1,0 +1,113 @@
+## 已执行的受限 Cloudflare 正式资源验收（2026-11-12 JST）
+
+**最新状态：受限 core-only 测试版已在 Cloudflare 正式 Worker 上部署；完整 v0.11 仍 NO-GO。** 上文所列“未创建/未部署/等待审批”属于截至 2026-11-11 的历史审查状态，不能再用来描述当前真实云资源。
+
+- 用户明确批准范围：1 Worker、1 D1、1 独立私有 R2 Standard Bucket，启用且仅启用单个 Worker 的正式 workers.dev 子域名；合成数据功能验收，不合并目标三 App PR、不启用真实 OCR/Google/Gmail/跨 App 写入。
+- **正式 Worker：** `jp-document-assistant`，账号 workers.dev 域名 `https://jp-document-assistant.yupan6706.workers.dev/`；生产部署版本 `d53998d4-75d7-4d0d-a59e-42ce7ecc9252`，API 直接上传（未使用 GitHub CI 的生产密钥）。Preview URLs 禁用。
+- **专用 D1：** `jp-document-assistant` (`22a671c0-3f6c-4707-adf1-b24ac95330c6`)，仅此空库执行 `0001～0010` 10 份迁移并记录于 `d1_migrations`。验收时 0 用户、0 文书、0 会话。
+- **独立私有 R2：** `jp-document-assistant-private`，Standard，APAC；r2.dev managed public domain disabled，自定义 R2 域名空列表。合成文本对象实际 PUT/GET 精确比对/DELETE 成功，测试对象已删除。
+- **公网实际访问：** [Actions #43050837126](https://github.com/PTamako/jp-document-assistant/actions/runs/43050837126) 对真实公网执行 GET：`/api/health` HTTP 200 + `ai_ocr:disabled`，首页 HTTP 200，已编译 Vue JS HTTP 200；代码测试 88/88 Node + 11/11 SQLite/API + Vue build。
+- **临时交付差异：** Cloudflare 连接无法用上传会话 JWT 完成原生 Workers Static Assets 上传，所以将本次 Vite 打包的八个公开前端静态文件嵌入同一个 Worker 模块直接返回。无新增资源/原件外泄；但静态请求也会计入 Workers Free 的 100,000 日请求额度。仓库 `wrangler.jsonc` 保留正式配置 + 原生 `assets` 声明，后续人工使用 Wrangler 可切换回零额外 Workers 请求的原生静态托管；目前**实际部署不是原生 Workers Static Assets**。
+- **首次账号初始化待用户操作：** Worker 已配置高熵 `SESSION_HMAC_KEY` 和 `BOOTSTRAP_ADMIN_TOKEN`，但后者是部署时自动生成、未向用户交付的 secret。为避免在 GitHub/对话泄露，用户需要在 Cloudflare Dashboard 的这个 Worker → Settings → Variables and Secrets 中**覆盖** `BOOTSTRAP_ADMIN_TOKEN` 为仅本人知道的独立随机值，再在网页版首次初始化其正式个人邮箱/12 位以上密码。此时不能声称双人真实登录已通过；初始化之后应移除/失效 Bootstrap Secret。
+- **未覆盖的线上验收：** 用户私有/共享、登录/CSRF/注销、备份恢复的真实双人设备与 D1/R2 端到端，还需实际用户初始化或经另行保护的合成环境完成。Google OAuth/邮件、知学双人句卡、三个业务 PR 均未启用。
+- **费用**：Cloudflare Billing Usage/Profile 均 403，真实费用、R2 A/B 次数与剩余量仍未知；正式资源创建与极少量测试操作已发生，并不保证 0 费用。
+
+# 日本生活文书助手 v0.11 — 正式部署、验证和回滚审批计划
+
+**生成日期**：2026-11-11；**状态**：仅供集中审批。未创建文书助手生产资源、未执行生产迁移、未部署、未合并四个 Draft PR。所有命令仅为审批后操作说明，切勿在当前状态执行。
+
+## 1. 已核实的保存点与四类验收
+
+- 设计依据：Google Docs 最新 v0.11，第 24～32 章优先于历史示例；主仓库 PTamako/jp-document-assistant，原开发分支 feature/v011-implementation，PR #1。HomeFlow #296、家計簿 #294、知学 #162 均为 Draft。
+- **代码已提交**：双人密码登录/邀请、私人共享权限、CSRF、D1/R2 上传与回收站、ZIP+AES-GCM 恢复、PDF/Office/EML 文字层、Google Picker 前端、只读候选与受保护联动、实验 OCR 预算、ICS。
+- **自动测试**：最新 SHA 与 GitHub Actions 为唯一有效基线。现有测试为本地 SQLite/Mock R2/Mock 服务桥，并非 Cloudflare 真实服务联调。检查 CI 中语法、Node、SQLite/OpenAPI、Vue Build 四部分。
+- **真实环境验证**：Cloudflare 已只读核查账号资源清单及两个 R2 Bucket 的公共域名状态；没有新应用的生产端到端测试。
+- **未完成或阻塞**：真实脱敏日文 OCR 基准、Google 正式 OAuth、Gmail 只读增量、知学双人私人句卡、三端安全映射/联调、密码恢复及成员退出完整流程、双 iPhone 验收与最终独立安全审查。
+
+## 1A. 最新开发与验证状态
+
+- GitHub 主仓库 Draft PR #1 本轮最新经 CI 验证的代码 `84249bc7989512d735b31b2bbc068072a4971cb9`；[CI #43039499158](https://github.com/PTamako/jp-document-assistant/actions/runs/43039499158) 通过 80/80 Node、11/11 SQLite/API、Vue build。已有新增安全补偿、权限、个人会话、OCR 冷却与 CSP 回归，但没有真实生产写入或设备验收。
+- 新增按需 Gmail 用户发起 OAuth/只读逐封查看（非 historyId 自动增量）、跨账号 OAuth 清除、加密备份篡改回归。Google Scope 审核及真机尚未完成。参见 docs/gmail_oauth_setup.md。
+- 设计契约当前 53 路径 / 54 操作；OpenAPI 严格 YAML 与 Python/Node 契约测试通过。知学双人私密句卡与独立身份尚未完成，Gmail 最小权限 OAuth 与实际日语 OCR 质量仍未验收；这些不是生产审批之外可忽略的事项。
+
+## 1B. 部署前安全审查与访问入口（2026-11-11）
+
+- 已完成静态代码、Mock 与 CI 级别的部署前安全审查，详细结论、隔离风险、分级和一次性审批范围见 `docs/predeployment_security_audit.md`。
+- 最新经验证的安全代码 `0d7bbf01a94451618b6dd11b96b2fd46e168fa91`，CI 88/88 Node、11/11 SQLite/API、Vue Build 通过；本次仅文档更新也需要 CI 验证。
+- 当前 Cloudflare Zones 与 Workers Custom Domains 均为空，Workers 子域名已配置但 `wrangler.jsonc` 明确 `workers_dev:false`。若用户只批准创建/部署而不授权正式 workers.dev 路由或自有域名，Worker 将没有实际可用的 iPhone URL。建议审批中单独注明对这一个**正式 Worker**启用 workers.dev，保持零 Preview 资源；首次部署后核验实际 HTTPS URL。
+- 为最大化两个用户敏感原件的跨 App 安全隔离，建议**新建一个文书助手专用的私有 R2 Standard Bucket**而不复用 HomeFlow/家計簿的现有 Bucket。R2 官方前 100,000 Bucket 包含在定价中，但 GB-month/A/B 仍按账号共享、费用和当前余额因 Billing Read=403 未知。
+- 完整 v0.11 正式上线 NO-GO；审批仅可涵盖关闭 OCR/AI、Gmail/OAuth、三个 App 联动的 core-only 受限首次云端验收，不能称为全功能正式上线。
+
+## 2. Cloudflare 账号只读盘点（截至 2026-11-11）
+
+- 现有 Worker 六个：homeflow、homeflow-preview、it-study-platform、kakeibo-homeflow-bridge、kakeibo-nav-sync、milkssales-jp；无 jp-document-assistant Worker。
+- 现有 D1 六个：homeflow、homeflow-preview、kakebo_preview、kakebo、it-study-platform、milkssales-jp；**不存在文书助手专用 D1**，不能把它的迁移运行到以上任何库。
+- 现有 R2 两个：homeflow-family-media、kakeibo-receipts。两者 r2.dev 公开访问均为 disabled，且未发现自定义 R2 公共域名。两者仍承载既有应用，复用前必须审核对象键前缀与访问权限，不得改变它们的原有生命周期、公开策略和业务数据。
+- 账号计费用量 / 费用接口返回 HTTP 403，缺少 Billing Read 权限。因此存储使用 GB-month、R2 Class A/B、Workers AI Neurons、D1 实际读写、账号剩余额度、是否产生费用均为 **未知**；无权读到的指标不能写成 0 或充足。此次没有创建、修改或删除任何资源。
+- 正式目标：一个 Worker（兼任 Static Assets 与 API）、一个**新建且经用户批准**的专用 D1、一个经审查的私有 R2 Bucket 绑定；不建 Preview Worker/DB/Bucket，不新增 Cron、Queue、KV、Durable Object，也不升级付费服务。
+
+## 3. 生产配置与密钥清单
+
+| 配置 | 类型 | 用途 / 审批前状态 |
+| --- | --- | --- |
+| DB | D1 Binding | 仅指向新应用唯一正式数据库；当前尚不存在 |
+| DOCUMENTS | R2 Binding | 只指向审核后的私有 Bucket；按 owner ID + 随机键隔离；不开放直链 |
+| ASSETS | Workers Static Assets Binding | Vue dist；与 API 在同一个正式 Worker |
+| R2_BUCKET_NAME | 普通变量 | 与 DOCUMENTS 实际桶名匹配，不在代码中猜测 |
+| SESSION_HMAC_KEY | Worker Secret | 独立高熵随机密钥，保护 CSRF；禁止入库/GitHub |
+| BOOTSTRAP_ADMIN_TOKEN | Worker Secret | 仅供首次初始化；初始化成功后需按审批的安全方式停用/轮换 |
+| BRIDGE_USER_MAP | Worker Secret | 经双端实名/映射核验的两个用户到三个目标服务各自身份；绝不从浏览器信任身份 |
+| KAKEBO_BRIDGE_SECRET / HOMEFLOW_BRIDGE_SECRET / ZHIXUE_BRIDGE_SECRET | 各独立 Worker Secret | 对应受保护接收端 HMAC，不得复用同一个秘密 |
+| KAKEBO_BRIDGE_SERVICE / HOMEFLOW_BRIDGE_SERVICE / ZHIXUE_BRIDGE_SERVICE | Service Binding | 需先审核目标 PR 和目标 Worker 正确入口；缺失时 fail-closed |
+| ENABLE_EXPERIMENTAL_OCR | 普通变量 | 默认为 false；实测合格且另行授权才打开 |
+| AI | Workers AI Binding | 仅在启用并明确验收免费模型前配置 |
+| OCR_CALLS_PER_USER_DAY / OCR_APP_UTC_DAILY_LIMIT | 普通变量 | 独立用户与两人共享 UTC 日硬预算，默认低限额；不是 Cloudflare 全账号余额 |
+| VITE_GOOGLE_CLIENT_ID / VITE_GOOGLE_API_KEY / VITE_GOOGLE_APP_ID | 非秘密构建变量 | 正式 Google OAuth/Picker 项目公开 ID 与已限制来源/API 的浏览器 Key；不存 Client Secret |
+
+Cloudflare 生产 Secret 必须由用户在获批部署流程输入，不能写在 PR、文档、前端环境变量或 GitHub Actions 明文中。请注意当前 Wrangler 中 secret put 可能立即部署 Worker 新版本，**不允许提前执行**。签名密钥须在两个接收端独立配置并核对授权，不能以仅配置文书助手一侧为完成。
+
+## 4. 执行顺序（全部是未来获批后的操作，不是本次执行记录）
+
+1. **集中审批与冻结**：审核四份 PR 的最新 SHA、真实 CI、OpenAPI 端点与路由、迁移 0001～0010、Secrets/身份映射、OCR 和费用风险；获得明确生产变更批准。未完成的 P0 不得豁免。
+2. **核对独立资源**：只读检查现有账号预算；确认正式域名、Worker 名、单独 D1 名称/UUID、R2 复用桶与私有前缀。若专用 D1 尚不存在，取得创建资源的单独批准后才创建。再审查托管 r2.dev/custom domains 始终关闭。
+3. **灾难备份与本地演练**：归档当前三 App 既有生产配置、部署版本和 D1 可恢复备份；文书助手是新库则记录其空库状态。校验可读备份与 D1 Time Travel 可用性，不把备份留在仓库或新 R2 的公用前缀。使用本地 SQLite 和 Wrangler 本地模拟验证全部 10 份迁移的顺序、外键和回滚。所有真实生产数据操作前再次核对数据库 ID。
+4. **仅属于完整 v0.11 后续阶段，core-only 首次部署必须跳过**：三端桥先经过安全审查、Mock 和身份映射、用户独立批准后才能合并对应目标 PR、配置目标端 Secret/服务绑定或做真实服务联调。core-only 不配置三端 Service Binding / Bridge Secret，不直接跨写任何目标 D1。知学双人私人句卡未完成继续 fail-closed。
+5. **替换占位符**：仅在经批准的部署版本中把 wrangler.jsonc 里的 REPLACE_WITH_EXISTING_OR_NEW_PRODUCTION_D1_ID、REPLACE_WITH_PRIVATE_PRODUCTION_R2_BUCKET 两处及桶变量填写为已核验 ID/名称。所有 Secret 只通过 Cloudflare 安全机制注入。不得部署含占位符的配置。
+6. **正式迁移**：变更审批、备份与 ID 三重确认后，在与仓库绑定一致的目录执行命令：`npx wrangler d1 migrations apply jp-document-assistant --remote`。先阅读其计划清单和目标 UUID，再逐条检查 0001～0010；不得对 HomeFlow / 家計簿 / 知学现有库执行。
+7. **正式 Worker（分阶段）**：仅经集中授权后设置核心 `SESSION_HMAC_KEY`、`BOOTSTRAP_ADMIN_TOKEN`，core-only 不启用 AI/Gmail/Google/三端服务；因账号当前无 Zone，需获得明确授权后才将这个正式 Worker 的 `workers_dev` 改为 true 并同步调整静态审批门禁（`preview_urls` 必须继续 false），以一个正式 workers.dev HTTPS 地址验证。随后使用单个 Worker 的 `npx wrangler deploy`；不得让 GitHub CI 自动部署，不建任何 Preview。三端 Service Binding 和 OAuth 生产配置只能在更后续单独批准的完整发布阶段配置。
+8. **上线小范围验收**：健康与登录、首次初始化、两账号并发会话、CSRF、未授权访问 404、共享二次确认、附件回收站、最后引用 R2 删除、D1 部分故障补偿、加密/原件 ZIP 完整往返、Google Picker 真授权、日历订阅撤销；OCR 不满足真样本基准则继续关闭。
+9. **目标 App 最小真实联动（完整发布阶段另行批准，core-only 明确跳过）**：仅用双方可识别、已确认且获得写入许可的测试项目逐个验证创建/响应丢失/幂等查询，核对账目和任务不重复、无意外积分、私人生词不覆盖。任何未批准的生产写入均跳过。
+10. **双 iPhone/iPad 真机验收**：由家庭两位成员验证私人/共享隔离、底部 Sheet、Tab 无旧数据闪现、取消选择无请求、原件可放大、OCR 小字确认、备份大文件内存、PWA 本地敏感缓存和系统日历；出现缺陷回到 Draft 分支修复。
+11. **费用与运行观察**：取得官方云账号总量只读来源后对比操作前后 Workers 请求、D1 行读写、R2 存储/Class A/B、Workers AI Neurons、账单增量。未知时保守降级，不保证零费用。使用现有周报，无新 Cron。
+
+## 5. 失败隔离及回滚
+
+- **Worker 代码缺陷**：停用跨 App 联动及 OCR 开关，回退到已记录的上一个部署版本；Worker 版本回滚不等于 D1/R2 数据回滚。停止敏感读写，保留故障前后的请求幂等键和 D1 删除补偿日志。
+- **D1 迁移或数据损坏**：按审批前确认的 D1 时间旅行书签或已校验导出备份开展恢复；恢复命令为破坏性生产数据操作，需新一轮明确授权。不可在无备份情况下盲目执行逆向 SQL。
+- **R2 对象异常**：切断有问题的上传/清理接口；保留 storage_objects 和 deletion_jobs 状态，按精确 key 补偿或从经 SHA-256 验证的用户备份补传。禁止全桶 LIST/DELETE；没有原件的纯数据备份只能恢复元数据。
+- **跨 App 请求不明**：保持原 candidate_id/idempotency_key/request_fingerprint；先查询目标端既有记录，确认后才允许原键重试。不得改金额/账户/任务内容后用同一键重发。
+- **隐私或授权失控**：立即禁用相应入口与目标桥、撤销相关会话或 OAuth 授权、核查对象公开访问状态，保留最小不含 PII 的审计证据；严重事故暂停上线。
+
+## 6. 免费包含量与明确风险
+
+| 资源 | 官方 Free 包含量参考 | 超限/未知的处理 |
+| --- | --- | --- |
+| Workers | 100,000 请求/日（还需核实单请求 CPU 限制） | 所有已运行 Worker 共享，请按账号查实际用量；接口未知 |
+| D1 | 5,000,000 行读/日、100,000 行写/日、账号 5 GB 存储 | 2026-09 起 Free 日行限额触发拒绝，不能把新 App 当独享余额 |
+| R2 Standard | 10 GB-month、1,000,000 Class A、10,000,000 Class B / 月 | 已开通计费的桶超额可能收费；软预算和告警不等于硬挡 |
+| Workers AI | 10,000 Neurons / UTC 日 | Free 超额通常无法继续；模型输入/输出真实用量需真样本测量 |
+
+账单 API 当前返回 403，以上属于 **官方方案参考值**而不是当前账号剩余量。应用默认不执行 OCR、大图片不预加载、相同 hash 不重复上传、D1 五条分页、不用 R2 LIST/HEAD 形成列表，不新增 Preview/Cron。任何花费风险与是否升级套餐需用户独立批准。
+
+官方参考：https://developers.cloudflare.com/workers/platform/limits/ 、https://developers.cloudflare.com/d1/platform/pricing/ 、https://developers.cloudflare.com/r2/pricing/ 、https://developers.cloudflare.com/workers-ai/platform/pricing/ 、https://developers.cloudflare.com/d1/reference/migrations/ 。
+
+## 7. 正式批准的硬门槛（当前未满足）
+
+- 所有四个 PR 经独立安全审查和最新 CI；合同与实际 Worker 路由完全一致；测试在本地/模拟环境覆盖并发、权限、R2/D1 部分失败、幂等和 ZIP 恢复。
+- 已获授权脱敏真实日语样本的 OCR 关键字段准确率与 Neurons 已记录且达到用户接受的风险标准；否则 OCR 保持关闭并明示需要人工核验。
+- Google OAuth、Gmail 如启用则需独立完成权限审核；Apple Mail 仍仅手动复制/附件/主动转发。
+- 知学两人独立账户和私人句卡完全隔离，不允许公共词卡代替私密句卡。
+- Cloudflare 正式 D1/R2/Worker 的 IDs、容量/费用、备份、Secrets 管理与 Worker 域名明确；真实使用量读不到继续写未知并确认风险。
+- 双设备私密访问、恢复/删除、三端受控联动完成验收；用户集中批准后才依次执行变更。
+
+**当前结论：未部署，未达到正式上线条件；本文件只是一份可审计的预部署操作清单，不是执行授权。**

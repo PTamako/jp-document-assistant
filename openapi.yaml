@@ -1,0 +1,1975 @@
+# Generated from v0.11 confirmed Worker routes. Do not list planned-only routes here.
+openapi: 3.1.0
+info:
+  title: 日本生活文书助手 API（基于实际 Worker 路由的开发契约）
+  version: 0.11.1-implementation
+  description: 以 v0.11 为最高优先约束。契约只列已实现且可由 worker/index.js 路由的操作。OAuth / 苹果邮件自动收信 / 实际跨 App 成功 / 生产部署不属于已实现能力。一个正式
+    Worker+D1+私有R2，不创建预览环境。全部写接口要求同源和 CSRF，关键外部写入强制独立 Idempotency-Key。
+servers:
+- url: https://EXAMPLE_PRODUCTION_DOMAIN
+  description: 尚未正式部署，非可用地址
+tags:
+- name: System
+- name: Auth
+- name: Imports
+- name: Documents
+- name: Integration
+- name: Recycle
+- name: Backup
+- name: Usage
+security:
+- sessionCookie: []
+paths:
+  /api/health:
+    get:
+      tags:
+      - System
+      summary: 健康检查（不会验证真实 D1/R2 绑定）
+      operationId: getHealth
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      security: []
+  /api/auth/bootstrap:
+    post:
+      tags:
+      - Auth
+      summary: 首次初始化唯一家庭和管理员；需 BOOTSTRAP_ADMIN_TOKEN
+      operationId: bootstrapHousehold
+      responses:
+        '201':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: &id001
+                  type: string
+                  format: email
+                password: &id002
+                  type: string
+                  minLength: 12
+                display_name: &id003
+                  type: string
+                setup_token:
+                  type: string
+              required:
+              - email
+              - password
+              - setup_token
+  /api/auth/login:
+    post:
+      tags:
+      - Auth
+      summary: 密码登录并设置 __Host-da_session 安全 Cookie
+      operationId: login
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+              required:
+              - email
+              - password
+  /api/household/join:
+    post:
+      tags:
+      - Auth
+      summary: 邀请令牌加入第二位成员（仅两人）
+      operationId: joinHousehold
+      responses:
+        '201':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: *id001
+                password: *id002
+                display_name: *id003
+                invite_token:
+                  type: string
+              required:
+              - email
+              - password
+              - invite_token
+  /api/calendar/status:
+    get:
+      tags: [Documents]
+      summary: 当前账号的私人日历订阅状态（不返回原始 Token）
+      operationId: getCalendarSubscription
+      responses:
+        '200': {description: 订阅状态}
+  /api/calendar/subscription:
+    post:
+      tags: [Documents]
+      summary: 创建或轮换私人 ICS 订阅 Token，旧链接立即失效
+      operationId: createCalendarSubscription
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm, include_titles]
+              properties:
+                confirm: {type: boolean}
+                include_titles: {type: boolean}
+      responses:
+        '201': {description: 仅显示一次的新订阅地址}
+  /api/calendar/revoke:
+    post:
+      tags: [Documents]
+      summary: 立即撤销当前账号的 ICS Token
+      operationId: revokeCalendarSubscription
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      responses:
+        '200': {description: 已撤销}
+  /api/calendar/{token}.ics:
+    get:
+      tags: [Documents]
+      summary: 仅凭独立随机 URL 的 iPhone 私人日历订阅，无需 Cookie
+      operationId: getPrivateIcsCalendar
+      security: []
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+      responses:
+        '200':
+          description: 私人 ICS 日历，带 no-store 响应头
+          content:
+            text/calendar:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/auth/logout:
+    post:
+      tags:
+      - Auth
+      summary: 撤销当前服务器会话
+      operationId: logout
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+  /api/me:
+    get:
+      tags:
+      - Auth
+      summary: 当前身份及防伪令牌
+      operationId: getMe
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/household/invites:
+    post:
+      tags:
+      - Auth
+      summary: 管理员生成仅供指定邮箱的一次性邀请码
+      operationId: createInvite
+      responses:
+        '201':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                invitee_email:
+                  type: string
+                  format: email
+              required:
+              - invitee_email
+  /api/connections:
+    get:
+      tags:
+      - Integration
+      summary: 已记录的连接元数据；不会自动完成 OAuth
+      operationId: listConnections
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/integrations/status:
+    get:
+      tags:
+      - Integration
+      summary: 安全桥配置状态；没有凭证时禁止写入
+      operationId: getIntegrationStatus
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/imports/plan:
+    post:
+      tags:
+      - Imports
+      summary: 检查格式、大小、OCR 状态和预估上传量
+      operationId: planImport
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mime:
+                  type: string
+                file_size:
+                  type: integer
+                  minimum: 0
+                retention:
+                  type: string
+                  enum:
+                  - summary
+                  - analyze_only
+                  - original
+              required:
+              - mime
+              - file_size
+  /api/documents/import/text:
+    post:
+      tags:
+      - Imports
+      summary: 从粘贴文字、本地解析邮件/TXT 明确提交；人工核验
+      operationId: importText
+      responses:
+        '201':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                text:
+                  type: string
+                  maxLength: 100000
+                source_type:
+                  type: string
+                  enum:
+                  - text
+                  - local_file
+                  - mail_forward
+                  - google_drive
+                  - gmail
+                retention:
+                  type: string
+                  enum:
+                  - summary
+                  - analyze_only
+              required:
+              - text
+              - source_type
+              - retention
+  /api/documents/import/file:
+    post:
+      tags:
+      - Imports
+      summary: 用户确认后私有上传 JPEG/PNG/WebP/PDF/DOCX/XLSX/PPTX；文字层优先，禁止自动 OCR
+      operationId: importFile
+      responses:
+        '201':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                retention:
+                  type: string
+                  enum: [original]
+                extracted_text:
+                  type: string
+                  maxLength: 100000
+                source_type:
+                  type: string
+                  enum: [local_file, image, google_drive]
+                  description: 用户声明的文件来源，不能作为官方真实性证明
+              required:
+              - file
+              - retention
+  /api/documents:
+    get:
+      tags:
+      - Documents
+      summary: 按权限分页搜索私人或明确共享的文书，仅返回轻量元数据
+      operationId: listDocuments
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 10
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: category
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: visibility
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - all
+          - mine
+          - shared
+      - name: archived
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - active
+          - archived
+          - all
+      - name: favorite
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - all
+          - 'yes'
+      - name: month
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/today:
+    get:
+      tags:
+      - Documents
+      summary: 今日/逾期或待核验的 D1 摘要；不读取 R2
+      operationId: listToday
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+  /api/integrations:
+    get:
+      tags:
+      - Integration
+      summary: 本人联动候选分页列表，不发起外部写入
+      operationId: listIntegrationCandidates
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+  /api/documents/{documentId}:
+    get:
+      tags:
+      - Documents
+      summary: 文书详情，保留来源字段；只在打开图片时读取 R2
+      operationId: getDocument
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+    patch:
+      tags:
+      - Documents
+      summary: 乐观版本控制下修改标题、分类、标签、收藏、归档、主动共享
+      operationId: patchDocument
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                category:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                favorite:
+                  type: boolean
+                archived:
+                  type: boolean
+                visibility:
+                  type: string
+                  enum:
+                  - private
+                  - shared
+                confirm_sensitive_share:
+                  type: boolean
+                version:
+                  type: integer
+                  minimum: 1
+              required:
+              - version
+  /api/documents/{documentId}/source-text:
+    patch:
+      tags:
+      - Documents
+      summary: 人工修改来源文字；有外部联动请求时拒绝重建候选以保留幂等
+      operationId: updateSourceText
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  maxLength: 100000
+                confirm_reset_review:
+                  type: boolean
+              required:
+              - text
+  /api/documents/{documentId}/analyze:
+    post:
+      tags:
+      - Documents
+      summary: 用户主动重新分析现有文字，不强制 OCR；无数据自动编造
+      operationId: reanalyzeDocument
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+  /api/documents/{documentId}/ocr:
+    post:
+      tags:
+      - Documents
+      summary: 按需实验性 OCR，默认关闭；识别为空时失败，不自动入账
+      operationId: analyzeImageOptIn
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm:
+                  type: boolean
+                  const: true
+                attachment_id:
+                  type: string
+                  pattern: "^[a-f0-9]{32}$"
+                retry_stale:
+                  type: boolean
+                  default: false
+                  description: 仅当 OCR pending 超过 24 小时，经过用户再次确认才能重试
+                retry_empty:
+                  type: boolean
+                  default: false
+                  description: 仅在 OCR 空结果超过 24 小时且用户明确确认时允许重试
+              required:
+              - confirm
+              - attachment_id
+  /api/documents/{documentId}/fields:
+    get:
+      tags:
+      - Documents
+      summary: 获取字段及原文证据
+      operationId: listDocumentFields
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+  /api/fields/{fieldId}:
+    patch:
+      tags:
+      - Documents
+      summary: 人工核对金额与日期，已同步远端的字段改动须再次确认
+      operationId: reviewField
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: fieldId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                review_state:
+                  type: string
+                  enum:
+                  - confirmed
+                  - corrected
+                  - rejected
+                normalized_value:
+                  type: string
+                confirm_remote_unchanged:
+                  type: boolean
+              required:
+              - review_state
+  /api/documents/{documentId}/candidates:
+    get:
+      tags:
+      - Integration
+      summary: 联动候选，未确认不写入
+      operationId: listDocumentCandidates
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+  /api/candidates/{candidateId}/preview:
+    get:
+      tags:
+      - Integration
+      summary: 查看具体待写入字段与风险
+      operationId: previewCandidate
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: candidateId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+  /api/candidates/{candidateId}/commit:
+    post:
+      tags:
+      - Integration
+      summary: 用户确认后安全 HMAC 桥接，目标侧按稳定键去重；拒绝未配置服务
+      operationId: commitCandidate
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: candidateId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm:
+                  type: string
+                payment_confirmed:
+                  type: boolean
+                date:
+                  type: string
+                category:
+                  type: string
+                payment_source:
+                  type: string
+                visibility:
+                  type: string
+                assignee:
+                  type: string
+                bonus_points:
+                  type: integer
+                  minimum: 0
+                privacy_confirmed:
+                  type: boolean
+  /api/documents/{documentId}/trash:
+    post:
+      tags:
+      - Recycle
+      summary: 软删除，仅 D1 隐藏，R2 保留可恢复
+      operationId: trashDocument
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+  /api/documents/{documentId}/restore:
+    post:
+      tags:
+      - Recycle
+      summary: 恢复原文书，用户操作时才按需 HEAD 确认 R2 缺失情况
+      operationId: restoreDocument
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+  /api/documents/{documentId}/permanent-delete:
+    post:
+      tags:
+      - Recycle
+      summary: 二次确认后删除最后引用的 R2 实物；失败可重试
+      operationId: purgeDocument
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm:
+                  type: string
+                  const: DELETE_FOREVER
+              required:
+              - confirm
+  /api/documents/{documentId}/attachments:
+    post:
+      tags:
+      - Recycle
+      summary: 多页/附件单页上传；只在明确保留原件时写 R2
+      operationId: addAttachment
+      responses:
+        '201':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                retention:
+                  type: string
+                  const: original
+              required:
+              - file
+              - retention
+  /api/documents/{documentId}/attachments/order:
+    patch:
+      tags:
+      - Documents
+      summary: 仅拥有者可按稳定附件 ID 重排全部有效扫描页；版本冲突拒绝，不读取 R2
+      operationId: reorderDocumentAttachments
+      responses:
+        '200':
+          description: 附件顺序已更新，返回新文书版本号
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: integer
+                  minimum: 1
+                attachment_ids:
+                  type: array
+                  minItems: 2
+                  maxItems: 30
+                  uniqueItems: true
+                  items:
+                    type: string
+                    pattern: ^[a-f0-9]{32}$
+              required:
+              - version
+              - attachment_ids
+  /api/documents/{documentId}/attachments/recycle:
+    get:
+      tags:
+      - Recycle
+      summary: 当前文书附件回收站
+      operationId: listAttachmentRecycle
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+  /api/documents/{documentId}/attachments/restore-upload:
+    post:
+      tags:
+      - Backup
+      summary: 恢复备份中的原件，校验散列值/所属文书
+      operationId: restoreAttachmentFromBackup
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                sha256:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+                label:
+                  type: string
+                sort_order:
+                  type: integer
+              required:
+              - file
+              - sha256
+  /api/documents/{documentId}/attachments/{attachmentId}/trash:
+    post:
+      tags:
+      - Recycle
+      summary: 仅软删除指定附件，保留文字解释
+      operationId: trashAttachment
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+  /api/documents/{documentId}/attachments/{attachmentId}/restore:
+    post:
+      tags:
+      - Recycle
+      summary: 仅恢复附件引用，不重新 PUT 原件
+      operationId: restoreAttachment
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+  /api/documents/{documentId}/attachments/{attachmentId}/permanent-delete:
+    post:
+      tags:
+      - Recycle
+      summary: 二次确认，最后引用物理 R2.delete，记录失败重试
+      operationId: purgeAttachment
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm:
+                  type: string
+                  const: DELETE_FOREVER
+              required:
+              - confirm
+  /api/documents/{documentId}/attachments/{attachmentId}/content:
+    get:
+      tags:
+      - Recycle
+      summary: 鉴权后按需读取一个私有 R2 对象，不预加载
+      operationId: viewPrivateOriginal
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+  /api/recycle:
+    get:
+      tags:
+      - Recycle
+      summary: 按月份筛选及5条分页，只能看自己已删除文书
+      operationId: listRecycle
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: month
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+  /api/recycle/attachments:
+    get:
+      tags:
+      - Recycle
+      summary: 当前账户附件回收站分页
+      operationId: listRecycleAttachments
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+  /api/recycle/empty:
+    post:
+      tags:
+      - Recycle
+      summary: 每次最多清理5份已删除文书，防止 CPU 超时
+      operationId: emptyRecycle
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm:
+                  type: string
+                  const: DELETE_FOREVER
+              required:
+              - confirm
+  /api/storage/cleanup-orphans:
+    post:
+      tags:
+      - Recycle
+      summary: 手动最多清理5个 D1 已确认无引用的对象，不执行 R2 LIST/HEAD
+      operationId: cleanupUnreferencedOriginals
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+  /api/backups/plan:
+    post:
+      tags:
+      - Backup
+      summary: 选择范围并估算有限的原件字节数
+      operationId: planBackup
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum:
+                  - all
+                  - month
+                  - year
+                  - selection
+                month:
+                  type: string
+                year:
+                  type: string
+                ids:
+                  type: array
+                  items:
+                    type: string
+                includes_originals:
+                  type: boolean
+  /api/backups/export:
+    get:
+      tags:
+      - Backup
+      summary: 按5份文书一批返回私人元数据 JSON，原件分开按需 GET
+      operationId: exportBackup
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: scope
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: month
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: year
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: id
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/backups/import-preview:
+    post:
+      tags:
+      - Backup
+      summary: 读取选定 ZIP 解出的安全 manifest，检查迁移内容，不修改数据库
+      operationId: previewBackup
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                schema_version:
+                  type: string
+                source_app:
+                  type: string
+                documents:
+                  type: array
+                  items:
+                    type: object
+              required:
+              - schema_version
+              - source_app
+              - documents
+  /api/backups/import-confirm:
+    post:
+      tags:
+      - Backup
+      summary: 仅确认恢复元数据；原件需用户重新上传并检查 SHA-256
+      operationId: importBackupMetadata
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                schema_version:
+                  type: string
+                source_app:
+                  type: string
+                documents:
+                  type: array
+                  items:
+                    type: object
+                confirm:
+                  type: string
+                  const: RESTORE_METADATA
+              required:
+              - schema_version
+              - source_app
+              - documents
+              - confirm
+  /api/backups/original/{documentId}/{attachmentId}:
+    get:
+      tags:
+      - Backup
+      summary: 仅在明确导出包含原件时按需取 R2 对象
+      operationId: backupOriginal
+      responses:
+        '200':
+          description: 成功；实际响应字段以 schema 或代码验收为准
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+  /api/usage:
+    get:
+      tags:
+      - Usage
+      summary: 当前用户本地用量；云端账户剩余额度明确报告未知
+      operationId: getUsage
+      responses:
+        '200':
+          description: 按日本日期的用户统计、UTC 本应用总预算，全账号余额仍未知
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  local_today:
+                    type: object
+                    properties:
+                      ai_calls: {type: integer}
+                      imported_files: {type: integer}
+                  app_utc_day:
+                    type: object
+                    properties:
+                      day_utc: {type: string, format: date}
+                      calls: {type: integer}
+                      reserved: {type: integer}
+                      limit: {type: integer}
+                  cloudflare_account_remaining: {type: 'null'}
+                  cloudflare_account_remaining_status:
+                    type: string
+                    enum: [unknown]
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/auth/sessions:
+    get:
+      tags: [Auth]
+      summary: 列出当前用户未撤销且未过期的登录会话（每页五条）
+      operationId: listOwnSessions
+      parameters:
+      - name: offset
+        in: query
+        schema: {type: integer, minimum: 0}
+      responses:
+        '200':
+          description: 返回 ID、登录时间、到期时间、是否当前会话；不返回 Cookie
+        '401':
+          $ref: '#/components/responses/Error'
+  /api/auth/sessions/revoke:
+    post:
+      tags: [Auth]
+      summary: 仅可撤销自己账号的其他会话
+      operationId: revokeOwnSession
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id:
+                  type: string
+                  minLength: 32
+                  maxLength: 32
+                  pattern: '^[a-fA-F0-9]{32}$'
+      responses:
+        '200':
+          description: 已撤销
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/auth/sessions/revoke-others:
+    post:
+      tags: [Auth]
+      summary: 撤销当前账户的其他会话而保留当前设备
+      operationId: revokeOtherOwnSessions
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      responses:
+        '200':
+          description: 返回被撤销的有效会话数量
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/auth/change-password:
+    post:
+      tags:
+      - Auth
+      summary: 验证当前密码，更新凭证，并撤销该用户全部会话（需要重新登录）
+      operationId: changePassword
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: {type: string}
+                new_password: {type: string, minLength: 12, maxLength: 128}
+      responses:
+        '200':
+          description: 已更改密码并撤销所有旧会话
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-da_session
+      description: 由服务端颁发、HttpOnly Secure SameSite，须提供同源及 X-CSRF-Token 才能写入。
+  responses:
+    Error:
+      description: 安全失败，code/message；绝不返回敏感日志
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok:
+                type: boolean
+              code:
+                type: string
+              message:
+                type: string
