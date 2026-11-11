@@ -48,6 +48,7 @@ async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={})
   return data;
 }
 async function openGmailSheet(){
+  gmailBusy.value=false;gmailAuthorizedUi.value=gmailConnected();
   gmailItems.value=[];gmailNext.value=null;sheet.value='gmail';
   try{await preloadGmailIdentity();}catch(e){problem(e);}
 }
@@ -57,7 +58,7 @@ async function connectGmail(){
   catch(e){problem(e);}finally{gmailBusy.value=false;}
 }
 async function loadGmailMessages(append=false){
-  if(!gmailConnected())return problem(new Error('请先授权 Gmail 只读访问'));
+  if(!gmailConnected()){gmailAuthorizedUi.value=false;return problem(new Error('Gmail 授权已过期，请重新授权'));}
   const serial=++gmailGeneration;
   gmailBusy.value=true;
   try{
@@ -89,7 +90,7 @@ async function disconnectGmail(){
   catch(e){problem(e);}finally{gmailAuthorizedUi.value=false;gmailBusy.value=false;}
 }
 function clearGmailSession(){
-  gmailGeneration++;gmailForget();gmailAuthorizedUi.value=false;
+  gmailGeneration++;gmailBusy.value=false;gmailForget();gmailAuthorizedUi.value=false;
   gmailItems.value=[];gmailNext.value=null;
 }
 async function boot(){
@@ -208,7 +209,7 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){if(sheet.value==='gmail'){gmailGeneration++;gmailItems.value=[];gmailNext.value=null;}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){inputMode.value=mode;sheet.value='import';}
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;

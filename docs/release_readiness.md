@@ -11,7 +11,7 @@
 | JSON/ZIP 备份/加密/恢复 | 是 | 本地往返通过 | iPhone 大文件/灾难恢复待验 |
 | PDF、DOCX、XLSX、PPTX、.eml、.txt | 是 | 解析及 Worker 测试通过 | 各种真文书和系统版本待验 |
 | Google Drive Picker | 是 | Mock 逐文件授权/下载通过 | 真实 Google OAuth 与 iPhone 待验 |
-| Google Gmail 自动同步 | 否 | 无 | 需独立 OAuth 权限、审核及增量同步 |
+| Google Gmail 自动同步 | 自动 historyId 增量仍未实现；用户主动只读逐封导入、五件分页、内存 Token 撤销已编码 | Mock 测试待 CI | Google 受限 Scope 审核与 iPhone 真机待验 |
 | 苹果 Mail | 手动导入/复制已实现 | 通过 | PWA 不可能直接读整个苹果邮箱 |
 | 日文 OCR | 默认关闭的实验模式、双人预算、空结果冷却至少24小时且用户确认重试 | Mock 通过，模型官方 Schema 只读核验通过 | **真实脱敏样本准确率与单位 Neurons 阻塞** |
 | 家計簿、HomeFlow、知学生词 | 三份默认关闭的签名桥 Draft PR | CI 通过 | 服务绑定/密钥/身份映射/真实联调待验 |

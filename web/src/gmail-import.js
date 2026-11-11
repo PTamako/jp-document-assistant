@@ -37,7 +37,7 @@ export async function gmailAuthorize(){
         resolve({authorized:true});
       }
     });
-    client.requestAccessToken({prompt:'consent'});
+    try{client.requestAccessToken({prompt:'consent'});}catch{reject(new Error('浏览器阻止了 Gmail 授权弹窗，请在 Safari 中重试'));}
   });
 }
 export async function gmailRevoke(){
@@ -45,7 +45,7 @@ export async function gmailRevoke(){
   if(!current)return true;
   if(!window.google?.accounts?.oauth2?.revoke)throw new Error('已清空本机授权；请到 Google 账号安全设置撤销远端权限');
   return new Promise((resolve,reject)=>{
-    try{window.google.accounts.oauth2.revoke(current,()=>resolve(true));}
+    try{window.google.accounts.oauth2.revoke(current,result=>{if(result?.successful===true||result?.error==='invalid_token')resolve(true);else reject(new Error('Google 远程撤销未成功；已清除本机 Token，请在 Google 账号设置中确认权限'));});}
     catch{reject(new Error('本机 Token 已清除，但远端撤销未确认，请到 Google 账号安全设置检查'));}
   });
 }

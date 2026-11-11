@@ -1010,7 +1010,7 @@ test('Google Picker CSP allows only explicitly trusted Google origins',async()=>
   const csp=page.response.headers.get('Content-Security-Policy');
   assert.ok(csp);
   assert.match(csp,/script-src 'self' https:\/\/accounts\.google\.com https:\/\/apis\.google\.com;/);
-  assert.match(csp,/connect-src 'self' https:\/\/www\.googleapis\.com https:\/\/accounts\.google\.com https:\/\/oauth2\.googleapis\.com https:\/\/apis\.google\.com;/);
+  assert.match(csp,/connect-src 'self' https:\/\/gmail\.googleapis\.com https:\/\/www\.googleapis\.com https:\/\/accounts\.google\.com https:\/\/oauth2\.googleapis\.com https:\/\/apis\.google\.com;/);
   assert.match(csp,/frame-src 'self' blob: https:\/\/accounts\.google\.com https:\/\/docs\.google\.com https:\/\/drive\.google\.com;/);
   assert.match(csp,/object-src 'none'/);
   assert.match(csp,/frame-ancestors 'none'/);
@@ -1208,4 +1208,23 @@ test('existing unlinked ready D1 object repaired before new file import referenc
     .get(created.data.document_id).object_id;
   assert.equal(objectId,'d'.repeat(32));
   assert.deepEqual(env._blobs.get(key),bytes);
+});
+
+
+test('confirmed Gmail text import remains private and deduplicates without any inbox sync',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const payload={method:'POST',...auth(owner),data:{
+    title:'手动选择的邮件',source_type:'gmail',retention:'summary',
+    text:'Gmail 账单通知\n口座番号：1234567\n支払期限 2026年11月30日',
+    visibility:'shared'
+  }};
+  const first=await req(env,'/api/documents/import/text',payload);
+  assert.equal(first.response.status,201,JSON.stringify(first.data));
+  const doc=(await req(env,'/api/documents/'+first.data.document_id,auth(owner))).data.document;
+  assert.equal(doc.visibility,'private');
+  const repeated=await req(env,'/api/documents/import/text',payload);
+  assert.equal(repeated.response.status,200,JSON.stringify(repeated.data));
+  assert.equal(repeated.data.reused,true);
+  assert.equal(repeated.data.document_id,first.data.document_id);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,1);
 });

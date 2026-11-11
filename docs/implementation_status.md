@@ -149,3 +149,9 @@
 - 真实外部检查仅覆盖 Cloudflare 只读资源清单（6 Worker、6 D1、2 私有 R2）与两个 Bucket 的公共访问状态；账单调用 403，所有账号实际用量及是否收费为**未知**。文书助手专用 D1 和 Worker 均尚不存在。
 - 目标三 App PR #294/#296/#162 未合并；知学端当前单用户且只有生词桥，双人私人句卡不满足上线要求。Google OAuth、Gmail 真实授权、OCR 真实脱敏样本、目标 App 真联调、双 iPhone 验收与 Cloudflare 新资源审批仍是阻塞。
 - 正式部署状态：**未创建资源、未迁移、未部署、未合并四个 PR、未写入三个 App 生产数据**。集中审批的操作步骤记录于 `docs/production_deployment_plan.md`。
+
+## 2026-11-11 Gmail 逐封只读导入（新增，待最新 CI）
+
+- 新增 Gmail 仅用户主动授权、每页最多五封元数据、选定一封才读取 full MIME 文字、附件与远程跟踪图片不加载的流程。复用现有安全 EML 提取、私人文字导入和同内容 SHA 去重；前端手机 Bottom Sheet。
+- Gmail OAuth Access Token 仅 JS 模块内存，登出/切用户/更改密码清除，主动撤销检查 Google 返回状态。限定官方 Gmail API CSP，不增加 Preview/Worker/Secrets。详见 docs/gmail_oauth_setup.md。
+- 这不等于 Gmail historyId 自动增量同步；Google 限制 OAuth Scope 的审批、浏览器授权真机测试和 Gmail 实时账号读取仍未完成。所有现有云和生产数据保持不动。
