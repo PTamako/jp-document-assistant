@@ -21,6 +21,10 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes all
  assert.equal(wrangler.r2_buckets[0].binding,'DOCUMENTS');
  assert.equal(wrangler.r2_buckets[0].bucket_name,'jp-document-assistant-private');
  assert.equal(wrangler.vars?.R2_BUCKET_NAME,'jp-document-assistant-private');
+ assert.equal(wrangler.ai?.binding,'AI');
+ assert.equal(wrangler.vars?.ENABLE_EXPERIMENTAL_OCR,'true');
+ assert.equal(wrangler.vars?.OCR_CALLS_PER_USER_DAY,'1');
+ assert.equal(wrangler.vars?.OCR_APP_UTC_DAILY_LIMIT,'1');
  assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.
  assert.equal(wrangler.preview_urls,false);
  assert.equal(wrangler.observability?.enabled,false);

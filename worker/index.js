@@ -461,7 +461,7 @@ async function route(request,env){
   if(!path.startsWith('/api/'))return env.ASSETS?.fetch(request) || new Response('Not found',{status:404});
   const calendarToken=method==='GET'?path.match(/^\/api\/calendar\/([a-f0-9]{64})\.ics$/):null;
   if(calendarToken)return serveCalendar(request,env,calendarToken[1]);
-  if(method==='GET'&&path==='/api/health')return json({ok:true,service:'document-assistant',ai_ocr:'disabled',version:'0.1.0'});
+  if(method==='GET'&&path==='/api/health')return json({ok:true,service:'document-assistant',ai_ocr:env.ENABLE_EXPERIMENTAL_OCR==='true'&&!!env.AI?'experimental':'disabled',version:'0.1.0'});
   if(method==='GET'&&path==='/api/auth/status'){
     requireBinding(env,'DB');
     const state=await dbFirst(env.DB,'SELECT COUNT(*) count FROM households');
