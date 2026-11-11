@@ -795,3 +795,78 @@ test('atomic cross-app sender lock blocks double-click while first target reques
  assert.equal(calls,1);
  assert.equal(env.DB.sql.prepare('SELECT attempt_count n FROM integration_links').get().n,1);
 });
+
+
+test('UTC daily OCR budget is shared across both accounts and never claims Cloudflare account headroom',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.ENABLE_EXPERIMENTAL_OCR='true';
+ env.OCR_CALLS_PER_USER_DAY='3';
+ env.OCR_APP_UTC_DAILY_LIMIT='1';
+ let calls=0,reads=0;
+ env.AI={async run(){calls++;return {answer:'納付期限：2026年11月30日',metrics:{input_tokens:25,output_tokens:9}};}};
+ const originalGet=env.DOCUMENTS.get.bind(env.DOCUMENTS);
+ env.DOCUMENTS.get=async k=>{reads++;return originalGet(k);};
+ async function add(user,byte){
+  const form=new FormData();
+  form.append('file',new File([new Uint8Array([255,216,255,224,byte,4,5,6])],'sample.jpg',{type:'image/jpeg'}));
+  form.append('retention','original');
+  const uploaded=await req(env,'/api/documents/import/file',{method:'POST',...auth(user),form});
+  assert.equal(uploaded.response.status,201);
+  const id=uploaded.data.document_id;
+  const data=(await req(env,`/api/documents/${id}`,auth(user))).data.document;
+  return {id,aid:data.attachments[0].id};
+ }
+ const first=await add(owner,1);
+ const ok=await req(env,`/api/documents/${first.id}/ocr`,{method:'POST',...auth(owner),
+  data:{confirm:true,attachment_id:first.aid}});
+ assert.equal(ok.response.status,200,JSON.stringify(ok.data));
+ const invited=await req(env,'/api/household/invites',{method:'POST',...auth(owner),data:{invitee_email:'partner@example.invalid'}});
+ assert.equal(invited.response.status,201,JSON.stringify(invited.data));
+ const join=await req(env,'/api/household/join',{method:'POST',data:{invite_token:invited.data.invite_token,email:'partner@example.invalid',password:'partner-secret-long-2026'}});
+ assert.equal(join.response.status,201,JSON.stringify(join.data));
+ const partner={cookie:join.response.headers.get('set-cookie').split(';')[0],csrf:join.data.csrf_token,user:join.data.user};
+ const second=await add(partner,2);
+ const fail=await req(env,`/api/documents/${second.id}/ocr`,{method:'POST',...auth(partner),
+  data:{confirm:true,attachment_id:second.aid}});
+ assert.equal(fail.response.status,429,JSON.stringify(fail.data));
+ assert.equal(fail.data.code,'OCR_APP_UTC_LIMIT');
+ assert.equal(calls,1);assert.equal(reads,1);
+ const totals=env.DB.sql.prepare('SELECT calls,reserved FROM ocr_app_utc_daily').get();
+ assert.deepEqual(totals,{calls:1,reserved:0});
+ const usage=await req(env,'/api/usage',auth(partner));
+ assert.equal(usage.data.app_utc_day.calls,1);
+ assert.equal(usage.data.app_utc_day.limit,1);
+ assert.equal(usage.data.cloudflare_account_remaining,null);
+});
+test('stale OCR pending does not retry automatically and requires explicit second approval',async()=>{
+ const {OCR_MODEL,OCR_PROMPT_VERSION}=await import('../worker/ocr.js');
+ const env=makeEnv(),owner=await boot(env);
+ const form=new FormData();
+ form.append('file',new File([new Uint8Array([255,216,255,224,21,22,23,24])],'pending.jpg',{type:'image/jpeg'}));
+ form.append('retention','original');
+ const uploaded=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+ const id=uploaded.data.document_id;
+ const doc=(await req(env,`/api/documents/${id}`,auth(owner))).data.document;
+ const aid=doc.attachments[0].id;
+ const object=env.DB.sql.prepare('SELECT object_id FROM attachments WHERE id=?').get(aid).object_id;
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ const old=new Date(Date.now()-26*3600000).toISOString();
+ env.DB.sql.prepare(`INSERT INTO ocr_attempts(id,owner_id,object_id,model_id,prompt_version,state,created_at,updated_at)
+  VALUES(?,?,?,?,?,'pending',?,?)`).run('pending-rec-1',actor,object,OCR_MODEL,OCR_PROMPT_VERSION,old,old);
+ env.ENABLE_EXPERIMENTAL_OCR='true';
+ let called=0;
+ env.AI={async run(){called++;return {answer:'申請期限：2026年11月30日'};}};
+ const path=`/api/documents/${id}/ocr`;
+ const base={method:'POST',...auth(owner),data:{confirm:true,attachment_id:aid}};
+ const blocked=await req(env,path,base);
+ assert.equal(blocked.response.status,409);
+ assert.equal(blocked.data.code,'OCR_PENDING_STALE');
+ assert.equal(called,0);
+ const approved=await req(env,path,{...base,data:{...base.data,retry_stale:true}});
+ assert.equal(approved.response.status,200,JSON.stringify(approved.data));
+ assert.equal(called,1);
+ const cache=env.DB.sql.prepare('SELECT state,attempt_count FROM ocr_attempts').get();
+ assert.deepEqual(cache,{state:'success',attempt_count:2});
+ const totals=env.DB.sql.prepare('SELECT calls,reserved FROM ocr_app_utc_daily').get();
+ assert.deepEqual(totals,{calls:1,reserved:0});
+});
