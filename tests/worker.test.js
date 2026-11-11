@@ -1158,3 +1158,54 @@ test('empty OCR requires 24h cooling and explicit budgeted retry',async()=>{
   const reuse=await trigger({});
   assert.equal(reuse.response.status,200);assert.equal(reuse.data.cached,true);assert.equal(calls,2);
 });
+
+
+test('reimport repairs missing R2 bytes before reporting reuse and never claims failed repair',async()=>{
+  const env=makeEnv(),owner=await boot(env),bytes=new Uint8Array([255,216,255,224,44,55,66,77]);
+  async function upload(){
+    const form=new FormData();
+    form.append('file',new File([bytes],'repeat.jpg',{type:'image/jpeg'}));
+    form.append('retention','original');
+    return req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+  }
+  const first=await upload();
+  assert.equal(first.response.status,201,JSON.stringify(first.data));
+  const firstId=first.data.document_id,key=[...env._blobs.keys()][0];
+  env._blobs.delete(key);
+  const put=env.DOCUMENTS.put;
+  env.DOCUMENTS.put=async()=>{throw Error('simulated R2 outage')};
+  const failed=await upload();
+  assert.equal(failed.response.status,503,JSON.stringify(failed.data));
+  assert.equal(failed.data.code,'R2_REPAIR_FAILED');
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,1);
+  env.DOCUMENTS.put=put;
+  const repaired=await upload();
+  assert.equal(repaired.response.status,200,JSON.stringify(repaired.data));
+  assert.equal(repaired.data.reused,true);assert.equal(repaired.data.document_id,firstId);
+  assert.deepEqual(env._blobs.get(key),bytes);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,1);
+});
+
+test('existing unlinked ready D1 object repaired before new file import references it',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const bytes=new Uint8Array([255,216,255,224,64,65,66,67]);
+  const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))]
+    .map(n=>n.toString(16).padStart(2,'0')).join('');
+  const key=owner.user.id+'/orphan-test-repair';
+  const sql='INSERT INTO storage_objects '+
+    '(id,owner_id,bucket,object_key,sha256,bytes,mime,quality_profile,state,created_at,updated_at) '+
+    'VALUES(?,?,?,?,?,?,?,?,?,?,?)';
+  env.DB.sql.prepare(sql).run('d'.repeat(32),owner.user.id,'test-private',key,digest,
+    bytes.length,'image/jpeg','web-upload-v1','ready',
+    '2026-11-11T00:00:00.000Z','2026-11-11T00:00:00.000Z');
+  assert.equal(env._blobs.has(key),false);
+  const form=new FormData();
+  form.append('file',new File([bytes],'orphan.jpg',{type:'image/jpeg'}));
+  form.append('retention','original');
+  const created=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+  assert.equal(created.response.status,201,JSON.stringify(created.data));
+  const objectId=env.DB.sql.prepare('SELECT object_id FROM attachments WHERE document_id=?')
+    .get(created.data.document_id).object_id;
+  assert.equal(objectId,'d'.repeat(32));
+  assert.deepEqual(env._blobs.get(key),bytes);
+});

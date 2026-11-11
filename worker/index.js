@@ -227,10 +227,31 @@ async function handleFileImport(request,env,p){
   const extracted=typeof extractedValue==='string'?extractedValue.trim():'';
   const sha=await hashStringBytes(bytes),now=isoNow();
   const existingDoc=await dbFirst(env.DB,`SELECT id FROM documents WHERE owner_id=? AND content_sha256=? AND lifecycle='active'`,p.user_id,sha);
-  if(existingDoc)return json({ok:true,reused:true,document_id:existingDoc.id});
+  if(existingDoc){
+    // Explicit reupload provides SHA-verified bytes; D1 alone is not proof of R2 storage.
+    const previous=await dbFirst(env.DB,`SELECT o.object_key,o.state FROM attachments a
+      JOIN storage_objects o ON o.id=a.object_id
+      WHERE a.document_id=? AND a.state='active' AND o.owner_id=?
+        AND o.sha256=? AND o.mime=? ORDER BY a.sort_order LIMIT 1`,
+      existingDoc.id,p.user_id,sha,mime);
+    if(!previous||previous.state!=='ready')
+      bad('文书已存在，但原件引用已删除或正在清理；请进入文书重新添加附件','ORIGINAL_RELINK_REQUIRED',409);
+    try{
+      if(!(await env.DOCUMENTS.head(previous.object_key)))
+        await env.DOCUMENTS.put(previous.object_key,bytes,{httpMetadata:{contentType:mime}});
+    }catch{bad('R2 原件缺失且补传失败，未确认重复文件成功','R2_REPAIR_FAILED',503);}
+    return json({ok:true,reused:true,document_id:existingDoc.id});
+  }
   const quality='web-upload-v1',existingObj=await dbFirst(env.DB,`SELECT * FROM storage_objects WHERE owner_id=? AND sha256=? AND mime=? AND quality_profile=? AND state='ready'`,p.user_id,sha,mime,quality);
   const id=randomToken(16),oid=existingObj?.id||randomToken(16),key=existingObj?.object_key||`${p.user_id}/${randomToken(20)}`;
   const label=String(file.name||'文书原件').replace(/[\x00-\x1f]/g,'').slice(0,150);
+  if(existingObj){
+    // A ready row can outlive its object after partial failure: repair exact key.
+    try{
+      if(!(await env.DOCUMENTS.head(key)))
+        await env.DOCUMENTS.put(key,bytes,{httpMetadata:{contentType:mime}});
+    }catch{bad('历史原件缺失且 R2 补传失败，未建立新文书引用','R2_REPAIR_FAILED',503);}
+  }
   if(!existingObj){
     await dbRun(env.DB,'INSERT INTO storage_objects(id,owner_id,bucket,object_key,sha256,bytes,mime,quality_profile,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',oid,p.user_id,env.R2_BUCKET_NAME||'private',key,sha,bytes.length,mime,quality,'uploading',now,now);
     try{await env.DOCUMENTS.put(key,bytes,{httpMetadata:{contentType:mime}});await dbRun(env.DB,"UPDATE storage_objects SET state='ready',updated_at=? WHERE id=?",isoNow(),oid);}
