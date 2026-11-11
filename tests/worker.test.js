@@ -1019,3 +1019,50 @@ test('Google Picker CSP allows only explicitly trusted Google origins',async()=>
   assert.equal(unauthorized.response.status,200);
   assert.equal(unauthorized.response.headers.get('Cache-Control'),'no-store');
 });
+
+
+test('sensitive insurance medical and identity imports stay private unless later explicitly shared',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  for(const value of ['保険証券：契約内容のご案内','処方箋：診療予約について','在留カード番号の確認']){
+    const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+      retention:'summary',source_type:'text',visibility:'shared',text:value
+    }});
+    assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+    const id=imported.data.document_id;
+    const detail=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+    assert.equal(detail.visibility,'private',value);
+    const blocked=await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+      data:{visibility:'shared',version:detail.version}});
+    assert.equal(blocked.response.status,409);
+    const confirmed=await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+      data:{visibility:'shared',version:detail.version,confirm_sensitive_share:true}});
+    assert.equal(confirmed.response.status,200);
+    assert.equal((await req(env,'/api/documents/'+id,auth(owner))).data.document.visibility,'shared');
+  }
+});
+
+test('replacing shared source with payroll and changing shared category revoke sharing atomically',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  async function imported(text){
+    const r=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+      retention:'summary',source_type:'text',visibility:'shared',text
+    }});
+    assert.equal(r.response.status,201,JSON.stringify(r.data));
+    return r.data.document_id;
+  }
+  const first=await imported('普通のお知らせ A');
+  assert.equal((await req(env,'/api/documents/'+first,auth(owner))).data.document.visibility,'shared');
+  const replaced=await req(env,'/api/documents/'+first+'/source-text',{method:'PATCH',...auth(owner),
+    data:{text:'給与明細\n差引支給額：250,000円'}});
+  assert.equal(replaced.response.status,200,JSON.stringify(replaced.data));
+  assert.equal(replaced.data.privacy_auto_private,true);
+  const payroll=(await req(env,'/api/documents/'+first,auth(owner))).data.document;
+  assert.equal(payroll.visibility,'private');
+  assert.equal(payroll.category,'salary');
+  const second=await imported('普通のお知らせ B');
+  const other=(await req(env,'/api/documents/'+second,auth(owner))).data.document;
+  const tagged=await req(env,'/api/documents/'+second,{method:'PATCH',...auth(owner),
+    data:{category:'medical',version:other.version}});
+  assert.equal(tagged.response.status,200,JSON.stringify(tagged.data));
+  assert.equal((await req(env,'/api/documents/'+second,auth(owner))).data.document.visibility,'private');
+});

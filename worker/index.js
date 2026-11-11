@@ -14,6 +14,11 @@ import { validateOfficeBytes } from '../web/src/document-text.js';
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_LIST = 10;
 const fieldsOf = ['due_date','amount_jpy','net_salary'];
+const sensitiveCategories=new Set(['salary','tax','bank','insurance','medical','government','housing','travel','hotel']);
+const sensitiveSource=/(?:マイナンバー|個人番号|在留カード|旅券|パスポート|運転免許証|保険証|口座番号|銀行口座|診療明細|給与明細)/;
+function requiresPrivateDefault(category,sourceText=''){
+  return sensitiveCategories.has(category)||sensitiveSource.test(String(sourceText));
+}
 const fullDate = /^(?:19|20)\d{2}-\d{2}-\d{2}$/;
 const validCivilDate = value => fullDate.test(value) && Number.isFinite(Date.parse(value+'T00:00:00Z')) && new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
 const dbRun = (db,sql,...args) => db.prepare(sql).bind(...args).run();
@@ -172,7 +177,7 @@ async function handleImportText(request,env,p){
   if(previous)return json({ok:true,reused:true,document_id:previous.id});
   const id=randomToken(16),title=(String(data.title||'').trim()||raw.split(/\r?\n/)[0].slice(0,60)||'未命名文书').slice(0,200);
   // Default private even when shared is requested for sensitive documents.
-  const sensitive=['salary','tax','bank'].includes(parsed.category);
+  const sensitive=requiresPrivateDefault(parsed.category,raw);
   const visibility=(data.visibility==='shared'&&!sensitive)?'shared':'private';
   await batch(env.DB,[
     ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,extracted_text_ja,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,visibility,parsed.category,title,raw,'summary',sha,'draft',now,now],
@@ -289,6 +294,13 @@ async function updateDoc(request,env,p,doc){
     if(!['private','shared'].includes(data.visibility))bad('共享状态无效');
     if(data.visibility==='shared' && !data.confirm_sensitive_share)bad('共享前必须再次确认文件内容和隐私','SHARE_CONFIRM_REQUIRED',409);
     updates.push('visibility=?');values.push(data.visibility);
+  }
+  // A shared non-sensitive record must not remain shared merely because its
+  // category is changed to medical, bank, salary or another sensitive type.
+  // Re-sharing requires the explicit visibility='shared' confirmation path.
+  if(data.category!==undefined && doc.visibility==='shared' && data.visibility===undefined &&
+     requiresPrivateDefault(data.category,doc.extracted_text_ja)){
+    updates.push('visibility=?');values.push('private');
   }
   if(!updates.length)bad('没有要修改的字段');
   if(!Number.isInteger(data.version)||data.version!==doc.version)bad('文书已被其他操作修改，请刷新','VERSION_CONFLICT',409);
@@ -580,13 +592,18 @@ async function route(request,env){
       // Only user-visible local candidates may be regenerated. Keep the source
       // and its reviewed fields consistent by using a D1 batch transaction.
       const now=isoNow();
+      // Replacing the entire source can turn a harmless shared item into a
+      // salary/medical/identity document. Revoke sharing in the same D1 batch.
+      const nextSource=body.text.trim();
+      const nextType=parseJapaneseText(nextSource).category;
+      const nextVisibility=requiresPrivateDefault(nextType,nextSource)?'private':d.visibility;
       await batch(env.DB,[
         ['DELETE FROM document_fields WHERE document_id=?',id],
-        ["UPDATE documents SET extracted_text_ja=?,analysis_status='draft',updated_at=?,version=version+1 WHERE id=? AND owner_id=?",body.text.trim(),now,id,p.user_id]
+        ["UPDATE documents SET extracted_text_ja=?,visibility=?,analysis_status='draft',updated_at=?,version=version+1 WHERE id=? AND owner_id=?",nextSource,nextVisibility,now,id,p.user_id]
       ]);
       const updated=await ownedDocument(env.DB,id,p,'active');
       const result=await analyzeStored(env,updated,true);
-      return json({ok:true,analysis_status:result.result?.analysis_status||'needs_review',fields:result.result?.fields||[],message:'文字已保存为待人工核对的分析结果'});
+      return json({ok:true,analysis_status:result.result?.analysis_status||'needs_review',fields:result.result?.fields||[],privacy_auto_private:nextVisibility==='private'&&d.visibility==='shared',message:'文字已保存为待人工核对的分析结果'});
     }
     if(method==='POST'&&rest==='analyze'){
       const doc=await ownedDocument(env.DB,id,p,'active');

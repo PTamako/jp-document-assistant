@@ -116,3 +116,9 @@
 - 新增 docs/production_deployment_plan.md：记录已核实的 6 Worker / 6 D1 / 2 私有 R2、全账号账单缺 Billing Read 因而未知、生产资源审批、Secrets、迁移命令、故障隔离和回滚，以及真实验收硬门槛。
 - 修复 Google Picker 官方按需脚本/文件读取被默认 CSP 拦截；仅允许已知 Google OAuth/Picker 脚本、框架与 Drive API 来源，保留 object-src none、frame-ancestors none；新增静态响应 CSP 回归测试。真 Google OAuth/iPhone 仍需审批后验收。
 - 未创建任何 Cloudflare 资源、Preview、Cron 或生产写入；四份 PR 均保持 Draft。
+
+## 2026-11-11 敏感文书共享权限保护（新增，待 CI）
+
+- 扩展默认私密类型：工资、税务、银行卡、医疗、保险、行政身份、住房、行程及酒店；未知分类里出现个人编号、在留卡、护照、保険証和账户字段也默认 private。
+- 已共享文书的原文更换为敏感文本时，在同一 D1 batch 内自动收回共享权限；已共享文书手动改为敏感类别时也自动回到私人状态。之后仍可通过明确二次确认的独立共享操作授权。
+- 新增两项回归覆盖保险/医疗/身份资料导入、工资原文替换和分类变更。这只属于新分支开发与 Mock 验证，尚无真实设备审查。
