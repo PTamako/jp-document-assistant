@@ -6,6 +6,7 @@ import { planBackup, exportBackup, previewImport, confirmImport } from './backup
 import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
 import { ocrAttachment } from './ocr.js';
+import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
 import { validateOfficeBytes } from '../web/src/document-text.js';
 
@@ -414,10 +415,15 @@ async function contentForAttachment(env,p,id,aid){
 async function route(request,env){
   const url=new URL(request.url),path=url.pathname,method=request.method;
   if(!path.startsWith('/api/'))return env.ASSETS?.fetch(request) || new Response('Not found',{status:404});
+  const calendarToken=method==='GET'?path.match(/^\/api\/calendar\/([a-f0-9]{64})\.ics$/):null;
+  if(calendarToken)return serveCalendar(request,env,calendarToken[1]);
   if(method==='GET'&&path==='/api/health')return json({ok:true,service:'document-assistant',ai_ocr:'disabled',version:'0.1.0'});
   if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
+  if(method==='GET'&&path==='/api/calendar/status')return calendarStatus(env,p);
+  if(method==='POST'&&path==='/api/calendar/subscription')return createCalendarSubscription(request,env,p);
+  if(method==='POST'&&path==='/api/calendar/revoke')return revokeCalendarSubscription(env,p);
   if(method==='GET'&&path==='/api/me')return json({user:{id:p.user_id,household_id:p.household_id,email:p.email_norm,role:p.role,display_name:p.display_name},csrf_token:p.csrf});
   if(method==='POST'&&path==='/api/auth/logout'){
     const cookie=parseCookie(request,'__Host-da_session');
