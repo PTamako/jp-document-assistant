@@ -1,3 +1,13 @@
+
+## 受限 Cloudflare 部署后的最终验收记录（2026-11-12 JST）
+
+- 外部真实公网验收：[GitHub Actions #43051239538](https://github.com/PTamako/jp-document-assistant/actions/runs/43051239538)：主页、健康接口和编译前端 JS **HTTP 200**，有 `default-src 'self'` CSP 和 `X-Frame-Options: DENY`；未登录时对 `/api/me`、`/api/documents`、`/api/recycle`、`/api/usage`、`/api/backups/export` 均**HTTP 401**。未执行登录/测试用户建号或真实敏感文书上传。
+- 临时 GitHub Actions 公开前端打包日志/远端只读探针已删除，恢复纯本地无云密钥 CI。[GitHub Actions #43051727691](https://github.com/PTamako/jp-document-assistant/actions/runs/43051727691)：**88/88 Node + 11/11 SQLite/API + Vue Build 通过**。以后默认 PR CI 不访问正式环境。
+- 新应用专用 D1 `d1_migrations` 共 10 条，查询时 0 users、0 documents、0 sessions；R2 精确合成对象 PUT→GET 内容一致→DELETE 全部成功，新 Bucket `r2.dev` 与 custom domain 均非公开。
+- 新应用正式 Worker 已开启 `workers.dev` 且 `previews_enabled:false`。Cloudflare 连接对 native Workers Static Assets 的短期 JWT Upload 无法执行；当前用一个 Worker 内嵌公开 UI 资源，不额外创建任何 Preview 或其他云资源；此阶段静态资源也计入 Worker 请求。
+- 仍需由用户本人在 Cloudflare Dashboard 覆盖一次性 `BOOTSTRAP_ADMIN_TOKEN` 后首次初始化。请不要将自己的真实密码、口令或文件发送到 ChatGPT，也不要上传到 GitHub。
+- 受限核心版不等于完整 v0.11，OCR、Google Gmail/Picker 真授权、三端桥接/知学句卡均未上线，真实双机/加密备份与 D1/R2 高并发恢复还须验收。账单 Billing Read=403，费用风险未知。
+
 ## 已执行的受限 Cloudflare 正式资源验收（2026-11-12 JST）
 
 **最新状态：受限 core-only 测试版已在 Cloudflare 正式 Worker 上部署；完整 v0.11 仍 NO-GO。** 上文所列“未创建/未部署/等待审批”属于截至 2026-11-11 的历史审查状态，不能再用来描述当前真实云资源。
