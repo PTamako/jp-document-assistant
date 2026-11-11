@@ -649,3 +649,74 @@ test('verified DOCX, XLSX and PPTX originals restore to D1/R2 only once per SHA'
  assert.equal(env._blobs.size,3);
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM attachments').get().n,3);
 });
+
+
+test('R2 DELETE succeeds but document D1 cleanup fails: retry converges without orphan index',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const form=new FormData();
+ form.append('file',new File([new Uint8Array([255,216,255,224,11,8,7,6])],'remove.jpg',{type:'image/jpeg'}));
+ form.append('retention','original');
+ const created=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+ const id=created.data.document_id;
+ assert.equal(created.response.status,201);
+ await req(env,'/api/documents/'+id+'/trash',{method:'POST',...auth(owner),data:{}});
+ const priorBatch=env.DB.batch.bind(env.DB);
+ let deletionCount=0,failOnce=true;
+ const priorDelete=env.DOCUMENTS.delete.bind(env.DOCUMENTS);
+ env.DOCUMENTS.delete=async key=>{deletionCount++;await priorDelete(key)};
+ env.DB.batch=async statements=>{
+  if(deletionCount>0&&failOnce){failOnce=false;throw Error('D1 unavailable AFTER R2 DELETE');}
+  return priorBatch(statements);
+ };
+ const first=await req(env,'/api/documents/'+id+'/permanent-delete',{
+  method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(first.response.status,503,JSON.stringify(first.data));
+ assert.equal(first.data.code,'METADATA_CLEANUP_FAILED');
+ assert.equal(env._blobs.size,0);
+ assert.equal(env.DB.sql.prepare("SELECT lifecycle FROM documents WHERE id=?").get(id).lifecycle,'deletion_pending');
+ assert.equal(env.DB.sql.prepare("SELECT state FROM storage_objects").get().state,'deletion_pending');
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM deletion_jobs").get().n,1);
+ const retry=await req(env,'/api/documents/'+id+'/permanent-delete',{
+  method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(retry.response.status,200,JSON.stringify(retry.data));
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM documents").get().n,0);
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM storage_objects").get().n,0);
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM deletion_jobs").get().n,0);
+ assert.equal(env._blobs.size,0);
+ assert.equal(deletionCount,2); // precise same-key DELETE is idempotent
+});
+test('R2 DELETE succeeds but attachment cleanup fails: retry physically and logically removes it',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const form=new FormData();
+ form.append('file',new File([new Uint8Array([255,216,255,224,91,82,73,64])],'delete.jpg',{type:'image/jpeg'}));
+ form.append('retention','original');
+ const uploaded=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+ const id=uploaded.data.document_id;
+ const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const aid=doc.attachments[0].id;
+ await req(env,'/api/documents/'+id+'/attachments/'+aid+'/trash',{
+  method:'POST',...auth(owner),data:{}
+ });
+ const originalBatch=env.DB.batch.bind(env.DB);
+ const originalDelete=env.DOCUMENTS.delete.bind(env.DOCUMENTS);
+ let deleted=false,failing=true;
+ env.DOCUMENTS.delete=async key=>{deleted=true;await originalDelete(key)};
+ env.DB.batch=async statements=>{
+  if(deleted&&failing){failing=false;throw Error('D1 commit failed');}
+  return originalBatch(statements);
+ };
+ const first=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/permanent-delete',{
+  method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(first.response.status,503);
+ assert.equal(first.data.code,'METADATA_CLEANUP_FAILED');
+ assert.equal(env._blobs.size,0);
+ const retry=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/permanent-delete',{
+  method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(retry.response.status,200,JSON.stringify(retry.data));
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM attachments").get().n,0);
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM storage_objects").get().n,0);
+});
