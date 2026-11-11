@@ -35,6 +35,15 @@ class SchemaTests(unittest.TestCase):
         seed(self.db)
     def tearDown(self):
         self.db.close()
+    def test_document_source_date_does_not_imply_official_verification(self):
+        before=self.db.execute("SELECT source_document_date,official_current_verified_at FROM documents WHERE id='d1'").fetchone()
+        self.assertEqual(before,(None,None))
+        self.db.execute("UPDATE documents SET source_document_date=? WHERE id='d1'",('2026-11-11',))
+        after=self.db.execute("SELECT source_document_date,official_current_verified_at FROM documents WHERE id='d1'").fetchone()
+        self.assertEqual(after,('2026-11-11',None))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE documents SET source_document_date=? WHERE id='d1'",('not-a-date',))
+
     def test_one_household_only(self):
         with self.assertRaises(sqlite3.IntegrityError):
             self.db.execute('INSERT INTO households VALUES(?,?,?,?)',('h2','other',NOW,NOW))
