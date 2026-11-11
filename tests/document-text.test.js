@@ -88,3 +88,31 @@ test('server validator rejects masquerading ZIP with unsafe OOXML and macro payl
  const macro=await make('macro.docx',[['word/document.xml','<w:document/>'],['word/vbaProject.bin','abc']],true);
  await assert.rejects(async()=>validateOfficeBytes(new Uint8Array(await macro.arrayBuffer()),names+'wordprocessingml.document'),/含宏/);
 });
+
+
+test('PPTX slide text extraction preserves per-slide evidence and warns about image-only slides',async()=>{
+ const presentation=await make('rules.pptx',[
+  ['ppt/presentation.xml','<p:presentation/>'],
+  ['ppt/slides/slide1.xml','<p:sld><p:sp><a:p><a:r><a:t>申請期限：2026年11月30日</a:t></a:r></a:p></p:sp></p:sld>'],
+  ['ppt/slides/slide2.xml','<p:sld><p:pic><a:blip r:embed="rId2"/></p:pic></p:sld>'],
+  ['ppt/media/picture.jpg',new Uint8Array([255,216,255,224,0,1,2,3])]
+ ],true);
+ const parsed=await extractOfficeFile(presentation);
+ assert.equal(parsed.kind,'pptx');
+ assert.equal(parsed.pages_read,2);
+ assert.deepEqual(parsed.pages_without_text,[2]);
+ assert.match(parsed.text,/【幻灯片 1】/);
+ assert.match(parsed.text,/申請期限：2026年11月30日/);
+ assert.doesNotMatch(parsed.text,/picture.jpg/);
+ assert.match(parsed.warning,/没有可复制文字/);
+ const mime='application/vnd.openxmlformats-officedocument.presentationml.presentation';
+ assert.equal(await validateOfficeBytes(new Uint8Array(await presentation.arrayBuffer()),mime),true);
+});
+test('PPTX rejects macro-enabled or corrupt presentation ZIP without fabricating text',async()=>{
+ const mime='application/vnd.openxmlformats-officedocument.presentationml.presentation';
+ const invalid=await make('bad.pptx',[['ppt/presentation.xml','<x:invalid/>'],
+  ['ppt/slides/slide1.xml','<p:sld><p:sp><a:t>甲</a:t></p:sp></p:sld>']],true);
+ await assert.rejects(()=>validateOfficeBytes(new Uint8Array(await invalid.arrayBuffer()),mime),/演示文稿结构无效/);
+ const empty=await make('empty.pptx',[['ppt/presentation.xml','<p:presentation/>']],true);
+ await assert.rejects(()=>extractOfficeFile(empty),/幻灯片数量不支持/);
+});
