@@ -21,16 +21,14 @@ test('complete OpenAPI YAML parses strictly and defines no duplicated routes or 
  const ids=Object.values(spec.paths).flatMap(route=>Object.entries(route)
   .filter(([method])=>['get','post','patch','put','delete'].includes(method)).map(([,op])=>op.operationId));
  assert.equal(ids.length,54);assert.equal(new Set(ids).size,54);
- for(const [path,method,op] of [
+ for(const [path,method,operation] of [
   ['/api/auth/sessions','get','listOwnSessions'],
   ['/api/auth/sessions/revoke','post','revokeOwnSession'],
   ['/api/auth/sessions/revoke-others','post','revokeOtherOwnSessions']
  ]){
-  assert.equal(spec.paths[path]?.[method]?.operationId,op);
+  assert.equal(spec.paths[path]?.[method]?.operationId,operation);
  }
  const revoke=spec.paths['/api/auth/sessions/revoke'].post;
  assert.equal(revoke.parameters.find(p=>p.name==='X-CSRF-Token')?.required,true);
- assert.equal(revoke.requestBody.content['application/json'].schema.properties.session_id.pattern,'^[a-fA-F0-9]{32}
-});
-);
+ assert.equal(revoke.requestBody.content['application/json'].schema.properties.session_id.pattern,'^[a-fA-F0-9]{32}$');
 });
