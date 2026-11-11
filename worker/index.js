@@ -178,6 +178,13 @@ function fileSignature(mime,bytes){
   if(mime==='image/png')return bytes.slice(0,8).every((b,i)=>b===[137,80,78,71,13,10,26,10][i]);
   if(mime==='image/webp')return new TextDecoder().decode(bytes.slice(0,4))==='RIFF'&&new TextDecoder().decode(bytes.slice(8,12))==='WEBP';
   if(mime==='application/pdf')return new TextDecoder().decode(bytes.slice(0,5))==='%PDF-';
+  if(mime==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'||mime==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'){
+    if(bytes[0]!==80||bytes[1]!==75||bytes[2]!==3||bytes[3]!==4)return false;
+    const names=new TextDecoder().decode(bytes);
+    return names.includes('[Content_Types].xml')&&
+      names.includes(mime.endsWith('document')?'word/document.xml':'xl/workbook.xml')&&
+      !/vbaProject\.bin|\.exe|\.js(?:\x00|\s|$)/i.test(names);
+  }
   return false;
 }
 async function handleFileImport(request,env,p){
@@ -187,8 +194,13 @@ async function handleFileImport(request,env,p){
   const form=await request.formData(),file=form.get('file');
   if(!file||typeof file.arrayBuffer!=='function'||file.size<=0||file.size>MAX_FILE_BYTES)bad('请选择不超过 8MB 的文件');
   if(form.get('retention')!=='original')bad('文件上传仅支持明确选择保存原件，普通分析请粘贴可复制文字');
-  const mime=String(file.type||'').toLowerCase();
-  if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(mime))bad('仅支持 JPEG/PNG/WebP/PDF');
+  const ext=String(file.name||'').toLowerCase();
+  const docx='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const xlsx='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const declared=String(file.type||'').toLowerCase();
+  const mime=declared || (ext.endsWith('.docx')?docx:ext.endsWith('.xlsx')?xlsx:'');
+  if(!['image/jpeg','image/png','image/webp','application/pdf',docx,xlsx].includes(mime))bad('仅支持 JPEG/PNG/WebP/PDF/DOCX/XLSX');
+  if((mime===docx&&!ext.endsWith('.docx'))||(mime===xlsx&&!ext.endsWith('.xlsx')))bad('Office 文件名与格式不一致','INVALID_FILE',415);
   const bytes=new Uint8Array(await file.arrayBuffer());
   if(!fileSignature(mime,bytes))bad('文件内容与声明类型不一致','INVALID_FILE',415);
   const extractedValue=form.get('extracted_text');
