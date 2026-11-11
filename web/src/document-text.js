@@ -144,37 +144,76 @@ async function xlsx(bytes,map){
  return {text:output.join('\n'),warning:warnings.join('。'),pages_read:sheets.length};
 }
 // Production upload guard: validate OOXML structure before any R2 PUT.
+
+async function pptx(bytes,map){
+ if(!map.has('ppt/presentation.xml'))invalid('PPTX 缺少演示文稿');
+ const slideNames=[...map.keys()].filter(x=>/^ppt\/slides\/slide[1-9]\d*\.xml$/.test(x))
+  .sort((a,b)=>Number(a.match(/slide(\d+)/)[1])-Number(b.match(/slide(\d+)/)[1]));
+ if(!slideNames.length||slideNames.length>60)invalid('PPTX 幻灯片数量不支持（最多60张）');
+ const slides=[];const missing=[];let total=0;
+ for(let i=0;i<slideNames.length;i++){
+  const xml=await xmlPart(bytes,map,slideNames[i]);
+  if(!/<p:sld(?:\s|>)/.test(xml))invalid('PPTX 幻灯片 XML 格式错误');
+  // Image shapes cannot be OCRed here. Text only, never external image links.
+  const content=xml.match(/<p:sp\b[\s\S]*?<\/p:sp>|<a:tbl\b[\s\S]*?<\/a:tbl>/g)||[];
+  const chunks=content.length?content:[xml];
+  const parts=[];
+  for(const c of chunks){
+   const lines=[...c.matchAll(/<a:t(?:\s[^<>]*)?>([\s\S]*?)<\/a:t>|<\/a:p\s*>/g)]
+    .map(m=>m[1]!==undefined?entity(m[1]):'\n').join('');
+   if(lines.trim())parts.push(lines.trim());
+  }
+  const text=parts.join('\n');
+  if(!text)missing.push(i+1);
+  else{
+   const paragraph='【幻灯片 '+(i+1)+'】\n'+text;
+   total+=paragraph.length;if(total>MAX_TEXT)invalid('PPTX 文字总量超过10万字符');
+   slides.push(paragraph);
+  }
+ }
+ return {text:slides.join('\n\n'),pages_read:slideNames.length,pages_without_text:missing,
+  warning:missing.length?
+   '第 '+missing.join('、')+' 张幻灯片没有可复制文字，图片中的内容仍需人工检查或单独 OCR；图片和嵌入媒体不会自动解析':
+   'PPTX 已提取可复制的幻灯片文字；图片、动画和备注中的内容未经过 OCR'};
+}
+
 export async function validateOfficeBytes(bytes,mime){
  const docx='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
  const xlsx='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
- if(!(bytes instanceof Uint8Array)||!bytes.length||bytes.length>LIMIT||![docx,xlsx].includes(mime))
+ const pptx='application/vnd.openxmlformats-officedocument.presentationml.presentation';
+ if(!(bytes instanceof Uint8Array)||!bytes.length||bytes.length>LIMIT||![docx,xlsx,pptx].includes(mime))
    invalid('Office 文件大小或格式无效');
  const map=centralEntries(bytes);
- const main=mime===docx?'word/document.xml':'xl/workbook.xml';
+ const main=mime===docx?'word/document.xml':mime===xlsx?'xl/workbook.xml':'ppt/presentation.xml';
  if(!map.has('[Content_Types].xml')||!map.has(main))invalid('Office 必需的 XML 部件缺失');
  const types=await xmlPart(bytes,map,'[Content_Types].xml');
  if(!/<Types(?:\s|\/?>)/.test(types))invalid('Office 内容类型声明无效');
  const mainXml=await xmlPart(bytes,map,main);
  if(mime===docx&&!/<w:document(?:\s|>)/.test(mainXml))invalid('Word 主文档无效');
  if(mime===xlsx&&!/<(?:\w+:)?workbook(?:\s|\/?>)/.test(mainXml))invalid('Excel 工作簿结构无效');
+ if(mime===pptx){
+   if(!/<p:presentation(?:\s|>)/.test(mainXml))invalid('PPTX 演示文稿结构无效');
+   if(![...map.keys()].some(n=>/^ppt\/slides\/slide[1-9]\d*\.xml$/.test(n)))
+     invalid('PPTX 没有幻灯片');
+ }
  return true;
 }
 export async function extractOfficeFile(file){
  if(!file||file.size<1||file.size>LIMIT)invalid('Office 文件必须小于 8 MB');
- const name=String(file.name||''),kind=/\.docx$/i.test(name)?'docx':/\.xlsx$/i.test(name)?'xlsx':'';
- if(!kind)invalid('仅支持无宏 DOCX / XLSX');
+ const name=String(file.name||''),kind=/\.docx$/i.test(name)?'docx':/\.xlsx$/i.test(name)?'xlsx':/\.pptx$/i.test(name)?'pptx':'';
+ if(!kind)invalid('仅支持无宏 DOCX / XLSX / PPTX');
  const bytes=new Uint8Array(await file.arrayBuffer()),map=centralEntries(bytes);
  if(!map.has('[Content_Types].xml'))invalid('Office 文件缺少内容类型声明');
- const result=kind==='docx'?await docx(bytes,map):await xlsx(bytes,map);
+ const result=kind==='docx'?await docx(bytes,map):kind==='xlsx'?await xlsx(bytes,map):await pptx(bytes,map);
  if(result.text.length>MAX_TEXT)invalid('文字超过 10 万字符');
  return {kind,title:name.replace(/\.[^.]+$/,''),source_type:'local_file',needs_manual:!result.text.trim(),...result};
 }
 export async function extractDocumentText(file){
  if(!file||file.size<1||file.size>LIMIT)invalid('文件必须小于 8 MB');
  const name=String(file.name||'').toLowerCase();
- if(name.endsWith('.docx')||name.endsWith('.xlsx'))return extractOfficeFile(file);
+ if(name.endsWith('.docx')||name.endsWith('.xlsx')||name.endsWith('.pptx'))return extractOfficeFile(file);
  if(name.endsWith('.pdf')||file.type==='application/pdf'){
   const {extractPdfText}=await import('./pdf-text.js');return extractPdfText(file,{maxPages:30,maxChars:MAX_TEXT});
  }
- invalid('仅支持 PDF、DOCX、XLSX；邮件请走 .eml / .txt 入口');
+ invalid('仅支持 PDF、DOCX、XLSX、PPTX；邮件请走 .eml / .txt 入口');
 }
