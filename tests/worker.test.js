@@ -312,3 +312,46 @@ test('ZIP + original R2 roundtrip restores missing originals without duplicating
   assert.equal(target._blobs.size,1);
   assert.deepEqual(target._blobs.get(key),bytes);
 });
+
+
+test('HomeFlow delegated assignee explicitly carries bonus and synced status survives bridge disconnect',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+    retention:'summary',source_type:'text',text:'納付期限：令和8年11月30日'
+  }});
+  const id=imported.data.document_id;
+  const doc=(await req(env,`/api/documents/${id}`,auth(owner))).data.document;
+  const shared=await req(env,`/api/documents/${id}`,{method:'PATCH',...auth(owner),data:{visibility:'shared',version:doc.version,confirm_sensitive_share:true}});
+  assert.equal(shared.response.status,200);
+  const deadline=doc.fields.find(x=>x.field_key==='due_date');
+  assert.equal((await req(env,`/api/fields/${deadline.id}`,{method:'PATCH',...auth(owner),data:{review_state:'confirmed',normalized_value:'2026-11-30'}})).response.status,200);
+  const candidates=(await req(env,`/api/documents/${id}/candidates`,auth(owner))).data.items;
+  const task=candidates.find(x=>x.candidate_kind==='homeflow_task');assert.ok(task);
+  const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+  env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{homeflow:'homeflow_owner_123'}});
+  env.HOMEFLOW_BRIDGE_SECRET='homeflow-test-secret-with-enough-entropy-1234';
+  let calls=0;
+  env.HOMEFLOW_BRIDGE_SERVICE={async fetch(r){
+    const raw=await r.text(),stamp=r.headers.get('X-DA-Timestamp');
+    assert.equal(r.headers.get('X-DA-Signature'),await hmacHex(env.HOMEFLOW_BRIDGE_SECRET,`${stamp}\n${raw}`));
+    const msg=JSON.parse(raw);
+    assert.equal(msg.actor_user_id,'homeflow_owner_123');
+    assert.equal(msg.payload.visibility,'household');
+    assert.equal(msg.payload.assignee,'other_household_user');
+    assert.equal(msg.payload.bonusPoints,2);
+    assert.equal(msg.idempotency_key,`jda:homeflow:${task.id}`);
+    calls++;
+    return Response.json({ok:true,remote_id:'homeflow-task-id',reused:false});
+  }};
+  const preview=(await req(env,`/api/candidates/${task.id}/preview`,auth(owner))).data;
+  assert.equal(preview.account_mapping_ready,true);
+  const body={confirm:'CONFIRM_TASK',title:'确认缴费',visibility:'household',assignee:'other_household_user',bonus_points:2};
+  const opts={method:'POST',...auth(owner),data:body,extraHeaders:{'Idempotency-Key':'homeflow_test_request_123'}};
+  const sent=await req(env,`/api/candidates/${task.id}/commit`,opts);
+  assert.equal(sent.response.status,200,JSON.stringify(sent.data));
+  assert.equal(calls,1);
+  delete env.HOMEFLOW_BRIDGE_SECRET;delete env.HOMEFLOW_BRIDGE_SERVICE;
+  const repeat=await req(env,`/api/candidates/${task.id}/commit`,opts);
+  assert.equal(repeat.data.already_synced,true);
+  assert.equal(calls,1);
+});

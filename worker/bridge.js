@@ -8,6 +8,11 @@ const first=(db,s,...a)=>db.prepare(s).bind(...a).first();
 const run=(db,s,...a)=>db.prepare(s).bind(...a).run();
 const trim=(s,max)=>typeof s==='string'?s.trim().slice(0,max):'';
 const safeVal=(v)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0;
+function authorizedMapping(env,userId,target){
+  let all={};try{all=JSON.parse(env.BRIDGE_USER_MAP||'{}');}catch{}
+  const id=all?.[userId]?.[target];
+  return typeof id==='string'&&id.length>=1&&id.length<=100?id:null;
+}
 function config(env,target){
   // The operator supplies this per-deployment, never from a browser request.
   const upper=target.toUpperCase();
@@ -41,7 +46,9 @@ function validatedPayload(target,item,approved,body){
     if(!date||date!==x.due_on)bad('截止日期未经人工核验','REVIEW_REQUIRED',409);
     if(!['private','household'].includes(body.visibility))bad('任务可见性无效');
     if(item.visibility==='private'&&body.visibility!=='private')bad('私人文书不能创建共享任务','PRIVACY_BOUNDARY',403);
-    return {operation:'task',title:trim(body.title||x.title,120),dueOn:date,visibility:body.visibility,assignee:trim(body.assignee,60)||null,remindEnabled:body.remindEnabled!==false};
+    const bonusPoints=body.bonus_points===undefined?0:Number(body.bonus_points);
+    if(!Number.isSafeInteger(bonusPoints)||bonusPoints<0||bonusPoints>10000)bad('额外任务积分必须是 0～10000 的整数','INVALID_BONUS',400);
+    return {operation:'task',title:trim(body.title||x.title,120),dueOn:date,visibility:body.visibility,assignee:trim(body.assignee,60)||null,bonusPoints,remindEnabled:body.remindEnabled!==false};
   }
   if(target==='zhixue'){
     if(item.candidate_kind==='sentence'){
@@ -57,7 +64,7 @@ function validatedPayload(target,item,approved,body){
   bad('不支持的联动目标');
 }
 export async function getBridgeStatus(env,p){
-  return json({targets:Object.fromEntries(['kakebo','homeflow','zhixue'].map(t=>[t,{configured:!!config(env,t),requires_explicit_confirmation:true,identity_mapping:'server_approved'}]))});
+  return json({targets:Object.fromEntries(['kakebo','homeflow','zhixue'].map(t=>[t,{configured:!!config(env,t),account_mapping_ready:!!authorizedMapping(env,p.user_id,t),requires_explicit_confirmation:true,identity_mapping:'server_approved'}]))});
 }
 export async function candidatePreview(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
@@ -65,7 +72,7 @@ export async function candidatePreview(request,env,p,id){
   const target=TARGETS[item.candidate_kind];
   const fields=await checkedFields(env,item.document_id);
   const link=await first(env.DB,'SELECT state,remote_id,attempt_count,last_error_code FROM integration_links WHERE candidate_id=?',id);
-  return json({candidate_id:id,target,kind:item.candidate_kind,payload:JSON.parse(item.payload_json),confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],integration:link||null,available:!!config(env,target),account_mapping_ready:false,note:'请对照原文和目标 App 账号确认。任何金额都不会因识别成功而自动记账。'});
+  return json({candidate_id:id,target,kind:item.candidate_kind,payload:JSON.parse(item.payload_json),confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],integration:link||null,available:!!config(env,target),account_mapping_ready:!!authorizedMapping(env,p.user_id,target),note:'请对照原文和目标 App 账号确认。任何金额都不会因识别成功而自动记账。'});
 }
 export async function commitCandidate(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
@@ -75,18 +82,16 @@ export async function commitCandidate(request,env,p,id){
   if(data.confirm!==CONFIRMATIONS[item.candidate_kind])bad('需要明确二次确认','CONFIRM_REQUIRED',409);
   const supplied=request.headers.get('Idempotency-Key');
   if(!supplied||!/^[A-Za-z0-9._:-]{8,120}$/.test(supplied))bad('需要合法 Idempotency-Key','IDEMPOTENCY_REQUIRED',400);
+  const existing=await first(env.DB,'SELECT * FROM integration_links WHERE candidate_id=? AND target=?',id,target);
+  // A completed integration remains an established fact even after the user
+  // disconnects the service; never falsely report it as not configured.
+  if(existing?.state==='synced'||existing?.state==='linked_existing')return json({ok:true,already_synced:true,remote_id:existing.remote_id,target});
   const dest=config(env,target);
   if(!dest)return failure('BRIDGE_NOT_CONFIGURED','该 App 的安全联动服务尚未配置；没有写入目标 App',503);
   const fields=await checkedFields(env,item.document_id);
   const payload=validatedPayload(target,item,fields,data);
-  // Explicit mapping is provisioned by the owner after independent authorization in each app.
-  const mappings=env.BRIDGE_USER_MAP;
-  let identities;
-  try{identities=JSON.parse(mappings||'{}');}catch{identities={};}
-  const remoteUser=identities[p.user_id]?.[target];
-  if(!remoteUser||typeof remoteUser!=='string')return failure('ACCOUNT_NOT_LINKED','尚未完成目标账号的独立授权和身份映射；没有发送联动',403);
-  const existing=await first(env.DB,'SELECT * FROM integration_links WHERE candidate_id=? AND target=?',id,target);
-  if(existing?.state==='synced'||existing?.state==='linked_existing')return json({ok:true,already_synced:true,remote_id:existing.remote_id,target});
+  const remoteUser=authorizedMapping(env,p.user_id,target);
+  if(!remoteUser)return failure('ACCOUNT_NOT_LINKED','尚未完成目标账号的独立授权和身份映射；没有发送联动',403);
   const key=existing?.idempotency_key||`jda:${target}:${id}`;
   if(existing?.state==='sending' && Date.now()-Date.parse(existing.updated_at)<60000)return failure('SENDING','联动请求尚在处理；请一分钟后使用同一请求重试',409);
   const now=isoNow();

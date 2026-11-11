@@ -17,7 +17,7 @@ const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
-const pendingAttachment=ref(null),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
+const pendingAttachment=ref(null),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 
 const fieldLabel={due_date:'办理／缴费期限',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）'};
@@ -149,7 +149,7 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
  candidateDraft.date=d.confirmed_fields?.due_date||new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});
  candidateDraft.category='';candidateDraft.payment_source='';candidateDraft.note='';candidateDraft.title=item.payload?.title||current.value.title;
- candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.privacy_confirmed=false;
+ candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;
  candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||'';
  sheet.value='candidate';integrationConfigured.value=d.available;
  }catch(e){problem(e);}}
@@ -307,6 +307,8 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
         <label v-if="candidateDraft.kind==='finance'" class="form-label">备注<input v-model="candidateDraft.note" /></label>
         <label v-if="candidateDraft.kind==='homeflow_task'" class="form-label">任务名称<input v-model="candidateDraft.title" maxlength="120" /></label>
         <label v-if="candidateDraft.kind==='homeflow_task'" class="form-label">任务可见范围<select v-model="candidateDraft.visibility"><option value="private">仅自己</option><option v-if="current.visibility==='shared'" value="household">家庭共享</option></select></label>
+        <label v-if="candidateDraft.kind==='homeflow_task' && candidateDraft.visibility==='household'" class="form-label">负责人 HomeFlow 用户 ID（可留空，默认双方）<input v-model="candidateDraft.assignee" maxlength="60" placeholder="仅填写家庭成员在 HomeFlow 的用户 ID" /></label>
+        <label v-if="candidateDraft.kind==='homeflow_task' && candidateDraft.visibility==='household' && candidateDraft.assignee" class="form-label">指定对方时额外贡献积分（至少 1 分）<input v-model.number="candidateDraft.bonus_points" type="number" inputmode="numeric" min="0" max="10000" /><span class="fine-print">HomeFlow 现有规则要求指定其他成员时投入额外积分；请确认后再提交。余额不足时目标应用会拒绝，不会自动扣分。</span></label>
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
