@@ -70,3 +70,9 @@
 - 已在 PR 新增 `0008_bridge_fingerprint.sql` 和原子 CAS：同一候选只会有一个发送者，首次发送前锁定包含目标账号、金额、日期的 SHA-256 请求指纹。网络响应丢失后改日期或账号将返回 `RETRY_PAYLOAD_CHANGED` 而不是默默二次记账；旧版无指纹的已尝试联动拒绝盲目重试。
 - 新增真实网络响应丢失后改日期、并发双击、发送完成后再次提交测试；本次提交的最新 CI 待独立确认。
 - 不改其他三个 App 生产 D1，仍未部署。
+
+## Google Drive Picker 最小权限导入（本轮提交待 CI 验收）
+
+- 新增前端 Google Drive Picker：仅在用户明确点击时加载官方组件并申请 `drive.file`，只读取选中文件。Google Docs→TXT、Sheets→XLSX、Slides→PPTX；其他 PDF/Office/图片/EML/TXT 下载到临时内存，继续沿用原有文字层优先与人工确认流程。
+- 未配置三项构建公开凭据前入口隐藏；无服务器同步、无自动 R2 上传、不读取全盘或 Gmail。详见 `docs/google_drive_picker_setup.md`。
+- 纠正“仅保存文字”时错误提示已上传 R2 的 UI 文案；新增无授权、逐文件下载、8MB 限额和缺失格式的单元测试。独立 Google OAuth 许可及 iPhone 实机验证尚未完成。

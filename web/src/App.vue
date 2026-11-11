@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick } from 'vue';
 import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
+import { drivePickerConfig,pickGoogleDriveFile } from './google-drive-picker.js';
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 
@@ -16,7 +17,8 @@ const cats={salary:'工资／奖金',bank:'银行／信用卡',tax:'税务／缴
 const categoryOptions=Object.entries(cats);
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),localTextInput=ref(null),localImportNote=ref(''),inputMode=ref('text');
-const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original');
+const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original'),fileSource=ref('local_file');
+const drivePickerAvailable=!!drivePickerConfig();
 const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),inviteEmail=ref(''),inviteToken=ref('');
 const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
@@ -131,11 +133,11 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;ocrAttachmentPending.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){inputMode.value=mode;sheet.value='import';}
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;
-  fileDraft.value=file;sheet.value='import';inputMode.value='file';fileText.value='';fileWarning.value='';
+  fileDraft.value=file;fileSource.value='local_file';sheet.value='import';inputMode.value='file';fileText.value='';fileWarning.value='';
   const hasTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
   fileRetention.value=hasTextLayer?'summary':'original';
   if(!hasTextLayer)return;
@@ -147,6 +149,35 @@ async function selectFile(event){
   }catch(e){problem(e);fileWarning.value=e.message;}
   finally{busy.value=false;if(fileInput.value)fileInput.value.value='';}
 }
+
+async function importFromGoogleDrive(){
+  busy.value=true;error.value='';
+  try{
+    const file=await pickGoogleDriveFile();
+    if(!file)return; // Canceling Google Picker does not request an R2 upload or import.
+    if(/\.(?:eml|txt)$/i.test(file.name)){
+      const parsed=await readLocalText(file);
+      textDraft.title=parsed.title;textDraft.text=parsed.text;
+      textDraft.source_type='google_drive';textDraft.retention='summary';
+      localImportNote.value='已从所选 Google 文件提取文字；请核对后决定是否保存。';
+      inputMode.value='text';
+    }else{
+      fileDraft.value=file;fileSource.value='google_drive';inputMode.value='file';
+      fileText.value='';fileWarning.value='';
+      const isTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
+      fileRetention.value=isTextLayer?'summary':'original';
+      if(isTextLayer){
+        const parsed=await extractDocumentText(file);
+        if(fileDraft.value!==file)return;
+        fileText.value=parsed.text;
+        fileWarning.value=parsed.warning||'';
+      }
+    }
+    sheet.value='import';
+  }catch(e){problem(e)}
+  finally{busy.value=false}
+}
+
 async function importLocalText(event){
   const file=event.target.files?.[0];if(!file)return;
   busy.value=true;try{
@@ -163,11 +194,11 @@ async function importDocument(){
       if(!textDraft.text.trim())throw new Error('请先粘贴或输入日文内容');
       result=await api('/api/documents/import/text',{method:'POST',body:{title:textDraft.title,text:textDraft.text,source_type:textDraft.source_type,retention:textDraft.retention}});
     }else{
-      if(!fileDraft.value)throw new Error('请先选择照片或 PDF');
+      if(!fileDraft.value)throw new Error('请先选择 PDF、Word、Excel、PowerPoint 或照片');
       if(fileRetention.value!=='original'){
         if(!fileText.value.trim())throw new Error('没有文字层，请人工填写或明确选择保留原件');
         result=await api('/api/documents/import/text',{method:'POST',body:{title:fileDraft.value.name,text:fileText.value,
-          source_type:'local_file',retention:fileRetention.value}});
+          source_type:fileSource.value,retention:fileRetention.value}});
       }else{
         const compressed=await compressImage(fileDraft.value);
         const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');
@@ -177,7 +208,7 @@ async function importDocument(){
     }
     const id=result.document_id;
     const saved=result.saved!==false;
-    flash(saved?(inputMode.value==='file'?'原件已保存到私有 R2，文字层金额和日期仍须人工核对':(result.reused?'已关联此前导入的文书':'文字已导入，字段待确认')):'规则预览已完成，内容未保存');
+    flash(saved?(result.reused?'已关联此前导入的文书':inputMode.value==='file'?(fileRetention.value==='original'?'原件已保存到私有 R2，文字和日期仍须核对':'文字已导入，原件未上传 R2'):'文字已导入，字段待确认'):'规则预览已完成，内容未保存');
     if(!saved){notice.value+=(result.analysis?.explanation_zh?`：${result.analysis.explanation_zh}`:'');}
     closeSheet();
     if(saved){for(const p of Object.values(pages))p.loaded=false;await loadTab(activeTab.value==='mine'?'docs':activeTab.value);if(id)await openDoc(id);}
@@ -381,7 +412,7 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
   <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeSheet()">
     <section class="bottom-sheet" role="dialog" aria-modal="true" :aria-label="sheet">
       <div class="grabber"></div>
-      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">照片 / PDF</button></div>
+      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><div v-if="drivePickerAvailable" class="upload-box"><button class="secondary full" :disabled="busy" @click="importFromGoogleDrive">从 Google Drive 选择文件（逐份授权）</button><p class="fine-print">只读取主动选择的文件，授权仅用于本次读取。提取后需再次确认保存。</p></div>
         <template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><div class="upload-box"><button class="secondary" :disabled="busy" @click="localTextInput?.click()">读取本地 .eml 邮件 / .txt 文字文件</button><input ref="localTextInput" type="file" accept=".eml,.txt,message/rfc822,text/plain" class="visually-hidden" @change="importLocalText" /><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><p class="fine-print">仅在本次页面会话中提取文字；不执行邮件 HTML，不抓取远程图片或附件。</p></div><label class="form-label">来源<select v-model="textDraft.source_type"><option value="text">粘贴文本</option><option value="mail_forward">苹果邮件复制 / 转发</option><option value="google_drive">Google Drive 复制</option><option value="local_file">本地文档文本</option></select></label><div class="radio-stack"><label><input v-model="textDraft.retention" type="radio" value="summary" />保存文书文字和分析结果</label><label><input v-model="textDraft.retention" type="radio" value="analyze_only" />仅规则分析，不存储内容</label></div></template>
         <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')" class="form-label">文件文字层（可核对修改）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="扫描页请人工输入原文"></textarea></label><div class="radio-stack"><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')"><input v-model="fileRetention" type="radio" value="analyze_only" />仅分析、不保存</label><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')"><input v-model="fileRetention" type="radio" value="summary" />仅保存文字（不请求 R2）</label><label><input v-model="fileRetention" type="radio" value="original" />保存私有原件到 R2</label></div><p class="fine-print">PDF、Word、Excel、PowerPoint 优先在本机提取文字层，不自动 OCR，不在本机持久保存。图片仅临时压缩。</p></template>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
