@@ -454,3 +454,34 @@ test('owner reorders active attachment IDs with version CAS; no R2 operation',as
   assert.equal(invalid.response.status,400);
   assert.equal(r2Reads,0);assert.equal(r2Writes,0);
 });
+
+
+test('DOCX text-layer analysis and optional R2 original respect user retention choice',async()=>{
+  const {fileOf}=await import('./helpers/office-fixture.js');
+  const {extractOfficeFile}=await import('../web/src/document-text.js');
+  const file=await fileOf('notice.docx',[
+    ['word/document.xml','<w:document><w:p><w:t>納付期限：2026年11月30日</w:t></w:p><w:p><w:t>ご請求金額：1200円</w:t></w:p></w:document>']
+  ]);
+  const parsed=await extractOfficeFile(file);
+  const env=makeEnv(),owner=await boot(env);
+  const summary=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+    title:file.name,text:parsed.text,source_type:'local_file',retention:'summary'
+  }});
+  assert.equal(summary.response.status,201,JSON.stringify(summary.data));
+  assert.equal(env._blobs.size,0);
+  const b=new FormData();b.append('file',file);b.append('retention','original');b.append('extracted_text',parsed.text);
+  const saved=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:b});
+  assert.equal(saved.response.status,201,JSON.stringify(saved.data));
+  assert.equal(saved.data.text_layer_used,true);
+  assert.equal(env._blobs.size,1);
+  const doc=(await req(env,'/api/documents/'+saved.data.document_id,auth(owner))).data.document;
+  assert.equal(doc.visibility,'private');
+  assert.ok(doc.fields.some(x=>x.field_key==='due_date'));
+  assert.ok(doc.fields.some(x=>x.field_key==='amount_jpy'));
+  const fake=new File([new Uint8Array([80,75,3,4,0,0])],'fake.docx',
+    {type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+  const bad=new FormData();bad.append('file',fake);bad.append('retention','original');
+  const rejected=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:bad});
+  assert.equal(rejected.response.status,415);
+  assert.equal(env._blobs.size,1);
+});
