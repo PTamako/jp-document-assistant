@@ -16,6 +16,7 @@ test('complete OpenAPI YAML parses strictly and defines no duplicated routes or 
  assert.ok(file.source_type.enum.includes('google_drive'));
  const ocr=spec.paths['/api/documents/{documentId}/ocr'].post.requestBody.content['application/json'].schema.properties;
  assert.equal(ocr.retry_stale.type,'boolean');
+ assert.equal(ocr.retry_empty.type,'boolean');
  const usage=spec.paths['/api/usage'].get.responses['200'].content['application/json'].schema.properties;
  assert.equal(usage.cloudflare_account_remaining.type,'null');
  const ids=Object.values(spec.paths).flatMap(route=>Object.entries(route)

@@ -66,7 +66,10 @@ export async function ocrAttachment(request,env,p,id){
    usage:{input_tokens:existing.input_tokens,output_tokens:existing.output_tokens,
     neurons_estimated:existing.neurons_estimated,source:'cached_estimate'},
    warning:'已复用私有 OCR 候选；没有再次请求 AI 或原图。请对照原件确认。'});
- if(existing?.state==='empty')return failure('OCR_EMPTY_CACHED',badReply,422);
+ const cooledEmpty=existing?.state==='empty'&&stalePending(existing.updated_at);
+ if(existing?.state==='empty'&&(!cooledEmpty||options.retry_empty!==true))
+   return failure('OCR_EMPTY_CACHED',
+     cooledEmpty?'上次空结果已过24小时冷却期；再次调用前需明确选择重试并承担预算。':badReply+' 空结果未满24小时不再调用模型。',422);
  const isStale=existing?.state==='pending'&&stalePending(existing.updated_at);
  if(existing?.state==='pending'&&!isStale)
    return failure('OCR_IN_PROGRESS','该文件已有识别任务处理中；未发送重复请求',409);
@@ -103,8 +106,9 @@ export async function ocrAttachment(request,env,p,id){
    const claimed=existing?
     await dbRun(env.DB,`UPDATE ocr_attempts SET state='pending',candidate_text_ja=NULL,
       attempt_count=attempt_count+1,updated_at=? WHERE id=? AND updated_at=?
-      AND (state='failed' OR (state='pending' AND ?=1))`,
-      now,existing.id,existing.updated_at,isStale&&options.retry_stale===true?1:0):
+      AND (state='failed' OR (state='pending' AND ?=1) OR (state='empty' AND ?=1))`,
+      now,existing.id,existing.updated_at,isStale&&options.retry_stale===true?1:0,
+      cooledEmpty&&options.retry_empty===true?1:0):
     await dbRun(env.DB,`INSERT OR IGNORE INTO ocr_attempts
       (id,owner_id,object_id,model_id,prompt_version,state,created_at,updated_at)
       VALUES(?,?,?,?,?,'pending',?,?)`,randomToken(16),p.user_id,row.object_id,OCR_MODEL,OCR_PROMPT_VERSION,now,now);

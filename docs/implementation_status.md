@@ -128,3 +128,9 @@
 - 新增 GET /api/auth/sessions、POST /api/auth/sessions/revoke、POST /api/auth/sessions/revoke-others，所有授权来自服务端当前会话，二次写入必须通过 CSRF。单页五条，不返回哈希或 Cookie；不得查询/撤销其他家庭成员。
 - 设置页新增移动端会话管理 Bottom Sheet；当前设备使用原有退出操作，其他登录可单独或一键撤销。不采集设备指纹和精确位置。
 - 增加实际 Worker/SQLite Mock 回归：跨账号撤销拒绝、失效 Cookie、CSRF 与密码会话并行。OpenAPI 同步新增路由，未经部署不代表真机验收。
+
+## 2026-11-11 实验 OCR 空结果受控重试（新增，待 CI）
+
+- 当前 Moondream 官方 Schema 验证 input 为 task=query/image=base64 data URI/question，输出为 answer+metrics。代码格式符合 Schema，但真实日本文书空结果根因尚未验证，不编造准确率。
+- 同源原图空结果先缓存避免重复费用，至少24小时后才允许本人在前端明确勾选一次重试，并再次消费受个人及全应用 UTC 预算保护的额度；失败可后续人工录入。
+- 新增 UI 选择、OpenAPI 属性和端到端 Mock 回归。真实推理未执行，生产开关仍关闭。

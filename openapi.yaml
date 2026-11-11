@@ -826,6 +826,10 @@ paths:
                   type: boolean
                   default: false
                   description: 仅当 OCR pending 超过 24 小时，经过用户再次确认才能重试
+                retry_empty:
+                  type: boolean
+                  default: false
+                  description: 仅在 OCR 空结果超过 24 小时且用户明确确认时允许重试
               required:
               - confirm
               - attachment_id

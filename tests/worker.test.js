@@ -1122,3 +1122,39 @@ test('session management only lists and revokes the authenticated account',async
   assert.equal((await req(env,'/api/me',auth(a))).response.status,200);
   assert.equal((await req(env,'/api/me',auth(member))).response.status,200);
 });
+
+
+test('empty OCR requires 24h cooling and explicit budgeted retry',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  env.ENABLE_EXPERIMENTAL_OCR='true';
+  env.OCR_CALLS_PER_USER_DAY='3';env.OCR_APP_UTC_DAILY_LIMIT='3';
+  const f=new FormData();
+  f.append('file',new File([new Uint8Array([255,216,255,224,19,22,23,24])],'sample.jpg',{type:'image/jpeg'}));
+  f.append('retention','original');
+  const saved=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:f});
+  assert.equal(saved.response.status,201,JSON.stringify(saved.data));
+  const id=saved.data.document_id;
+  const aid=(await req(env,'/api/documents/'+id,auth(owner))).data.document.attachments[0].id;
+  let calls=0;
+  env.AI={async run(){calls++;return calls===1?{result:{}}:{answer:'請求金額 200円',metrics:{input_tokens:40,output_tokens:15}};}};
+  const trigger=async options=>req(env,'/api/documents/'+id+'/ocr',{
+    method:'POST',...auth(owner),data:{confirm:true,attachment_id:aid,...options}
+  });
+  const empty=await trigger({});
+  assert.equal(empty.response.status,422,JSON.stringify(empty.data));
+  assert.equal(empty.data.code,'OCR_EMPTY');
+  const immediate=await trigger({retry_empty:true});
+  assert.equal(immediate.data.code,'OCR_EMPTY_CACHED');assert.equal(calls,1);
+  env.DB.sql.prepare("UPDATE ocr_attempts SET updated_at='2026-01-01T00:00:00.000Z'").run();
+  const noConsent=await trigger({});
+  assert.equal(noConsent.data.code,'OCR_EMPTY_CACHED');assert.equal(calls,1);
+  const retried=await trigger({retry_empty:true});
+  assert.equal(retried.response.status,200,JSON.stringify(retried.data));
+  assert.equal(retried.data.verified,false);
+  assert.equal(retried.data.text,'請求金額 200円');
+  assert.equal(calls,2);
+  assert.equal(env.DB.sql.prepare('SELECT attempt_count n FROM ocr_attempts').get().n,2);
+  assert.equal(env.DB.sql.prepare('SELECT calls FROM ocr_app_utc_daily').get().calls,2);
+  const reuse=await trigger({});
+  assert.equal(reuse.response.status,200);assert.equal(reuse.data.cached,true);assert.equal(calls,2);
+});
