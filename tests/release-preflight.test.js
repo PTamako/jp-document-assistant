@@ -46,3 +46,15 @@ test('private auth/API responses have strict session cookies, CSRF, no-store, an
  assert.doesNotMatch(worker,/\\.list\(/);
  assert.doesNotMatch(worker,/env\.DOCUMENTS\.createSignedUrl/);
 });
+
+test('Cloudflare PBKDF2 is within supported 100k iteration bound and frontend guides initialization',()=>{
+ const security=read('worker/security.js');
+ assert.match(security,/const ITERATIONS = 100000;/);
+ assert.doesNotMatch(security,/const ITERATIONS = 150000;/);
+ const ui=read('web/src/App.vue');
+ assert.match(ui,/refreshInitStatus/);
+ assert.match(ui,/\/api\/auth\/status/);
+ assert.match(ui,/if\(!initialized\.value\)authMode\.value='bootstrap'/);
+ const backend=read('worker/index.js');
+ assert.match(backend,/path==='\/api\/auth\/status'/);
+});

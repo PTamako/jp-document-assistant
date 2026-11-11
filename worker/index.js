@@ -462,6 +462,11 @@ async function route(request,env){
   const calendarToken=method==='GET'?path.match(/^\/api\/calendar\/([a-f0-9]{64})\.ics$/):null;
   if(calendarToken)return serveCalendar(request,env,calendarToken[1]);
   if(method==='GET'&&path==='/api/health')return json({ok:true,service:'document-assistant',ai_ocr:'disabled',version:'0.1.0'});
+  if(method==='GET'&&path==='/api/auth/status'){
+    requireBinding(env,'DB');
+    const state=await dbFirst(env.DB,'SELECT COUNT(*) count FROM households');
+    return json({ok:true,initialized:Number(state?.count||0)>0});
+  }
   if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);

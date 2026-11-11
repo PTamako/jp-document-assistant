@@ -9,6 +9,7 @@ import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
+const initialized=ref(null);
 const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
 const passwordDraft=reactive({current_password:'',new_password:'',confirm_password:''});
 const calendarLink=ref(''),calendarStatusInfo=ref(null),calendarShowTitle=ref(false);
@@ -132,6 +133,13 @@ async function boot(){
     if(user.value?.id&&user.value.id!==d.user.id)clearPrivateWorkspace();
     user.value=d.user;csrf.value=d.csrf_token;await selectTab('today');
   }catch{clearPrivateWorkspace();}
+}
+async function refreshInitStatus(){
+  try{
+    const result=await api('/api/auth/status');
+    initialized.value=result.initialized===true;
+    if(!initialized.value)authMode.value='bootstrap';
+  }catch{initialized.value=null;}
 }
 async function submitAuth(){
   clearGmailSession(); // Prevent a subsequent App account from inheriting prior Gmail OAuth state.
@@ -470,7 +478,7 @@ async function changeShare(){
 const dueState=(v)=>{if(!v)return '待确认';const today=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});return v<today?'已逾期':v===today?'今天到期':'近期';};
 const labelFor=(key)=>fieldLabel[key]||key;
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
-onMounted(boot);
+onMounted(async()=>{await boot();if(!user.value)await refreshInitStatus();});
 onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
 </script>
 
@@ -484,6 +492,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       <p class="muted auth-intro">看懂日文通知，确认重要日期。两人家庭，默认私人保存。</p>
       <div class="auth-panel">
         <div class="segments"><button v-for="m in [{id:'login',name:'登录'},{id:'bootstrap',name:'首次设置'},{id:'join',name:'接受邀请'}]" :key="m.id" :class="{selected:authMode===m.id}" @click="authMode=m.id;error=''">{{m.name}}</button></div>
+        <p v-if="initialized===false" class="fine-print">家庭尚未初始化。请使用「首次设置」，输入 Cloudflare 中完整的初始化令牌。设置完成后再使用「登录」。</p>
         <form @submit.prevent="submitAuth" class="stack">
           <label>邮箱<input v-model.trim="auth.email" type="email" required autocomplete="username" placeholder="you@example.com" /></label>
           <label>密码（至少 12 位）<input v-model="auth.password" type="password" required minlength="12" autocomplete="current-password" placeholder="个人独立密码" /></label>

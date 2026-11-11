@@ -21,7 +21,9 @@ export async function hmacHex(secret, text) {
   const digest = await crypto.subtle.sign('HMAC', key, encoder.encode(text));
   return Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('');
 }
-const ITERATIONS = 150000;
+// Cloudflare Workers WebCrypto rejects PBKDF2 iterations greater than 100000.
+// D1 password_credentials enforces >=100000, so use this exact supported bound.
+const ITERATIONS = 100000;
 export function validatePassword(password) {
   return typeof password === 'string' && password.length >= 12 && password.length <= 128;
 }
