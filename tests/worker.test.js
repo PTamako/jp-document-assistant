@@ -918,3 +918,34 @@ test('direct reanalysis cannot destroy remote attempts or regenerate idempotency
  assert.equal(preserved.id,linkId);
  assert.equal(preserved.attempt_count,1);
 });
+
+
+test('private Japanese sentences cannot be sent to vocabulary-only study bridge or misleadingly marked ready',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+  retention:'summary',source_type:'text',text:'ご請求金額：1200円\n納付期限：令和8年11月30日（月)'
+ }});
+ const docId=imported.data.document_id;
+ const now=new Date().toISOString(),candidateId='sentences000000000000000000000000';
+ env.DB.sql.prepare(`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
+   VALUES(?,?,?,?,?,?)`).run(candidateId,docId,'sentence',
+   JSON.stringify({sentence:'期限までに支払います。',translation_zh:'在期限之前付款'}),now,now);
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{zhixue:'single-study-owner'}});
+ env.ZHIXUE_BRIDGE_SECRET='signed-study-secret-long-enough-to-test';
+ let networkRequests=0;
+ env.ZHIXUE_BRIDGE_SERVICE={async fetch(){networkRequests++;return Response.json({ok:true,remote_id:'incorrect'})}};
+ const preview=await req(env,`/api/candidates/${candidateId}/preview`,auth(owner));
+ assert.equal(preview.response.status,200,JSON.stringify(preview.data));
+ assert.equal(preview.data.available,false);
+ assert.match(preview.data.note,/私人句卡/);
+ const commit=await req(env,`/api/candidates/${candidateId}/commit`,{
+   method:'POST',...auth(owner),data:{confirm:'CONFIRM_STUDY',privacy_confirmed:true,
+     redacted_sentence:'期限までに支払います。'},
+   extraHeaders:{'Idempotency-Key':'explicit-sentence-request'}
+ });
+ assert.equal(commit.response.status,503,JSON.stringify(commit.data));
+ assert.equal(commit.data.code,'STUDY_SENTENCE_NOT_READY');
+ assert.equal(networkRequests,0);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+});

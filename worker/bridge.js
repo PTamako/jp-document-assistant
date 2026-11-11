@@ -72,12 +72,21 @@ export async function candidatePreview(request,env,p,id){
   const target=TARGETS[item.candidate_kind];
   const fields=await checkedFields(env,item.document_id);
   const link=await first(env.DB,'SELECT state,remote_id,attempt_count,last_error_code FROM integration_links WHERE candidate_id=?',id);
-  return json({candidate_id:id,target,kind:item.candidate_kind,payload:JSON.parse(item.payload_json),confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],integration:link||null,available:!!config(env,target),account_mapping_ready:!!authorizedMapping(env,p.user_id,target),note:'请对照原文和目标 App 账号确认。任何金额都不会因识别成功而自动记账。'});
+  const sentenceUnsupported=item.candidate_kind==='sentence';
+  return json({candidate_id:id,target,kind:item.candidate_kind,payload:JSON.parse(item.payload_json),
+    confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
+    integration:link||null,available:!sentenceUnsupported&&!!config(env,target),
+    account_mapping_ready:!!authorizedMapping(env,p.user_id,target),
+    note:sentenceUnsupported?
+      '知学现有安全桥接仅支持生词；私人句卡的双人账户模型未完成，禁止发送私人句子。请人工复制脱敏句子，正式联动待安全审查。':
+      '请对照原文和目标 App 账号确认。任何金额都不会因识别成功而自动记账。'});
 }
 export async function commitCandidate(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
   const target=TARGETS[item.candidate_kind];
+  if(item.candidate_kind==='sentence')
+    return failure('STUDY_SENTENCE_NOT_READY','知学目前没有满足双人私密句卡要求的独立授权接收端；未发送任何私人句子',503);
   const data=await readJson(request,9000);
   if(data.confirm!==CONFIRMATIONS[item.candidate_kind])bad('需要明确二次确认','CONFIRM_REQUIRED',409);
   const supplied=request.headers.get('Idempotency-Key');
