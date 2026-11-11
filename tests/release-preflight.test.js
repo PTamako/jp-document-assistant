@@ -8,7 +8,7 @@ const ci=read('.github/workflows/ci.yml');
 const worker=read('worker/index.js');
 const security=read('worker/security.js');
 
-test('preapproval Wrangler uses one private D1/R2 binding and no previews, cron, extra billable services',()=>{
+test('approved production Wrangler only targets dedicated D1/R2 and excludes all previews, cron and extra services',()=>{
  assert.equal(wrangler.name,'jp-document-assistant');
  assert.equal(wrangler.main,'worker/index.js');
  assert.equal(wrangler.assets?.directory,'./dist');
@@ -16,11 +16,12 @@ test('preapproval Wrangler uses one private D1/R2 binding and no previews, cron,
  assert.equal(wrangler.d1_databases?.length,1);
  assert.equal(wrangler.d1_databases[0].binding,'DB');
  assert.equal(wrangler.d1_databases[0].database_name,'jp-document-assistant');
- assert.match(wrangler.d1_databases[0].database_id,/^REPLACE_WITH_/);
+ assert.equal(wrangler.d1_databases[0].database_id,'22a671c0-3f6c-4707-adf1-b24ac95330c6');
  assert.equal(wrangler.r2_buckets?.length,1);
  assert.equal(wrangler.r2_buckets[0].binding,'DOCUMENTS');
- assert.match(wrangler.r2_buckets[0].bucket_name,/^REPLACE_WITH_/);
- assert.equal(wrangler.workers_dev,false);
+ assert.equal(wrangler.r2_buckets[0].bucket_name,'jp-document-assistant-private');
+ assert.equal(wrangler.vars?.R2_BUCKET_NAME,'jp-document-assistant-private');
+ assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.
  assert.equal(wrangler.preview_urls,false);
  assert.equal(wrangler.observability?.enabled,false);
  for(const unwanted of ['kv_namespaces','queues','durable_objects','triggers','dispatch_namespaces','unsafe','containers','workflows','routes','route'])

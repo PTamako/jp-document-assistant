@@ -1,15 +1,16 @@
 {
-  // Production only. Replace database_id with your newly created production D1 id.
-  // NEVER run `wrangler deploy` until backups, resource IDs and auth secrets are reviewed.
+  // Approved 2026-11-12 for ONE live production Worker and ONE dedicated D1/R2.
+  // Future Wrangler deployments use native Static Assets; first API upload temporarily embedded static assets.
+  // Never run a deploy from GitHub Actions or add Preview Workers/DB/R2.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "jp-document-assistant",
   "main": "worker/index.js",
   "compatibility_date": "2026-11-11",
   "assets": {"directory":"./dist", "binding":"ASSETS", "not_found_handling":"single-page-application"},
-  "d1_databases": [{"binding":"DB", "database_name":"jp-document-assistant", "database_id":"REPLACE_WITH_EXISTING_OR_NEW_PRODUCTION_D1_ID", "migrations_dir":"migrations"}],
-  "r2_buckets": [{"binding":"DOCUMENTS", "bucket_name":"REPLACE_WITH_PRIVATE_PRODUCTION_R2_BUCKET"}],
-  "vars": {"R2_BUCKET_NAME":"REPLACE_WITH_PRIVATE_PRODUCTION_R2_BUCKET"},
-  "workers_dev": false,
+  "d1_databases": [{"binding":"DB", "database_name":"jp-document-assistant", "database_id":"22a671c0-3f6c-4707-adf1-b24ac95330c6", "migrations_dir":"migrations"}],
+  "r2_buckets": [{"binding":"DOCUMENTS", "bucket_name":"jp-document-assistant-private"}],
+  "vars": {"R2_BUCKET_NAME":"jp-document-assistant-private"},
+  "workers_dev": true,
   "preview_urls": false,
   "observability": {"enabled":false}
 }

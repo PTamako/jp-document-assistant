@@ -1,3 +1,17 @@
+## 已执行的受限 Cloudflare 正式资源验收（2026-11-12 JST）
+
+**最新状态：受限 core-only 测试版已在 Cloudflare 正式 Worker 上部署；完整 v0.11 仍 NO-GO。** 上文所列“未创建/未部署/等待审批”属于截至 2026-11-11 的历史审查状态，不能再用来描述当前真实云资源。
+
+- 用户明确批准范围：1 Worker、1 D1、1 独立私有 R2 Standard Bucket，启用且仅启用单个 Worker 的正式 workers.dev 子域名；合成数据功能验收，不合并目标三 App PR、不启用真实 OCR/Google/Gmail/跨 App 写入。
+- **正式 Worker：** `jp-document-assistant`，账号 workers.dev 域名 `https://jp-document-assistant.yupan6706.workers.dev/`；生产部署版本 `d53998d4-75d7-4d0d-a59e-42ce7ecc9252`，API 直接上传（未使用 GitHub CI 的生产密钥）。Preview URLs 禁用。
+- **专用 D1：** `jp-document-assistant` (`22a671c0-3f6c-4707-adf1-b24ac95330c6`)，仅此空库执行 `0001～0010` 10 份迁移并记录于 `d1_migrations`。验收时 0 用户、0 文书、0 会话。
+- **独立私有 R2：** `jp-document-assistant-private`，Standard，APAC；r2.dev managed public domain disabled，自定义 R2 域名空列表。合成文本对象实际 PUT/GET 精确比对/DELETE 成功，测试对象已删除。
+- **公网实际访问：** [Actions #43050837126](https://github.com/PTamako/jp-document-assistant/actions/runs/43050837126) 对真实公网执行 GET：`/api/health` HTTP 200 + `ai_ocr:disabled`，首页 HTTP 200，已编译 Vue JS HTTP 200；代码测试 88/88 Node + 11/11 SQLite/API + Vue build。
+- **临时交付差异：** Cloudflare 连接无法用上传会话 JWT 完成原生 Workers Static Assets 上传，所以将本次 Vite 打包的八个公开前端静态文件嵌入同一个 Worker 模块直接返回。无新增资源/原件外泄；但静态请求也会计入 Workers Free 的 100,000 日请求额度。仓库 `wrangler.jsonc` 保留正式配置 + 原生 `assets` 声明，后续人工使用 Wrangler 可切换回零额外 Workers 请求的原生静态托管；目前**实际部署不是原生 Workers Static Assets**。
+- **首次账号初始化待用户操作：** Worker 已配置高熵 `SESSION_HMAC_KEY` 和 `BOOTSTRAP_ADMIN_TOKEN`，但后者是部署时自动生成、未向用户交付的 secret。为避免在 GitHub/对话泄露，用户需要在 Cloudflare Dashboard 的这个 Worker → Settings → Variables and Secrets 中**覆盖** `BOOTSTRAP_ADMIN_TOKEN` 为仅本人知道的独立随机值，再在网页版首次初始化其正式个人邮箱/12 位以上密码。此时不能声称双人真实登录已通过；初始化之后应移除/失效 Bootstrap Secret。
+- **未覆盖的线上验收：** 用户私有/共享、登录/CSRF/注销、备份恢复的真实双人设备与 D1/R2 端到端，还需实际用户初始化或经另行保护的合成环境完成。Google OAuth/邮件、知学双人句卡、三个业务 PR 均未启用。
+- **费用**：Cloudflare Billing Usage/Profile 均 403，真实费用、R2 A/B 次数与剩余量仍未知；正式资源创建与极少量测试操作已发生，并不保证 0 费用。
+
 # 日本生活文书助手 v0.11 — 上线准备与人工批准清单
 
 更新：2026-11-11。**不是上线完成声明。** 开发仓库当前只有 Draft PR；该文档不会自动执行云资源变更。
