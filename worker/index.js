@@ -274,10 +274,19 @@ async function updateField(request,env,p,fieldId){
     if(field.value_type==='money'&&!/^[1-9]\d{0,11}$/.test(normalized))bad('金额必须是正整数日元');
     if(field.value_type==='date'&&!validCivilDate(normalized))bad('请输入真实存在的日期');
   }
+  let remoteLinks=[];
+  if(normalized!==String(field.normalized_value??'') && fieldsOf.includes(field.field_key)){
+    const target=field.field_key==='due_date'?'homeflow':'kakebo';
+    remoteLinks=await dbAll(env.DB,`SELECT l.remote_id,l.target FROM integration_links l
+      JOIN action_candidates c ON c.id=l.candidate_id
+      WHERE c.document_id=? AND l.target=? AND l.state IN ('synced','linked_existing')`,field.document_id,target);
+    if(remoteLinks.length && data.confirm_remote_unchanged!==true)
+      bad('该字段已联动至其他 App；修改这里不会自动改动远端记录。请确认后再保存，并到目标 App 核对。','REMOTE_RECORD_UNCHANGED',409);
+  }
   const now=isoNow();
   await dbRun(env.DB,'UPDATE document_fields SET normalized_value=?,review_state=?,reviewed_by=?,updated_at=? WHERE id=?',normalized,data.review_state,p.user_id,now,fieldId);
   await dbRun(env.DB,'UPDATE documents SET updated_at=?,version=version+1 WHERE id=?',now,field.document_id);
-  return json({ok:true});
+  return json({ok:true,linked_records_unchanged:remoteLinks.length>0,linked_targets:[...new Set(remoteLinks.map(x=>x.target))]});
 }
 async function candidatesForDoc(env,p,id){
   const doc=await visibleDocument(env.DB,id,p);

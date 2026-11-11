@@ -210,6 +210,13 @@ test('signed ledger integration requires reviewed fields, uses fixed key and saf
   assert.equal(again.data.already_synced,true);
   assert.equal(callCount,2);
   assert.equal(targetWrites.size,1);
+  const change=await req(env,`/api/fields/${money.id}`,{method:'PATCH',...auth(user),data:{review_state:'corrected',normalized_value:'1300'}});
+  assert.equal(change.response.status,409);
+  assert.equal(change.data.code,'REMOTE_RECORD_UNCHANGED');
+  const confirmedChange=await req(env,`/api/fields/${money.id}`,{method:'PATCH',...auth(user),data:{review_state:'corrected',normalized_value:'1300',confirm_remote_unchanged:true}});
+  assert.equal(confirmedChange.response.status,200);
+  assert.equal(confirmedChange.data.linked_records_unchanged,true);
+  assert.equal(callCount,2); // Never automatically re-post the updated amount.
 });
 
 
