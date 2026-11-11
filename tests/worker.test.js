@@ -13,7 +13,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -204,6 +204,12 @@ test('signed ledger integration requires reviewed fields, uses fixed key and saf
   });
   assert.equal(blockedReset.response.status,409);
   assert.equal(blockedReset.data.code,'INTEGRATION_HISTORY_LOCKED');
+  const changed=await req(env,`/api/candidates/${candidate.id}/commit`,{...options,
+    data:{...body,date:'2026-11-13'}});
+  assert.equal(changed.response.status,409,JSON.stringify(changed.data));
+  assert.equal(changed.data.code,'RETRY_PAYLOAD_CHANGED');
+  assert.equal(callCount,1);
+  assert.equal(env.DB.sql.prepare('SELECT length(request_fingerprint) n FROM integration_links').get().n,64);
   const retry=await req(env,`/api/candidates/${candidate.id}/commit`,options);
   assert.equal(retry.response.status,200,JSON.stringify(retry.data));
   assert.equal(retry.data.remote_id,'entry-001');
@@ -747,4 +753,45 @@ test('password change checks old password, revokes own sessions and preserves ho
  const fresh=await req(env,'/api/auth/login',{method:'POST',
    data:{email:'a@example.com',password:'new-secure-password-6789'}});
  assert.equal(fresh.response.status,200,JSON.stringify(fresh.data));
+});
+
+
+test('atomic cross-app sender lock blocks double-click while first target request is in flight',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+  retention:'summary',source_type:'text',text:'ご請求金額：1,200円\n納付期限：令和8年11月30日（月)'
+ }});
+ const id=imported.data.document_id;
+ const doc=(await req(env,`/api/documents/${id}`,auth(owner))).data.document;
+ const amt=doc.fields.find(x=>x.field_key==='amount_jpy');
+ assert.ok(amt);
+ assert.equal((await req(env,`/api/fields/${amt.id}`,{method:'PATCH',...auth(owner),
+   data:{review_state:'confirmed',normalized_value:'1200'}})).response.status,200);
+ const candidate=(await req(env,`/api/documents/${id}/candidates`,auth(owner))).data.items.find(x=>x.candidate_kind==='finance');
+ assert.ok(candidate);
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'mapped-ledger-user'}});
+ env.KAKEBO_BRIDGE_SECRET='concurrency-secret-with-enough-entropy-abc';
+ let signal,release,calls=0;
+ const started=new Promise(resolve=>signal=resolve);
+ const gate=new Promise(resolve=>release=resolve);
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(){
+  calls++;signal();await gate;return Response.json({ok:true,remote_id:'entry-999'});
+ }};
+ const url=`/api/candidates/${candidate.id}/commit`;
+ const args={method:'POST',...auth(owner),data:{confirm:'CONFIRM_ACCOUNTING',
+   payment_confirmed:true,date:'2026-11-12',category:'税金',payment_source:'現金'},
+   extraHeaders:{'Idempotency-Key':'confirm-ledger-001'}};
+ const first=req(env,url,args);
+ await started;
+ const simultaneous=await req(env,url,args);
+ assert.equal(simultaneous.response.status,409);
+ assert.equal(simultaneous.data.code,'SENDING');
+ assert.equal(calls,1);
+ release();
+ assert.equal((await first).response.status,200);
+ const repeat=await req(env,url,args);
+ assert.equal(repeat.data.already_synced,true);
+ assert.equal(calls,1);
+ assert.equal(env.DB.sql.prepare('SELECT attempt_count n FROM integration_links').get().n,1);
 });

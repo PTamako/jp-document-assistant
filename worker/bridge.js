@@ -93,13 +93,34 @@ export async function commitCandidate(request,env,p,id){
   const remoteUser=authorizedMapping(env,p.user_id,target);
   if(!remoteUser)return failure('ACCOUNT_NOT_LINKED','尚未完成目标账号的独立授权和身份映射；没有发送联动',403);
   const key=existing?.idempotency_key||`jda:${target}:${id}`;
-  if(existing?.state==='sending' && Date.now()-Date.parse(existing.updated_at)<60000)return failure('SENDING','联动请求尚在处理；请一分钟后使用同一请求重试',409);
-  const now=isoNow();
-  if(!existing)await run(env.DB,`INSERT OR IGNORE INTO integration_links(id,candidate_id,target,idempotency_key,state,updated_at) VALUES(?,?,?,?,?,?)`,randomToken(16),id,target,key,'pending',now);
-  const updated=await run(env.DB,`UPDATE integration_links SET state='sending',updated_at=?,attempt_count=attempt_count+1 WHERE candidate_id=? AND target=? AND state IN ('pending','failed','sending')`,now,id,target);
-  if(updated.meta?.changes!==1)return failure('LINK_CONFLICT','联动状态发生变化，请刷新后重试',409);
   const requestPayload={source:'jp-document-assistant',source_document_id:item.document_id,source_candidate_id:id,actor_user_id:remoteUser,idempotency_key:key,payload};
-  const raw=JSON.stringify(requestPayload),timestamp=String(Date.now());
+  const raw=JSON.stringify(requestPayload),fingerprint=await hashString(raw),timestamp=String(Date.now());
+  // Never retry an uncertain remote write with a different date, amount or remote user.
+  if(existing?.request_fingerprint&&existing.request_fingerprint!==fingerprint)
+    return failure('RETRY_PAYLOAD_CHANGED','首次发送内容或账号已变化，请先核对目标 App，不允许复用此幂等键发送其他内容',409);
+  if(existing&&!existing.request_fingerprint&&existing.attempt_count>0)
+    return failure('LEGACY_RETRY_UNVERIFIED','旧联动缺少请求指纹，需人工核对目标 App 后再处理',409);
+  const staleBefore=new Date(Date.now()-120000).toISOString();
+  if(existing?.state==='sending'&&existing.updated_at>staleBefore)
+    return failure('SENDING','同一候选的联动正在处理中，没有发送第二份请求',409);
+  const now=isoNow();
+  if(!existing)await run(env.DB,`INSERT OR IGNORE INTO integration_links
+    (id,candidate_id,target,idempotency_key,state,request_fingerprint,updated_at)
+    VALUES(?,?,?,?,?,?,?)`,randomToken(16),id,target,key,'pending',fingerprint,now);
+  // Atomic D1 CAS: exactly one sender claims pending/failed, or a truly stale sending state.
+  const updated=await run(env.DB,`UPDATE integration_links SET state='sending',updated_at=?,
+    attempt_count=attempt_count+1,request_fingerprint=COALESCE(request_fingerprint,?)
+    WHERE candidate_id=? AND target=? AND (request_fingerprint=? OR request_fingerprint IS NULL)
+      AND (state IN ('pending','failed') OR (state='sending' AND updated_at<=?))`,
+    now,fingerprint,id,target,fingerprint,staleBefore);
+  if(updated.meta?.changes!==1){
+    const latest=await first(env.DB,'SELECT state,remote_id,request_fingerprint FROM integration_links WHERE candidate_id=? AND target=?',id,target);
+    if(latest?.request_fingerprint&&latest.request_fingerprint!==fingerprint)
+      return failure('RETRY_PAYLOAD_CHANGED','另一请求已经锁定不同内容；没有重复发送',409);
+    if(latest?.state==='synced'||latest?.state==='linked_existing')
+      return json({ok:true,already_synced:true,remote_id:latest.remote_id,target});
+    return failure('SENDING','联动已有其他发送者正在处理，未重复发送',409);
+  }
   const signature=await hmacHex(dest.secret,`${timestamp}\n${raw}`);
   let answer;
   try{
@@ -108,9 +129,13 @@ export async function commitCandidate(request,env,p,id){
     if(!response.ok||!answer?.ok||typeof answer.remote_id!=='string'||!answer.remote_id)throw new Error('BRIDGE_RESPONSE_FAILED');
   }catch{
     // The target may have committed while the reply was lost; always retry with the SAME key.
-    await run(env.DB,"UPDATE integration_links SET state='failed',last_error_code='BRIDGE_UNCONFIRMED',updated_at=? WHERE candidate_id=? AND target=?",isoNow(),id,target);
+    await run(env.DB,`UPDATE integration_links SET state='failed',last_error_code='BRIDGE_UNCONFIRMED',updated_at=?
+      WHERE candidate_id=? AND target=? AND state='sending' AND updated_at=? AND request_fingerprint=?`,isoNow(),id,target,now,fingerprint);
     return failure('BRIDGE_UNCONFIRMED','目标应用可能已收到请求但尚未确认结果。请重试同一候选（不会换幂等键）',503);
   }
-  await run(env.DB,"UPDATE integration_links SET state='synced',remote_id=?,synced_at=?,last_error_code=NULL,updated_at=? WHERE candidate_id=? AND target=?",answer.remote_id,isoNow(),isoNow(),id,target);
+  const completed=await run(env.DB,`UPDATE integration_links SET state='synced',remote_id=?,synced_at=?,last_error_code=NULL,updated_at=?
+    WHERE candidate_id=? AND target=? AND state='sending' AND updated_at=? AND request_fingerprint=?`,
+    answer.remote_id,isoNow(),isoNow(),id,target,now,fingerprint);
+  if(completed.meta?.changes!==1)return failure('LINK_CONFLICT','发送状态已被其他请求更新，请刷新后核对目标记录',409);
   return json({ok:true,target,remote_id:answer.remote_id,reused:!!answer.reused});
 }
