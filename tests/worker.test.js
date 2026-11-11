@@ -617,3 +617,35 @@ test('wrong-owner OCR access cannot read R2 or model and empty quota never fetch
  assert.equal(budget.data.code,'OCR_BUDGET_DISABLED');
  assert.equal(reads,0);assert.equal(calls,0);
 });
+
+
+test('verified DOCX, XLSX and PPTX originals restore to D1/R2 only once per SHA',async()=>{
+ const {fileOf}=await import('./helpers/office-fixture.js');
+ const env=makeEnv(),owner=await boot(env);
+ const doc=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+   source_type:'text',retention:'summary',title:'演示文稿备份恢复测试',text:'納付期限：2026年11月30日\n金額：1200円'
+ }});
+ assert.equal(doc.response.status,201);
+ const id=doc.data.document_id;
+ const files=[
+  await fileOf('report.docx',[['word/document.xml','<w:document><w:p><w:t>日本語説明書</w:t></w:p></w:document>']],true),
+  await fileOf('report.xlsx',[['xl/workbook.xml','<workbook/>'],['xl/worksheets/sheet1.xml','<worksheet><c r="A1" t="inlineStr"><is><t>納付期限</t></is></c></worksheet>']],true),
+  await fileOf('report.pptx',[['ppt/presentation.xml','<p:presentation/>'],['ppt/slides/slide1.xml','<p:sld><p:sp><a:t>対象外の条件</a:t></p:sp></p:sld>']],true)
+ ];
+ for(const file of files){
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  const sha=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');
+  const form=()=>{const f=new FormData();f.append('file',file);f.append('sha256',sha);f.append('label',file.name);return f;};
+  const first=await req(env,`/api/documents/${id}/attachments/restore-upload`,
+    {method:'POST',...auth(owner),form:form()});
+  assert.equal(first.response.status,201,JSON.stringify(first.data));
+  const count=env._blobs.size;
+  const replay=await req(env,`/api/documents/${id}/attachments/restore-upload`,
+    {method:'POST',...auth(owner),form:form()});
+  assert.equal(replay.response.status,200,JSON.stringify(replay.data));
+  assert.equal(replay.data.already_restored,true);
+  assert.equal(env._blobs.size,count);
+ }
+ assert.equal(env._blobs.size,3);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM attachments').get().n,3);
+});
