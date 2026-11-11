@@ -16,6 +16,14 @@
 - 新增按需 Gmail 用户发起 OAuth/只读逐封查看（非 historyId 自动增量）、跨账号 OAuth 清除、加密备份篡改回归。Google Scope 审核及真机尚未完成。参见 docs/gmail_oauth_setup.md。
 - 设计契约当前 53 路径 / 54 操作；OpenAPI 严格 YAML 与 Python/Node 契约测试通过。知学双人私密句卡与独立身份尚未完成，Gmail 最小权限 OAuth 与实际日语 OCR 质量仍未验收；这些不是生产审批之外可忽略的事项。
 
+## 1B. 部署前安全审查与访问入口（2026-11-11）
+
+- 已完成静态代码、Mock 与 CI 级别的部署前安全审查，详细结论、隔离风险、分级和一次性审批范围见 `docs/predeployment_security_audit.md`。
+- 最新经验证的安全代码 `0d7bbf01a94451618b6dd11b96b2fd46e168fa91`，CI 88/88 Node、11/11 SQLite/API、Vue Build 通过；本次仅文档更新也需要 CI 验证。
+- 当前 Cloudflare Zones 与 Workers Custom Domains 均为空，Workers 子域名已配置但 `wrangler.jsonc` 明确 `workers_dev:false`。若用户只批准创建/部署而不授权正式 workers.dev 路由或自有域名，Worker 将没有实际可用的 iPhone URL。建议审批中单独注明对这一个**正式 Worker**启用 workers.dev，保持零 Preview 资源；首次部署后核验实际 HTTPS URL。
+- 为最大化两个用户敏感原件的跨 App 安全隔离，建议**新建一个文书助手专用的私有 R2 Standard Bucket**而不复用 HomeFlow/家計簿的现有 Bucket。R2 官方前 100,000 Bucket 包含在定价中，但 GB-month/A/B 仍按账号共享、费用和当前余额因 Billing Read=403 未知。
+- 完整 v0.11 正式上线 NO-GO；审批仅可涵盖关闭 OCR/AI、Gmail/OAuth、三个 App 联动的 core-only 受限首次云端验收，不能称为全功能正式上线。
+
 ## 2. Cloudflare 账号只读盘点（截至 2026-11-11）
 
 - 现有 Worker 六个：homeflow、homeflow-preview、it-study-platform、kakeibo-homeflow-bridge、kakeibo-nav-sync、milkssales-jp；无 jp-document-assistant Worker。

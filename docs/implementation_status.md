@@ -194,3 +194,11 @@
 
 - 新增 CI 回归 tests/release-preflight.test.js：在未审批阶段强制唯一 Worker/Static Assets、唯一 D1/R2 Binding、占位符不误当真实 ID、workers_dev 与 preview_urls 关闭、不存在 Cron/KV/Queues/DO/其他资源。
 - 校验 GitHub Actions 仅运行只读 CI，没有生产 Secrets、远端 D1 迁移、部署或自动 Preview；检查 Cookie Strict+HttpOnly、CSRF、私有 API no-store、无 R2 LIST 等静态边界。审批后如决定开通正式 workers.dev 域名，需同步改变审批模板和受控测试。
+
+## 部署前集中安全审查完成（2026-11-11；待本次文档 CI）
+
+- 代码基线 `0d7bbf01a94451618b6dd11b96b2fd46e168fa91` GitHub Actions [43045926313](https://github.com/PTamako/jp-document-assistant/actions/runs/43045926313) 成功：**88/88 Node、11/11 SQLite/API、Vue build**。后续此文档提交的 CI 另验。
+- 完整审批报告见 `docs/predeployment_security_audit.md`：区分静态代码/Mock 通过、Cloudflare 只读核验、真实云端和双 iPhone 未验。
+- 只读新发现：Cloudflare Zones 与 Workers Custom Domains 均为空，现有 `wrangler.jsonc` 禁用 workers.dev，故没有现成可访问正式域名。受限首次验收部署需用户明确批准 Worker 使用唯一 workers.dev 正式域名，并保持 preview_urls:false。
+- 为强隔离，建议在审批后**新建一个独立私有 R2 Bucket**，不与既有 HomeFlow/家計簿 Worker 共桶；R2 Bucket 数量目前在官方包含量内，但全账号容量、Class A/B、费用依然未知（Billing Read 403）。
+- **完整 v0.11 正式上线仍 NO-GO**（OCR 真样本、真实服务联调、知学双人私密句卡、成员退出、Google OAuth/真机等未完成）。可申请的是关掉这些功能的 core-only 云端验收，而不是宣称正式产品全功能上线。

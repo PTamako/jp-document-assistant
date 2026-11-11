@@ -54,3 +54,9 @@
 - Gmail：用户点击才请求受限 readonly OAuth；token 仅会话内存、谷歌 Scope 单独验证、5 件分页、选定一封才读 MIME 文字、不请求附件、手动保存并沿用私密导入 SHA 去重；已加入静态和纯模拟测试。Google 正式授权审批、撤销真机、完整 historyId 自动增量都未验收。
 - 备份：新增 AES-GCM 错误密码、密文篡改、缺失/修改原件、版本不支持的失败拒绝测试；真实 D1/R2 灾难恢复仍需经过批准后在可控环境验证。
 - Cloudflare 生产费用用量读取权限缺失：未知，不假定为零或充足。一个正式 Worker、专用 D1、私有 R2 方案仍只是拟议，未执行。
+
+## 2026-11-11 部署前安全审查最终分级
+
+- 代码已完成的 P0 新修复均有 CI 回归；最新已验证安全基线 `0d7bbf01a94451618b6dd11b96b2fd46e168fa91`，CI 88/88 Node、11/11 SQLite/API、Vue Build 全部成功。附加文档更新提交 CI 另行核实。
+- Cloudflare 账号现有 6 Workers / 6 D1 / 2 R2；Billing Read=403、实际费用及余额未知；Zones 和 Workers Custom Domains 均为空，当前 workers_dev=false 的配置不能直接形成可访问的网址。
+- **全功能正式发布 NO-GO**。只可在集中明确批准后创建一个正式 core-only Worker、专用 D1 与独立私有 R2，以合成资料先做真环境验收。禁止自动合并/部署目标三 App 或启用 AI/Gmail 受限 OAuth。详见 `docs/predeployment_security_audit.md`。
