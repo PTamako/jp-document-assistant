@@ -1,6 +1,6 @@
 # D1 migrations (initial schema for a NEW standalone application)
 
-Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`, `0006_document_version.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
+Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`, `0006_document_version.sql`, `0007_ocr_attempts.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
 
 **Production safety:** The SQL is tested against local `sqlite3`, **not yet against real D1**. Do not auto-run on production; confirm a backup, current schema, and a production migration plan, and get approval. App-level logic must enforce exactly two users, permissions, imports, 2-phase R2 cleanup, idempotency, and transactional CAS updates. The SQLite trigger additionally blocks a third non-left account in the same household.
 
@@ -11,3 +11,5 @@ The `storage_objects` unique(owner_id, sha256, mime, quality_profile) key is for
 The initial schema deliberately has **no FTS virtual table** because D1 support and query budgets must be proved before enabling it. Bounded per-user searchable lists can rely on indices; avoid unbounded scans. Dates are UTC ISO-8601, except explicitly named `local_day` in JST. All money and currencies live in JSON candidates/confirmed fields with integer minor units and explicit ISO currency; do not infer FX rates.
 
 `0006_document_version.sql` saves **source_document_date** and original evidence separately from **official_current_verified_at**. The latter stays NULL until an actual trusted-source verification workflow is implemented; imports and ZIP restores must never forge a verification timestamp. No separate Cloudflare resources are created.
+
+`0007_ocr_attempts.sql`: per-user, per-R2-object experimental OCR suggestion cache. Only `success` rows contain candidate text. Any result remains unverified until the owner explicitly edits and saves it. The row is deleted with the last private `storage_objects` record by FK cascade; failed/empty OCR does not fabricate source text. No extra Worker, Cron, KV or R2 request is needed.
