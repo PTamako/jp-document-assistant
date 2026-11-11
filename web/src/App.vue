@@ -6,6 +6,7 @@ import { drivePickerConfig,pickGoogleDriveFile } from './google-drive-picker.js'
 import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke} from './gmail-import.js';
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
+import { createAccountEpoch } from './account-epoch.js';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
@@ -24,6 +25,7 @@ const gmailAvailable=gmailConfigured(),gmailAuthorizedUi=ref(false),gmailQuery=r
 let gmailGeneration=0;
 const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),inviteEmail=ref(''),inviteToken=ref('');
 const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
+const accountEpoch=createAccountEpoch();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
@@ -38,14 +40,43 @@ const pageData=computed(()=>pages[activeTab.value]||{items:[],next:null,loaded:t
 function flash(message){notice.value=message;error.value='';}
 function problem(err){error.value=err?.message || '操作失败'; notice.value='';}
 async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={}){
+  const epoch=accountEpoch.snapshot();
   const headers={}; if(body&&!form)headers['Content-Type']='application/json';
   if(!['GET','HEAD'].includes(method)&&csrf.value)headers['X-CSRF-Token']=csrf.value;
   if(idempotencyKey)headers['Idempotency-Key']=idempotencyKey;
   const resp=await fetch(path,{method,headers,body:form?body:(body?JSON.stringify(body):undefined),credentials:'same-origin',cache:'no-store',signal});
   const contentType=resp.headers.get('Content-Type')||'';
   const data=contentType.includes('application/json')?await resp.json():null;
+  accountEpoch.assertCurrent(epoch);
   if(!resp.ok)throw new Error(data?.message||`HTTP ${resp.status}`);
   return data;
+}
+function accountApi(snapshot){
+  return (path,options)=>{
+    accountEpoch.assertCurrent(snapshot);
+    return api(path,options);
+  };
+}
+function clearPrivateWorkspace(){
+  accountEpoch.invalidate(); // Reject responses from the previous account.
+  loadSerial++;loadingPage.value=false;busy.value=false;detailLoading.value=false;
+  clearGmailSession();revokeOriginal();closeSheet();current.value=null;
+  user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
+  usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];
+  sessions.value=[];sessionsNext.value=null;
+  backupFile.value=null;backupPass.value='';backupOffset.value=0;
+  backupScope.value='all';backupMonth.value='';restoreArchive.value=null;restorePreview.value=[];
+  calendarLink.value='';calendarStatusInfo.value=null;calendarShowTitle.value=false;
+  inviteEmail.value='';inviteToken.value='';pendingAttachment.value=null;
+  fieldDraft.id='';fieldDraft.value='';fieldDraft.confirmRemote=false;
+  for(const name of Object.keys(candidateDraft)){
+    if(typeof candidateDraft[name]==='boolean')candidateDraft[name]=false;
+    else if(typeof candidateDraft[name]==='number')candidateDraft[name]=0;
+    else candidateDraft[name]='';
+  }
+  for(const page of Object.values(pages)){page.items=[];page.next=0;page.loaded=false;}
+  if(backupInput.value)backupInput.value.value='';
+  if(extraFileInput.value)extraFileInput.value.value='';
 }
 async function openGmailSheet(){
   gmailBusy.value=false;gmailAuthorizedUi.value=gmailConnected();
@@ -94,8 +125,11 @@ function clearGmailSession(){
   gmailItems.value=[];gmailNext.value=null;
 }
 async function boot(){
-  try {const d=await api('/api/me');if(user.value?.id&&user.value.id!==d.user.id)clearGmailSession();user.value=d.user;csrf.value=d.csrf_token;await selectTab('today');}
-  catch {user.value=null;clearGmailSession();}
+  try{
+    const d=await api('/api/me');
+    if(user.value?.id&&user.value.id!==d.user.id)clearPrivateWorkspace();
+    user.value=d.user;csrf.value=d.csrf_token;await selectTab('today');
+  }catch{clearPrivateWorkspace();}
 }
 async function submitAuth(){
   clearGmailSession(); // Prevent a subsequent App account from inheriting prior Gmail OAuth state.
@@ -103,6 +137,7 @@ async function submitAuth(){
   try {
     const path={login:'/api/auth/login',bootstrap:'/api/auth/bootstrap',join:'/api/household/join'}[authMode.value];
     const d=await api(path,{method:'POST',body:{...auth}});
+    clearPrivateWorkspace();
     csrf.value=d.csrf_token;auth.password='';auth.setup_token='';auth.invite_token='';
     await boot();flash('登录成功');
   } catch(e){problem(e);} finally {busy.value=false;}
@@ -169,17 +204,13 @@ async function changePassword(){
  try{
    await api('/api/auth/change-password',{method:'POST',
      body:{current_password:passwordDraft.current_password,new_password:passwordDraft.new_password}});
-   clearGmailSession();closeSheet();csrf.value='';user.value=null;auth.password='';
-   revokeOriginal();current.value=null;
-   for(const p of Object.values(pages)){p.items=[];p.next=0;p.loaded=false;}
+   clearPrivateWorkspace();auth.password='';
    flash('密码已更改，所有旧登录会话已注销。请使用新密码重新登录。');
  }catch(e){problem(e);}finally{busy.value=false;}
 }
 async function logout(){
   try{await api('/api/auth/logout',{method:'POST'});}catch{}
-  clearGmailSession();revokeOriginal();current.value=null;csrf.value='';user.value=null;auth.password='';
-  for(const p of Object.values(pages)){p.items=[];p.next=0;p.loaded=false;}
-  closeSheet();
+  clearPrivateWorkspace();auth.password='';
 }
 async function loadTab(tab,append=false){
   const page=pages[tab];if(!page)return;
@@ -218,19 +249,20 @@ async function selectFile(event){
   const hasTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
   fileRetention.value=hasTextLayer?'summary':'original';
   if(!hasTextLayer)return;
-  busy.value=true;
+  const epoch=accountEpoch.snapshot();busy.value=true;
   try{
     const parsed=await extractDocumentText(file);
-    if(fileDraft.value!==file)return;
+    if(!accountEpoch.isCurrent(epoch)||fileDraft.value!==file)return;
     fileText.value=parsed.text;fileWarning.value=parsed.warning;
   }catch(e){problem(e);fileWarning.value=e.message;}
   finally{busy.value=false;if(fileInput.value)fileInput.value.value='';}
 }
 
 async function importFromGoogleDrive(){
-  busy.value=true;error.value='';
+  const epoch=accountEpoch.snapshot();busy.value=true;error.value='';
   try{
     const file=await pickGoogleDriveFile();
+    accountEpoch.assertCurrent(epoch);
     if(!file)return; // Canceling Google Picker does not request an R2 upload or import.
     if(/\.(?:eml|txt)$/i.test(file.name)){
       const parsed=await readLocalText(file);
@@ -257,8 +289,9 @@ async function importFromGoogleDrive(){
 
 async function importLocalText(event){
   const file=event.target.files?.[0];if(!file)return;
-  busy.value=true;try{
+  const epoch=accountEpoch.snapshot();busy.value=true;try{
     const result=await readLocalText(file);
+    accountEpoch.assertCurrent(epoch);
     textDraft.text=result.text;textDraft.title=result.title;textDraft.source_type=result.source_type;
     inputMode.value='text';localImportNote.value=result.warning;sheet.value='import';
   }catch(e){problem(e);}finally{busy.value=false;if(localTextInput.value)localTextInput.value.value='';}
@@ -353,8 +386,20 @@ async function confirmRunOcr(){
   finally{busy.value=false;}
 }
 async function exportData(){busy.value=true;try{const d=await exportBatch(api,{scope:backupScope.value,month:backupScope.value==='month'?backupMonth.value:'',year:backupScope.value==='year'?backupMonth.value.slice(0,4):'',offset:backupOffset.value,includes_originals:backupIncludeOriginals.value,password:backupPass.value});backupOffset.value=d.next_offset??0;flash(`已生成 ${d.name}（${d.document_count} 份文书、${d.original_count} 个原件）`);}catch(e){problem(e);}finally{busy.value=false;}}
-async function selectBackup(event){const file=event.target.files?.[0];if(!file)return;backupFile.value=file;busy.value=true;try{restoreArchive.value=await readBackup(file,backupPass.value);const d=await restoreBatch(api,restoreArchive.value,false);restorePreview.value=d.preview;sheet.value='restoreBackup';}catch(e){problem(e);}finally{busy.value=false;}}
-async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(api,restoreArchive.value,true);sheet.value='';backupFile.value=null;restoreArchive.value=null;restorePreview.value=[];for(const page of Object.values(pages))page.loaded=false;flash(`已恢复 ${r.metadata_restored} 份资料、${r.originals_restored} 个原件；失败 ${r.failures.length} 件`);}catch(e){problem(e);}finally{busy.value=false;}}
+async function selectBackup(event){
+ const file=event.target.files?.[0];if(!file)return;
+ const epoch=accountEpoch.snapshot();
+ backupFile.value=file;busy.value=true;
+ try{
+   const archive=await readBackup(file,backupPass.value);
+   accountEpoch.assertCurrent(epoch);
+   const d=await restoreBatch(accountApi(epoch),archive,false);
+   accountEpoch.assertCurrent(epoch);
+   restoreArchive.value=archive;restorePreview.value=d.preview;sheet.value='restoreBackup';
+ }catch(e){if(accountEpoch.isCurrent(epoch))problem(e);}
+ finally{if(accountEpoch.isCurrent(epoch))busy.value=false;}
+}
+async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(accountApi(accountEpoch.snapshot()),restoreArchive.value,true);sheet.value='';backupFile.value=null;restoreArchive.value=null;restorePreview.value=[];for(const page of Object.values(pages))page.loaded=false;flash(`已恢复 ${r.metadata_restored} 份资料、${r.originals_restored} 个原件；失败 ${r.failures.length} 件`);}catch(e){problem(e);}finally{busy.value=false;}}
 async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
 async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
@@ -384,12 +429,17 @@ async function issueInvite(){busy.value=true;try{
   const d=await api('/api/household/invites',{method:'POST',body:{invitee_email:inviteEmail.value}});inviteToken.value=d.invite_token;flash('邀请码仅供指定邮箱，48小时有效');
 }catch(e){problem(e);}finally{busy.value=false;}}
 async function showOriginal(a){
+  if(!current.value)return;
+  const epoch=accountEpoch.snapshot(),id=current.value.id;
   revokeOriginal();busy.value=true;
   try{
-    const response=await fetch(`/api/documents/${current.value.id}/attachments/${a.id}/content`,{credentials:'same-origin',cache:'no-store'});
+    const response=await fetch(`/api/documents/${id}/attachments/${a.id}/content`,{credentials:'same-origin',cache:'no-store'});
+    accountEpoch.assertCurrent(epoch);
     if(!response.ok)throw new Error('无法读取私人原件');
-    const blob=await response.blob();originalMime.value=blob.type;originalUrl.value=URL.createObjectURL(blob);sheet.value='original';
-  }catch(e){problem(e);}finally{busy.value=false;}
+    const blob=await response.blob();
+    accountEpoch.assertCurrent(epoch);
+    originalMime.value=blob.type;originalUrl.value=URL.createObjectURL(blob);sheet.value='original';
+  }catch(e){if(accountEpoch.isCurrent(epoch))problem(e);}finally{if(accountEpoch.isCurrent(epoch))busy.value=false;}
 }
 function revokeOriginal(){if(originalUrl.value)URL.revokeObjectURL(originalUrl.value);originalUrl.value='';}
 async function changeShare(){
@@ -403,7 +453,7 @@ const dueState=(v)=>{if(!v)return '待确认';const today=new Date().toLocaleDat
 const labelFor=(key)=>fieldLabel[key]||key;
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 onMounted(boot);
-onBeforeUnmount(()=>{clearGmailSession();revokeOriginal();fileDraft.value=null;});
+onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
 </script>
 
 <template>
