@@ -112,7 +112,7 @@ test('PPTX rejects macro-enabled or corrupt presentation ZIP without fabricating
  const mime='application/vnd.openxmlformats-officedocument.presentationml.presentation';
  const invalid=await make('bad.pptx',[['ppt/presentation.xml','<x:invalid/>'],
   ['ppt/slides/slide1.xml','<p:sld><p:sp><a:t>甲</a:t></p:sp></p:sld>']],true);
- await assert.rejects(()=>validateOfficeBytes(new Uint8Array(await invalid.arrayBuffer()),mime),/演示文稿结构无效/);
+ await assert.rejects(async()=>validateOfficeBytes(new Uint8Array(await invalid.arrayBuffer()),mime),/演示文稿结构无效/);
  const empty=await make('empty.pptx',[['ppt/presentation.xml','<p:presentation/>']],true);
  await assert.rejects(()=>extractOfficeFile(empty),/幻灯片数量不支持/);
 });
