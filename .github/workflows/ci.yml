@@ -38,3 +38,30 @@ jobs:
           printf 'JDA_ASSET_BEGIN:%s\n' "$GITHUB_SHA"
           base64 -w0 /tmp/jda-ui-assets.tar.gz | fold -w 4096 | sed 's/^/JDA_ASSET_CHUNK:/'
           printf 'JDA_ASSET_END:%s\n' "$(sha256sum /tmp/jda-ui-assets.tar.gz | cut -d ' ' -f1)"
+
+      - name: One-time approved read-only live Worker smoke test
+        if: github.event_name == 'pull_request'
+        run: |
+          node --input-type=module <<'JS'
+          const base='https://jp-document-assistant.yupan6706.workers.dev';
+          const controller=new AbortController();
+          const timer=setTimeout(()=>controller.abort(),25000);
+          try{
+            const [health,home]=await Promise.all([
+              fetch(base+'/api/health',{signal:controller.signal}),
+              fetch(base+'/',{signal:controller.signal})
+            ]);
+            const body=await home.text();
+            const h=await health.json().catch(()=>null);
+            console.log('JDA_LIVE_SMOKE_HEALTH',health.status,JSON.stringify(h));
+            console.log('JDA_LIVE_SMOKE_INDEX',home.status,home.headers.get('content-type'),body.length);
+            if(!health.ok||!h?.ok||h.service!=='document-assistant')throw new Error('Production health not ready');
+            if(!home.ok||!body.includes('id="app"'))throw new Error('Production Vue homepage not ready');
+            const js=body.match(/src="([^"]+\.js)"/)?.[1];
+            if(!js)throw new Error('JS bundle missing');
+            const asset=await fetch(base+js,{signal:controller.signal});
+            console.log('JDA_LIVE_SMOKE_JS',asset.status,asset.headers.get('content-type'));
+            if(!asset.ok)throw new Error('JS bundle not reachable');
+            console.log('JDA_LIVE_SMOKE_SUCCESS');
+          }finally{clearTimeout(timer)}
+          JS
