@@ -26,6 +26,7 @@ const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
+const sessions=ref([]),sessionsNext=ref(null);
 
 const fieldLabel={due_date:'办理／缴费期限',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）'};
 const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
@@ -83,6 +84,32 @@ async function revokeCalendar(){
 async function copyCalendarLink(){
  try{await navigator.clipboard.writeText(calendarLink.value);flash('私人订阅地址已复制');}
  catch{problem(new Error('复制失败，请长按地址框手动选择复制'));}
+}
+async function loadSessions(append=false){
+  try{
+    const offset=append?(sessionsNext.value||0):0;
+    const r=await api('/api/auth/sessions?offset='+offset);
+    sessions.value=append?[...sessions.value,...r.items]:r.items;
+    sessionsNext.value=r.next_offset;
+  }catch(e){problem(e);}
+}
+async function openSessions(){
+  sessions.value=[];sessionsNext.value=null;sheet.value='sessions';
+  await loadSessions();
+}
+async function revokeSession(id){
+  busy.value=true;
+  try{
+    await api('/api/auth/sessions/revoke',{method:'POST',body:{session_id:id}});
+    await loadSessions();flash('已撤销所选设备的登录会话');
+  }catch(e){problem(e);}finally{busy.value=false;}
+}
+async function revokeOtherSessions(){
+  busy.value=true;
+  try{
+    const r=await api('/api/auth/sessions/revoke-others',{method:'POST',body:{}});
+    await loadSessions();flash('已撤销其他 '+r.revoked_count+' 个登录会话');
+  }catch(e){problem(e);}finally{busy.value=false;}
 }
 async function changePassword(){
  if(passwordDraft.new_password.length<12||passwordDraft.new_password!==passwordDraft.confirm_password){
@@ -385,6 +412,7 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
         <button class="settings-line" @click="loadUsage">刷新服务用量 <span>↻</span></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">重试无引用 R2 原件清理 <span>↻</span></button>
         <div class="info-note" v-if="usage">Cloudflare 全账号免费额度：<strong>未确认</strong>。本地统计 AI 调用 {{usage.local_today.ai_calls}} 次，不代表全账号剩余额度。</div>
+        <button class="settings-line" @click="openSessions">管理登录设备与会话 <span>›</span></button>
         <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <span>›</span></button>
         <button class="settings-line" @click="logout">退出当前账号 <span>›</span></button>
         <p class="fine-print">原件按需从私有 R2 读取；删除文书不会删除其他三个 App 的已确认数据。</p>
@@ -435,6 +463,20 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">关闭</button>
           <button class="secondary" v-if="calendarStatusInfo?.active" :disabled="busy" @click="revokeCalendar">撤销链接</button>
           <button class="primary" :disabled="busy" @click="createCalendar">{{calendarStatusInfo?.active?'重新生成':'创建订阅'}}</button></div>
+      </template>
+      <template v-else-if="sheet==='sessions'"><h2>登录设备与会话</h2>
+        <p class="fine-print">仅管理自己账号的登录，不显示家人账号。系统目前只记录登录时间，不读取设备位置或浏览器指纹。</p>
+        <div v-if="!sessions.length" class="empty">暂无有效登录会话。</div>
+        <div class="recycle-row" v-for="s in sessions" :key="s.id">
+          <div class="item-info"><strong>{{s.is_current?'当前设备':'其他登录会话'}}</strong>
+            <small>登录：{{s.created_at.slice(0,16).replace('T',' ')}} UTC</small>
+            <small>失效：{{s.expires_at.slice(0,16).replace('T',' ')}} UTC</small>
+          </div>
+          <button v-if="!s.is_current" class="destructive small" :disabled="busy" @click="revokeSession(s.id)">撤销</button>
+        </div>
+        <button class="text-button full" v-if="sessionsNext!==null" :disabled="busy" @click="loadSessions(true)">加载更多</button>
+        <div class="sheet-actions"><button class="secondary" @click="closeSheet">关闭</button>
+          <button class="destructive" :disabled="busy||sessions.every(s=>s.is_current)" @click="revokeOtherSessions">撤销全部其他设备</button></div>
       </template>
       <template v-else-if="sheet==='changePassword'"><h2>修改登录密码</h2>
         <p class="fine-print">更改后此账号在所有设备上的旧会话都将失效，必须使用新密码重新登录；不会影响家人账号。</p>

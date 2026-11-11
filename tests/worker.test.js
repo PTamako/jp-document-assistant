@@ -1066,3 +1066,59 @@ test('replacing shared source with payroll and changing shared category revoke s
   assert.equal(tagged.response.status,200,JSON.stringify(tagged.data));
   assert.equal((await req(env,'/api/documents/'+second,auth(owner))).data.document.visibility,'private');
 });
+
+
+test('session management only lists and revokes the authenticated account',async()=>{
+  const env=makeEnv(),a=await boot(env);
+  const other=await req(env,'/api/auth/login',{method:'POST',data:{
+    email:'a@example.com',password:'owner-long-secret123'
+  }});
+  assert.equal(other.response.status,200);
+  const second={cookie:other.response.headers.get('set-cookie').split(';')[0],csrf:other.data.csrf_token};
+  const listed=await req(env,'/api/auth/sessions',auth(a));
+  assert.equal(listed.response.status,200);
+  assert.equal(listed.data.items.length,2);
+  assert.equal(listed.data.items.filter(x=>x.is_current).length,1);
+  const current=listed.data.items.find(x=>x.is_current).id;
+  const remote=listed.data.items.find(x=>!x.is_current).id;
+  assert.ok(!listed.data.items.some(x=>x.secret_hash||x.cookie));
+  const missingCsrf=await req(env,'/api/auth/sessions/revoke',{
+    method:'POST',cookie:a.cookie,data:{session_id:remote}
+  });
+  assert.equal(missingCsrf.response.status,403);
+  assert.equal((await req(env,'/api/auth/sessions/revoke',{
+    method:'POST',...auth(a),data:{session_id:current}
+  })).response.status,409);
+  const invite=await req(env,'/api/household/invites',{
+    method:'POST',...auth(a),data:{invitee_email:'session-b@example.invalid'}
+  });
+  assert.equal(invite.response.status,201);
+  const joined=await req(env,'/api/household/join',{method:'POST',data:{
+    invite_token:invite.data.invite_token,email:'session-b@example.invalid',
+    password:'member-session-secret123'
+  }});
+  assert.equal(joined.response.status,201);
+  const member={cookie:joined.response.headers.get('set-cookie').split(';')[0],csrf:joined.data.csrf_token};
+  const memberSession=(await req(env,'/api/auth/sessions',auth(member))).data.items[0].id;
+  const cross=await req(env,'/api/auth/sessions/revoke',{
+    method:'POST',...auth(a),data:{session_id:memberSession}
+  });
+  assert.equal(cross.response.status,404);
+  assert.equal((await req(env,'/api/me',auth(member))).response.status,200);
+  assert.equal((await req(env,'/api/auth/sessions/revoke',{
+    method:'POST',...auth(a),data:{session_id:remote}
+  })).response.status,200);
+  assert.equal((await req(env,'/api/me',auth(second))).response.status,401);
+  assert.equal((await req(env,'/api/me',auth(a))).response.status,200);
+  const relogged=await req(env,'/api/auth/login',{method:'POST',data:{
+    email:'a@example.com',password:'owner-long-secret123'
+  }});
+  assert.equal(relogged.response.status,200);
+  const otherAgain={cookie:relogged.response.headers.get('set-cookie').split(';')[0],csrf:relogged.data.csrf_token};
+  const revoked=await req(env,'/api/auth/sessions/revoke-others',{method:'POST',...auth(a),data:{}});
+  assert.equal(revoked.response.status,200);
+  assert.equal(revoked.data.revoked_count,1);
+  assert.equal((await req(env,'/api/me',auth(otherAgain))).response.status,401);
+  assert.equal((await req(env,'/api/me',auth(a))).response.status,200);
+  assert.equal((await req(env,'/api/me',auth(member))).response.status,200);
+});

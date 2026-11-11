@@ -448,6 +448,32 @@ async function route(request,env){
   if(method==='POST'&&path==='/api/calendar/subscription')return createCalendarSubscription(request,env,p);
   if(method==='POST'&&path==='/api/calendar/revoke')return revokeCalendarSubscription(env,p);
   if(method==='GET'&&path==='/api/me')return json({user:{id:p.user_id,household_id:p.household_id,email:p.email_norm,role:p.role,display_name:p.display_name},csrf_token:p.csrf});
+  if(method==='GET'&&path==='/api/auth/sessions'){
+    const offset=Math.max(0,Math.min(100,Number(url.searchParams.get('offset')||0)||0));
+    const rows=await dbAll(env.DB,`SELECT id,created_at,expires_at FROM sessions
+      WHERE user_id=? AND revoked_at IS NULL AND expires_at>?
+      ORDER BY created_at DESC,id DESC LIMIT 6 OFFSET ?`,p.user_id,isoNow(),offset);
+    return json({items:rows.slice(0,5).map(row=>({...row,is_current:row.id===p.session_id})),
+      next_offset:rows.length>5?offset+5:null});
+  }
+  if(method==='POST'&&path==='/api/auth/sessions/revoke'){
+    const data=await readJson(request,1200);
+    if(typeof data.session_id!=='string'||!/^[a-f0-9]{32}$/i.test(data.session_id))
+      bad('登录会话 ID 无效','INVALID_SESSION_ID',400);
+    if(data.session_id===p.session_id)
+      bad('当前设备请使用退出登录操作','USE_LOGOUT',409);
+    const changed=await dbRun(env.DB,`UPDATE sessions SET revoked_at=?
+      WHERE id=? AND user_id=? AND revoked_at IS NULL AND expires_at>?`,
+      isoNow(),data.session_id,p.user_id,isoNow());
+    if(changed.meta?.changes!==1)bad('会话不存在或已失效','NOT_FOUND',404);
+    return json({ok:true});
+  }
+  if(method==='POST'&&path==='/api/auth/sessions/revoke-others'){
+    const result=await dbRun(env.DB,`UPDATE sessions SET revoked_at=?
+      WHERE user_id=? AND id!=? AND revoked_at IS NULL AND expires_at>?`,
+      isoNow(),p.user_id,p.session_id,isoNow());
+    return json({ok:true,revoked_count:result.meta?.changes||0});
+  }
   if(method==='POST'&&path==='/api/auth/logout'){
     const cookie=parseCookie(request,'__Host-da_session');
     await dbRun(env.DB,'UPDATE sessions SET revoked_at=? WHERE secret_hash=?',isoNow(),await hashString(cookie));
