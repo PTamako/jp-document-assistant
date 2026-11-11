@@ -156,3 +156,49 @@ test('backup JSON roundtrip only restores metadata and does not send remote inte
   assert.equal(confirmed.data.restored.length,0);
   assert.equal(confirmed.data.remote_syncs_sent,0);
 });
+
+test('signed ledger integration requires reviewed fields, uses fixed key and safely retries lost responses',async()=>{
+  const env=makeEnv(),user=await boot(env);
+  const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(user),data:{
+    retention:'summary',source_type:'text',text:'ご請求金額：1,200円\n納付期限：令和8年11月30日（月)'
+  }});
+  const id=imp.data.document_id;
+  const detail=(await req(env,`/api/documents/${id}`,auth(user))).data.document;
+  const money=detail.fields.find(x=>x.field_key==='amount_jpy');
+  assert.ok(money);
+  const candidates=(await req(env,`/api/documents/${id}/candidates`,auth(user))).data.items;
+  const candidate=candidates.find(x=>x.candidate_kind==='finance');assert.ok(candidate);
+  const key='attempt_12345678',body={confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true,
+    date:'2026-11-12',category:'税金',payment_source:'現金'};
+  const options={method:'POST',...auth(user),data:body,extraHeaders:{'Idempotency-Key':key}};
+  // Never forward unreviewed amount, even with a correct user confirmation.
+  const unreviewed=await req(env,`/api/candidates/${candidate.id}/commit`,options);
+  assert.equal(unreviewed.response.status,503); // No service configured; fails closed.
+  assert.equal((await req(env,`/api/fields/${money.id}`,{
+    method:'PATCH',...auth(user),data:{review_state:'confirmed',normalized_value:'1200'}
+  })).response.status,200);
+  const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+  env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'kakebo-test-owner'}});
+  env.KAKEBO_BRIDGE_SECRET='signed-test-secret-strong-enough-123456789';
+  const targetWrites=new Map();let callCount=0;
+  env.KAKEBO_BRIDGE_SERVICE={async fetch(request){
+    const raw=await request.text(),ts=request.headers.get('X-DA-Timestamp');
+    assert.equal(request.headers.get('X-DA-Signature'),await hmacHex(env.KAKEBO_BRIDGE_SECRET,`${ts}\n${raw}`));
+    const msg=JSON.parse(raw);assert.equal(msg.actor_user_id,'kakebo-test-owner');
+    assert.equal(msg.payload.amount,1200);
+    assert.equal(msg.idempotency_key,`jda:kakebo:${candidate.id}`);
+    callCount++;
+    if(!targetWrites.has(msg.idempotency_key))targetWrites.set(msg.idempotency_key,'entry-001');
+    if(callCount===1)throw Error('response lost after target already committed');
+    return Response.json({ok:true,remote_id:targetWrites.get(msg.idempotency_key),reused:true});
+  }};
+  const first=await req(env,`/api/candidates/${candidate.id}/commit`,options);
+  assert.equal(first.response.status,503);
+  const retry=await req(env,`/api/candidates/${candidate.id}/commit`,options);
+  assert.equal(retry.response.status,200,JSON.stringify(retry.data));
+  assert.equal(retry.data.remote_id,'entry-001');
+  const again=await req(env,`/api/candidates/${candidate.id}/commit`,options);
+  assert.equal(again.data.already_synced,true);
+  assert.equal(callCount,2);
+  assert.equal(targetWrites.size,1);
+});
