@@ -1,0 +1,54 @@
+name: Production security smoke (no secrets or writes)
+on:
+  pull_request:
+    paths: ['.github/workflows/live-production-smoke.yml']
+  push:
+    branches: [main]
+    paths:
+      - 'worker/**'
+      - 'web/**'
+      - 'wrangler.jsonc'
+      - '.github/workflows/live-production-smoke.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: jpda-live-smoke-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Check real production endpoints without user tokens or database writes
+        run: |
+          node --input-type=module <<'NODE'
+          const tests=[
+            {name:'jpda-health',url:'https://jp-document-assistant.yupan6706.workers.dev/api/health',status:200,check:d=>d?.ok===true&&d?.service==='document-assistant'&&d?.ai_ocr==='experimental'},
+            {name:'jpda-first-account',url:'https://jp-document-assistant.yupan6706.workers.dev/api/auth/status',status:200,check:d=>d?.ok===true&&d?.initialized===true},
+            {name:'jpda-private-api',url:'https://jp-document-assistant.yupan6706.workers.dev/api/me',status:401},
+            {name:'homeflow-no-unauthorized-write',url:'https://homeflow.yupan6706.workers.dev/api/bridge/document-assistant',method:'POST',status:404},
+            {name:'kakebo-no-unauthorized-write',url:'https://kakeibo-f17.pages.dev/api/bridge/document-assistant',method:'POST',status:401},
+            {name:'zhixue-no-unauthorized-write',url:'https://it-study-platform.yupan6706.workers.dev/api/bridge/document-assistant',method:'POST',status:401}
+          ];
+          let errors=0;
+          for(const t of tests){
+            let passed=false,actual='unreachable';
+            for(let i=0;i<3;i++){
+              const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),18000);
+              try{
+                const response=await fetch(t.url,{method:t.method||'GET',signal:controller.signal,headers:{'Cache-Control':'no-store'},redirect:'manual'});
+                actual=response.status;
+                const data=t.check?await response.json().catch(()=>null):null;
+                passed=response.status===t.status&&(!t.check||t.check(data));
+                if(passed)break;
+              }catch(e){actual=e.name||'fetch_error'}
+              finally{clearTimeout(timer)}
+              await new Promise(resolve=>setTimeout(resolve,2000));
+            }
+            console.log(t.name+': '+(passed?'PASS':'FAIL')+' (HTTP '+actual+', expected '+t.status+')');
+            if(!passed)errors++;
+          }
+          if(errors)throw new Error(errors+' live security checks failed. No actual writes were attempted.');
+          console.log('All six real production security checks passed; no auth material provided.');
+          NODE
