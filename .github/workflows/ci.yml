@@ -45,3 +45,11 @@ jobs:
             console.log('JDA_AUTH_DIAG',route,r.status,b.slice(0,450));
           }
           JS
+
+      - name: Temporary lockfile export for reviewed deterministic release
+        if: github.event_name == 'pull_request'
+        run: |
+          test -f package-lock.json
+          printf 'JPDA_LOCK_BEGIN:%s\n' "$GITHUB_SHA"
+          base64 -w0 package-lock.json | fold -w 4096 | sed 's/^/JPDA_LOCK_CHUNK:/'
+          printf 'JPDA_LOCK_END:%s\n' "$(sha256sum package-lock.json | awk '{print $1}')"
