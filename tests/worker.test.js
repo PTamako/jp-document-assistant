@@ -832,7 +832,7 @@ test('UTC daily OCR budget is shared across both accounts and never claims Cloud
  assert.equal(fail.data.code,'OCR_APP_UTC_LIMIT');
  assert.equal(calls,1);assert.equal(reads,1);
  const totals=env.DB.sql.prepare('SELECT calls,reserved FROM ocr_app_utc_daily').get();
- assert.deepEqual(totals,{calls:1,reserved:0});
+ assert.equal(totals.calls,1);assert.equal(totals.reserved,0);
  const usage=await req(env,'/api/usage',auth(partner));
  assert.equal(usage.data.app_utc_day.calls,1);
  assert.equal(usage.data.app_utc_day.limit,1);
@@ -866,7 +866,7 @@ test('stale OCR pending does not retry automatically and requires explicit secon
  assert.equal(approved.response.status,200,JSON.stringify(approved.data));
  assert.equal(called,1);
  const cache=env.DB.sql.prepare('SELECT state,attempt_count FROM ocr_attempts').get();
- assert.deepEqual(cache,{state:'success',attempt_count:2});
+ assert.equal(cache.state,'success');assert.equal(cache.attempt_count,2);
  const totals=env.DB.sql.prepare('SELECT calls,reserved FROM ocr_app_utc_daily').get();
- assert.deepEqual(totals,{calls:1,reserved:0});
+ assert.equal(totals.calls,1);assert.equal(totals.reserved,0);
 });
