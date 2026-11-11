@@ -55,6 +55,12 @@ export async function restoreUpload(request,env,p,id){
     }catch{await run(env.DB,"UPDATE storage_objects SET state='delete_failed',updated_at=? WHERE id=?",isoNow(),oid);bad('R2 恢复失败','RESTORE_UPLOAD_FAILED',503);}
     obj={id:oid,object_key:key};
   }
+  // An owner-scoped, ready D1 row may outlive its physical R2 bytes.
+  // A verified user backup must repair missing bytes before making a new link.
+  if(obj && !(await env.DOCUMENTS.head(obj.object_key))){
+    try{await env.DOCUMENTS.put(obj.object_key,bytes,{httpMetadata:{contentType:file.type}});}
+    catch{bad('原件 R2 丢失且补传失败；未建立附件引用','R2_REPAIR_FAILED',503);}
+  }
   const aid=randomToken(16),sort=Number(form.get('sort_order')||0);
   await batch(env.DB,[
     ['INSERT INTO attachments(id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',aid,id,obj.id,label,Number.isInteger(sort)?sort:0,expected,now,now],
@@ -66,7 +72,7 @@ export async function backupOriginal(env,p,id,aid){
   if(!env.DOCUMENTS)bad('R2 未绑定','NOT_CONFIGURED',503);
   const a=await first(env.DB,`SELECT o.object_key,o.mime FROM attachments a JOIN documents d ON d.id=a.document_id
     JOIN storage_objects o ON o.id=a.object_id
-    WHERE a.id=? AND a.document_id=? AND d.owner_id=? AND d.lifecycle!='deletion_pending' AND a.state='active' AND o.state='ready'`,aid,id,p.user_id);
+    WHERE a.id=? AND a.document_id=? AND d.owner_id=? AND d.lifecycle='active' AND a.state='active' AND o.state='ready'`,aid,id,p.user_id);
   if(!a)bad('原件不存在','NOT_FOUND',404);
   const r=await env.DOCUMENTS.get(a.object_key);
   if(!r)bad('原件已缺失','ORIGINAL_MISSING',404);

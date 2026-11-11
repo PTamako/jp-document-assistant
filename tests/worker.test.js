@@ -949,3 +949,55 @@ test('private Japanese sentences cannot be sent to vocabulary-only study bridge 
  assert.equal(networkRequests,0);
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
 });
+
+
+test('missing owner-scoped object is re-uploaded before reuse; failed repair creates no reference',async()=>{
+  const env=makeEnv(),owner=await boot(env),bytes=new Uint8Array([255,216,255,224,41,42,43,44]);
+  const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))]
+    .map(x=>x.toString(16).padStart(2,'0')).join('');
+  async function doc(text){
+    const r=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+      data:{retention:'summary',source_type:'text',text}});
+    assert.equal(r.response.status,201,JSON.stringify(r.data));return r.data.document_id;
+  }
+  function backup(id){
+    const form=new FormData();
+    form.append('file',new File([bytes],'backup.jpg',{type:'image/jpeg'}));
+    form.append('sha256',hash);
+    return req(env,'/api/documents/'+id+'/attachments/restore-upload',{method:'POST',...auth(owner),form});
+  }
+  const a=await doc('保管用資料 A');
+  assert.equal((await backup(a)).response.status,201);
+  const key=[...env._blobs.keys()][0];env._blobs.delete(key);
+  const b=await doc('保管用資料 B');
+  const repaired=await backup(b);
+  assert.equal(repaired.response.status,201,JSON.stringify(repaired.data));
+  assert.deepEqual(env._blobs.get(key),bytes);
+  env._blobs.delete(key);
+  const c=await doc('保管用資料 C');
+  const put=env.DOCUMENTS.put;
+  env.DOCUMENTS.put=async()=>{throw Error('simulated R2 failure')};
+  const failed=await backup(c);
+  assert.equal(failed.response.status,503,JSON.stringify(failed.data));
+  assert.equal(failed.data.code,'R2_REPAIR_FAILED');
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM attachments WHERE document_id=?').get(c).n,0);
+  env.DOCUMENTS.put=put;
+  assert.equal((await backup(c)).response.status,201);
+  assert.deepEqual(env._blobs.get(key),bytes);
+});
+
+test('trashed document original is not downloadable through backup endpoint',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const form=new FormData();
+  form.append('file',new File([new Uint8Array([255,216,255,224,81,82,83,84])],
+    'private.jpg',{type:'image/jpeg'}));
+  form.append('retention','original');
+  const r=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+  assert.equal(r.response.status,201);
+  const id=r.data.document_id;
+  const a=(await req(env,'/api/documents/'+id,auth(owner))).data.document.attachments[0];
+  const path='/api/backups/original/'+id+'/'+a.id;
+  assert.equal((await req(env,path,auth(owner))).response.status,200);
+  assert.equal((await req(env,'/api/documents/'+id+'/trash',{method:'POST',...auth(owner),data:{}})).response.status,200);
+  assert.equal((await req(env,path,auth(owner))).response.status,404);
+});
