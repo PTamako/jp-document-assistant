@@ -818,14 +818,14 @@ paths:
               properties:
                 confirm:
                   type: boolean
+                  const: true
                 attachment_id:
                   type: string
                   pattern: '^[a-f0-9]{32}
-              - confirm
-              - attachment_id
                 retry_stale:
                   type: boolean
-                  description: pending 超过24小时后再次明确同意尝试，默认 false
+                  default: false
+                  description: 仅当 OCR pending 超过 24 小时，经过用户再次确认才能重试
               required:
               - confirm
               - attachment_id
