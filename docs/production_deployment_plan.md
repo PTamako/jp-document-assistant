@@ -57,12 +57,12 @@ Cloudflare 生产 Secret 必须由用户在获批部署流程输入，不能写�
 1. **集中审批与冻结**：审核四份 PR 的最新 SHA、真实 CI、OpenAPI 端点与路由、迁移 0001～0010、Secrets/身份映射、OCR 和费用风险；获得明确生产变更批准。未完成的 P0 不得豁免。
 2. **核对独立资源**：只读检查现有账号预算；确认正式域名、Worker 名、单独 D1 名称/UUID、R2 复用桶与私有前缀。若专用 D1 尚不存在，取得创建资源的单独批准后才创建。再审查托管 r2.dev/custom domains 始终关闭。
 3. **灾难备份与本地演练**：归档当前三 App 既有生产配置、部署版本和 D1 可恢复备份；文书助手是新库则记录其空库状态。校验可读备份与 D1 Time Travel 可用性，不把备份留在仓库或新 R2 的公用前缀。使用本地 SQLite 和 Wrangler 本地模拟验证全部 10 份迁移的顺序、外键和回滚。所有真实生产数据操作前再次核对数据库 ID。
-4. **三端桥接上线准备**：先合并经过安全审查且 CI 通过的目标端 PR（需要用户独立批准），配置目标端 Secret/用户白名单，保持桥默认 disabled，完成 Mock 及只读授权探测；不能直接跨写其生产 D1。知学私人句卡未完成前继续 fail-closed。
+4. **仅属于完整 v0.11 后续阶段，core-only 首次部署必须跳过**：三端桥先经过安全审查、Mock 和身份映射、用户独立批准后才能合并对应目标 PR、配置目标端 Secret/服务绑定或做真实服务联调。core-only 不配置三端 Service Binding / Bridge Secret，不直接跨写任何目标 D1。知学双人私人句卡未完成继续 fail-closed。
 5. **替换占位符**：仅在经批准的部署版本中把 wrangler.jsonc 里的 REPLACE_WITH_EXISTING_OR_NEW_PRODUCTION_D1_ID、REPLACE_WITH_PRIVATE_PRODUCTION_R2_BUCKET 两处及桶变量填写为已核验 ID/名称。所有 Secret 只通过 Cloudflare 安全机制注入。不得部署含占位符的配置。
 6. **正式迁移**：变更审批、备份与 ID 三重确认后，在与仓库绑定一致的目录执行命令：`npx wrangler d1 migrations apply jp-document-assistant --remote`。先阅读其计划清单和目标 UUID，再逐条检查 0001～0010；不得对 HomeFlow / 家計簿 / 知学现有库执行。
-7. **正式 Worker**：审批后才配置 Secret 和 Service Bindings；使用单一 Worker 的 `npx wrangler deploy`，不允许 GitHub CI 自动部署，也不创建 Preview 资源。正式域名和 OAuth JavaScript Origin 须精确匹配。关闭额外路由/公共对象访问。
+7. **正式 Worker（分阶段）**：仅经集中授权后设置核心 `SESSION_HMAC_KEY`、`BOOTSTRAP_ADMIN_TOKEN`，core-only 不启用 AI/Gmail/Google/三端服务；因账号当前无 Zone，需获得明确授权后才将这个正式 Worker 的 `workers_dev` 改为 true 并同步调整静态审批门禁（`preview_urls` 必须继续 false），以一个正式 workers.dev HTTPS 地址验证。随后使用单个 Worker 的 `npx wrangler deploy`；不得让 GitHub CI 自动部署，不建任何 Preview。三端 Service Binding 和 OAuth 生产配置只能在更后续单独批准的完整发布阶段配置。
 8. **上线小范围验收**：健康与登录、首次初始化、两账号并发会话、CSRF、未授权访问 404、共享二次确认、附件回收站、最后引用 R2 删除、D1 部分故障补偿、加密/原件 ZIP 完整往返、Google Picker 真授权、日历订阅撤销；OCR 不满足真样本基准则继续关闭。
-9. **目标 App 最小真实联动（另行批准）**：仅使用双方可识别的真实且已确认测试项目；逐个执行创建/响应丢失/幂等查询，核对账目和任务不重复、无意外积分、私人生词不覆盖。任何未批准的生产写入均跳过。
+9. **目标 App 最小真实联动（完整发布阶段另行批准，core-only 明确跳过）**：仅用双方可识别、已确认且获得写入许可的测试项目逐个验证创建/响应丢失/幂等查询，核对账目和任务不重复、无意外积分、私人生词不覆盖。任何未批准的生产写入均跳过。
 10. **双 iPhone/iPad 真机验收**：由家庭两位成员验证私人/共享隔离、底部 Sheet、Tab 无旧数据闪现、取消选择无请求、原件可放大、OCR 小字确认、备份大文件内存、PWA 本地敏感缓存和系统日历；出现缺陷回到 Draft 分支修复。
 11. **费用与运行观察**：取得官方云账号总量只读来源后对比操作前后 Workers 请求、D1 行读写、R2 存储/Class A/B、Workers AI Neurons、账单增量。未知时保守降级，不保证零费用。使用现有周报，无新 Cron。
 

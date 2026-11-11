@@ -6,7 +6,7 @@
 
 | 模块 | 已提交 | CI | 真实环境 |
 | --- | --- | --- | --- |
-| 双人登录、邀请、私人/共享文书 | 是；含个人会话查看/撤销和敏感文书自动恢复私密 | 72 项 Node 与 11 项 SQLite/API 总体 CI 通过 | 双机/iPhone 待验 |
+| 双人登录、邀请、私人/共享文书 | 是；含个人会话查看/撤销、敏感默认私人、跨号内存清空/晚到响应拒绝 | 88 项 Node 与 11 项 SQLite/API 总体 CI 通过 | 双机/iPhone 待验 |
 | 私有 R2、附件与文书回收站、永久删除、补偿 | 是；覆盖 D1 ready 但 R2 缺失、重复上传补传与回收站原件下载拒绝 | Mock 回归通过 | 真实 R2/D1 待验 |
 | JSON/ZIP 备份/加密/恢复 | 是 | 本地往返通过 | iPhone 大文件/灾难恢复待验 |
 | PDF、DOCX、XLSX、PPTX、.eml、.txt | 是 | 解析及 Worker 测试通过 | 各种真文书和系统版本待验 |
@@ -21,7 +21,7 @@
 
 ## 1A. 最新 CI 与实际 Cloudflare 核验
 
-- 主 PR #1 最新已核验代码 `84249bc7989512d735b31b2bbc068072a4971cb9`；[GitHub Actions #43039499158](https://github.com/PTamako/jp-document-assistant/actions/runs/43039499158)：80/80 Node、11/11 SQLite/API 及 Vue Build 全部通过（2026-11-11）。属于开发环境自动化验收，**并未通过真实 Cloudflare D1/R2 或 iPhone 双人验收**。
+- 主 PR #1 最新已核验安全代码 `0d7bbf01a94451618b6dd11b96b2fd46e168fa91`；[GitHub Actions #43045926313](https://github.com/PTamako/jp-document-assistant/actions/runs/43045926313)：88/88 Node、11/11 SQLite/API 及 Vue Build 全部通过（2026-11-11）。属于开发环境自动化验收，**并未通过真实 Cloudflare D1/R2 或 iPhone 双人验收**。
 - 连接 Cloudflare 只读检查：全账号 6 Worker、6 D1、2 R2 Bucket，两个现有 R2 Bucket 的 r2.dev 均关闭且无自定义公开域名；文书助手专用 Worker/D1 均不存在。
 - Cloudflare Billing/Usage API 未获 Billing Read 权限（403）。实际计费、剩余月度容量、D1 日读写、R2 Class A/B、Workers AI Neurons 都是 **未知**，不代表零费用。
 - 三份接收端 PR 均仍为 Draft；知学单用户结构未实现双人私密句卡，必须保持该写入路径 fail-closed。

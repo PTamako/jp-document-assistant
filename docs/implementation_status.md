@@ -28,7 +28,7 @@
 | 非财务条款解读 | 政策、合同、活动、说明书的关键限制词句显示日文原文证据、中文说明与人工核对动作；文书版本日期线索与官方现行有效性严格分开 | 纯规则抽取，不作机器全文翻译或法律实时验证 |
 | OCR | 按需实验模型、同 R2 对象结果缓存、失败和空响应去重、人工修正；个人与本应用 UTC 额度双重硬上限，24h 卡住需用户再次确认 | Mock 测试通过；**真实脱敏日本文书准确率、Neurons/张仍未验证**，默认禁用 |
 
-当前最后一轮代码 CI：主工程 **80/80 项 Node + 11/11 项 SQLite/API 契约** 通过；GitHub Actions 对主工程执行语法、测试及 Vue 构建。所有目标 PR 均必须在最新提交 CI 通过后才可视为通过对应 CI，不能以旧提交结果代替。
+当前最后一轮安全代码 CI：主工程 **88/88 项 Node + 11/11 项 SQLite/API 契约** 通过；GitHub Actions 对主工程执行语法、测试及 Vue 构建。所有目标 PR 均必须在最新提交 CI 通过后才可视为通过对应 CI，不能以旧提交结果代替。
 
 ## 仍未完成的功能 / 真正上线阻塞
 
@@ -202,3 +202,8 @@
 - 只读新发现：Cloudflare Zones 与 Workers Custom Domains 均为空，现有 `wrangler.jsonc` 禁用 workers.dev，故没有现成可访问正式域名。受限首次验收部署需用户明确批准 Worker 使用唯一 workers.dev 正式域名，并保持 preview_urls:false。
 - 为强隔离，建议在审批后**新建一个独立私有 R2 Bucket**，不与既有 HomeFlow/家計簿 Worker 共桶；R2 Bucket 数量目前在官方包含量内，但全账号容量、Class A/B、费用依然未知（Billing Read 403）。
 - **完整 v0.11 正式上线仍 NO-GO**（OCR 真样本、真实服务联调、知学双人私密句卡、成员退出、Google OAuth/真机等未完成）。可申请的是关掉这些功能的 core-only 云端验收，而不是宣称正式产品全功能上线。
+
+## 2026-11-11 部署计划冲突消除（本次纯文档提交待 CI）
+
+- 明确区分 core-only 首次正式云资源验收和完整 v0.11 发布。首轮仅核心 Worker、专用空 D1、一个独立私有 R2；绝不合并三个目标 App PR 或配置桥接服务。Google/Gmail/Workers AI 默认关闭。
+- 当前 Cloudflare 无 Zone 时 workers_dev=false 不会产生可访问地址；启用正式 Worker 的 workers.dev 需要与创建资源、D1 迁移和合成数据写入一起明确审批，且保持 preview_urls=false。完整功能与 iPhone 真机未通过仍不得称为正式上线。
