@@ -1,3 +1,10 @@
+## HomeFlow 用户身份映射完成（2026-11-12 JST）
+
+- 用户亲自确认 HomeFlow 登录名。通过生产 D1 对 **文书助手** 和 **HomeFlow** 的登录字段做相同规范化的精确匹配，两端均恰好匹配 1 个处于有效状态的 owner；匹配到的 HomeFlow 用户本身是家庭成员。账号标识和邮箱不提交到公开 GitHub。
+- Cloudflare HomeFlow 正式 Worker 设置 `JPDA_BRIDGE_ALLOWED_USERS` 为精确匹配的**单个**成员 ID，`JPDA_BRIDGE_ENABLED=true`；源端文书助手 `BRIDGE_USER_MAP` 中补充该用户的 homeflow 身份，同时保留原本 kakebo/zhixue 的 owner 单账号映射。所有配对 HMAC Secret 均保留，未共享至前端/GitHub。
+- HomeFlow 仍严格执行 5 分钟签名时效、HMAC、幂等键、成员身份校验，以及私人文书只创建私人任务等限制。实际每条任务需要用户在文书助手主动确认；**本次没有创建任务/积分或改动现有家庭数据**。
+- 启用后 HomeFlow 未签名 POST 应返回 `401`，不再是旧状态的 `404`；`.github/workflows/live-production-smoke.yml` 已跟随状态调整。无签名拒绝不代表真实签名写入已验收，真实业务需使用经本人确认的非敏感样本做端到端回归。
+
 ## 2026-11-12（JST）最终续接：GitHub 自动发布与三端接收配置
 
 - 文书助手 GitHub main 已部署到唯一正式 Worker，Cloudflare Workers Builds 仅在 main 业务代码变更时自动测试+构建+部署（Preview 关闭），最新基线 Cloudflare Version `730f117b-6975-4d4b-af71-b002de0582cd`。真实 Worker 同账号 Service Bindings：HomeFlow 与知学；家計簿通过 HTTPS Pages 受限接收。没有新增 Worker、D1、R2、Cron。
