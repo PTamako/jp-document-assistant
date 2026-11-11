@@ -17,7 +17,7 @@ class OpenApiContractTests(unittest.TestCase):
         self.assertEqual(SPEC.count('\ncomponents:\n'),1)
         self.assertNotIn('\n}\n      responses:',SPEC)
         paths = re.findall(r'^  (/api/[^:\n]+):\s*$', SPEC, re.M)
-        self.assertEqual(len(paths),50)
+        self.assertEqual(len(paths),53)
         self.assertEqual(len(paths),len(set(paths)))
         self.assertNotIn('/api/auth/start',paths)
         self.assertNotIn('/api/auth/complete',paths)
@@ -30,13 +30,18 @@ class OpenApiContractTests(unittest.TestCase):
         self.assertIn("path==='/api/storage/cleanup-orphans'",WORKER)
         self.assertIn("path==='/api/auth/bootstrap'",WORKER)
         self.assertIn('cleanupOrphans(env,p)',WORKER)
+        for endpoint in ['/api/auth/sessions','/api/auth/sessions/revoke','/api/auth/sessions/revoke-others']:
+            self.assertIn(endpoint,paths)
+            self.assertIn("path==='"+endpoint+"'",WORKER)
 
     def test_operations_are_unique_and_security_boundary_documented(self):
         operations = re.findall(r'^    (get|post|patch|put|delete):\s*$', SPEC, re.M)
         ids=re.findall(r'^      operationId:\s*(\S+)\s*$',SPEC,re.M)
-        self.assertEqual(len(operations),51)
-        self.assertEqual(len(ids),51)
+        self.assertEqual(len(operations),54)
+        self.assertEqual(len(ids),54)
         self.assertEqual(len(ids),len(set(ids)))
+        for operation in ['listOwnSessions','revokeOwnSession','revokeOtherOwnSessions']:
+            self.assertIn(operation,ids)
         self.assertIn('X-CSRF-Token',SPEC)
         self.assertIn('Idempotency-Key',SPEC)
         self.assertIn('DELETE_FOREVER',SPEC)
