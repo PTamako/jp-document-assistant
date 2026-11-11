@@ -8,7 +8,7 @@ const ci=read('.github/workflows/ci.yml');
 const worker=read('worker/index.js');
 const security=read('worker/security.js');
 
-test('approved production Wrangler only targets dedicated D1/R2 and excludes all previews, cron and extra services',()=>{
+test('approved production Wrangler only targets dedicated D1/R2 and excludes all previews, cron and new billable resources',()=>{
  assert.equal(wrangler.name,'jp-document-assistant');
  assert.equal(wrangler.main,'worker/index.js');
  assert.equal(wrangler.assets?.directory,'./dist');
@@ -20,6 +20,11 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes all
  assert.equal(wrangler.r2_buckets?.length,1);
  assert.equal(wrangler.r2_buckets[0].binding,'DOCUMENTS');
  assert.equal(wrangler.r2_buckets[0].bucket_name,'jp-document-assistant-private');
+ assert.deepEqual(wrangler.services,[
+  {binding:'HOMEFLOW_BRIDGE_SERVICE',service:'homeflow'},
+  {binding:'ZHIXUE_BRIDGE_SERVICE',service:'it-study-platform'}
+ ]);
+ assert.doesNotMatch(JSON.stringify(wrangler),/JPDA_BRIDGE_ALLOWED_USER|JPDA_BRIDGE_STUDY_ACTOR_ID|BRIDGE_USER_MAP/);
  assert.equal(wrangler.vars?.R2_BUCKET_NAME,'jp-document-assistant-private');
  assert.equal(wrangler.ai?.binding,'AI');
  assert.equal(wrangler.vars?.ENABLE_EXPERIMENTAL_OCR,'true');

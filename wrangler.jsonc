@@ -9,6 +9,12 @@
   "assets": {"directory":"./dist", "binding":"ASSETS", "not_found_handling":"single-page-application"},
   "d1_databases": [{"binding":"DB", "database_name":"jp-document-assistant", "database_id":"22a671c0-3f6c-4707-adf1-b24ac95330c6", "migrations_dir":"migrations"}],
   "r2_buckets": [{"binding":"DOCUMENTS", "bucket_name":"jp-document-assistant-private"}],
+  // Calls to the two existing Workers use same-account Service Bindings (zero extra Workers).
+  // Each receiving endpoint stays fail-closed without an approved account mapping.
+  "services": [
+    {"binding":"HOMEFLOW_BRIDGE_SERVICE","service":"homeflow"},
+    {"binding":"ZHIXUE_BRIDGE_SERVICE","service":"it-study-platform"}
+  ],
   "ai": {"binding":"AI"},
   "vars": {
     "R2_BUCKET_NAME":"jp-document-assistant-private",
