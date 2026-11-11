@@ -405,17 +405,18 @@ test('simultaneous attachment deletions converge on one physical R2 cleanup',asy
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM deletion_jobs').get().n,0);
 });
 
+
 test('user-selected EML is decoded in RAM, then explicitly imported as private text without R2 reads',async()=>{
   const env=makeEnv(),owner=await boot(env);
   const body=[
-    'From: issuer@example.invalid','Subject: Payment notice',
+    'From: issuer@example.invalid','Subject: =?UTF-8?B?5pSv5omV44GE6YCa55/O?=',
     'MIME-Version: 1.0','Content-Type: text/plain; charset=UTF-8','',
     '納付期限：令和8年11月30日','ご請求金額：1,200円'
   ].join('\r\n');
   const file=new File([body],'mail.eml',{type:'message/rfc822'});
   const parsed=await readLocalText(file);
   assert.equal(parsed.source_type,'mail_forward');
-  assert.equal(env._blobs.size,0);
+  assert.equal(env._blobs.size,0); // File selection / parsing alone does no upload.
   const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
     title:parsed.title,text:parsed.text,source_type:parsed.source_type,retention:'summary'
   }});
