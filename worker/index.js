@@ -191,6 +191,9 @@ async function handleFileImport(request,env,p){
   if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(mime))bad('仅支持 JPEG/PNG/WebP/PDF');
   const bytes=new Uint8Array(await file.arrayBuffer());
   if(!fileSignature(mime,bytes))bad('文件内容与声明类型不一致','INVALID_FILE',415);
+  const extractedValue=form.get('extracted_text');
+  if(extractedValue!==null&&(typeof extractedValue!=='string'||extractedValue.length>100000))bad('提取文字无效','INVALID_TEXT',413);
+  const extracted=typeof extractedValue==='string'?extractedValue.trim():'';
   const sha=await hashStringBytes(bytes),now=isoNow();
   const existingDoc=await dbFirst(env.DB,`SELECT id FROM documents WHERE owner_id=? AND content_sha256=? AND lifecycle='active'`,p.user_id,sha);
   if(existingDoc)return json({ok:true,reused:true,document_id:existingDoc.id});
@@ -203,14 +206,16 @@ async function handleFileImport(request,env,p){
     catch(err){await dbRun(env.DB,"UPDATE storage_objects SET state='delete_failed',updated_at=? WHERE id=?",isoNow(),oid);bad('文件存储失败，请稍后重试','UPLOAD_FAILED',503);}
   }
   try{await batch(env.DB,[
-    ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,'private','other',label,'original',sha,'needs_review',now,now],
+    ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,extracted_text_ja,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,'private','other',label,extracted||null,'original',sha,extracted?'draft':'needs_review',now,now],
     ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,mime.startsWith('image/')?'image':'local_file',sha,now],
     ['INSERT INTO attachments(id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',randomToken(16),id,oid,label,0,sha,now,now]
   ]);}catch{
     // If a transient D1 failure follows a successful PUT, storage_objects is retained for compensating cleanup.
     bad('已上传但保存索引失败，请联系管理员检查存储清理','METADATA_FAILED',503);
   }
-  return json({ok:true,saved:true,document_id:id,ocr_status:'not_available',message:'原件已私有保存；图片/PDF 自动 OCR 尚未启用，可粘贴文字继续解析。'},201);
+  if(extracted)await analyzeStored(env,await ownedDocument(env.DB,id,p));
+  return json({ok:true,saved:true,document_id:id,text_layer_used:!!extracted,ocr_status:'not_available',
+    message:extracted?'已使用文件文字层生成待核对字段':'没有可复制文字，需人工输入或手动 OCR'},201);
 }
 async function hashStringBytes(bytes){const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');}
 async function getDocDetail(db,doc){

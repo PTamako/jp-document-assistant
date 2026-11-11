@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick } from 'vue';
 import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
+import { extractPdfText } from './pdf-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
@@ -13,6 +14,7 @@ const cats={salary:'工资／奖金',bank:'银行／信用卡',tax:'税务／缴
 const categoryOptions=Object.entries(cats);
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),localTextInput=ref(null),localImportNote=ref(''),inputMode=ref('text');
+const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original');
 const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),inviteEmail=ref(''),inviteToken=ref('');
 const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
@@ -85,9 +87,21 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){inputMode.value=mode;sheet.value='import';}
-function selectFile(event){const file=event.target.files?.[0];if(!file)return;fileDraft.value=file;sheet.value='import';inputMode.value='file';}
+async function selectFile(event){
+  const file=event.target.files?.[0];if(!file)return;
+  fileDraft.value=file;sheet.value='import';inputMode.value='file';fileText.value='';fileWarning.value='';
+  fileRetention.value=/\.pdf$/i.test(file.name)?'summary':'original';
+  if(!/\.pdf$/i.test(file.name))return;
+  busy.value=true;
+  try{
+    const parsed=await extractPdfText(file);
+    if(fileDraft.value!==file)return;
+    fileText.value=parsed.text;fileWarning.value=parsed.warning;
+  }catch(e){problem(e);fileWarning.value=e.message;}
+  finally{busy.value=false;if(fileInput.value)fileInput.value.value='';}
+}
 async function importLocalText(event){
   const file=event.target.files?.[0];if(!file)return;
   busy.value=true;try{
@@ -105,9 +119,16 @@ async function importDocument(){
       result=await api('/api/documents/import/text',{method:'POST',body:{title:textDraft.title,text:textDraft.text,source_type:textDraft.source_type,retention:textDraft.retention}});
     }else{
       if(!fileDraft.value)throw new Error('请先选择照片或 PDF');
-      const compressed=await compressImage(fileDraft.value);
-      const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');
-      result=await api('/api/documents/import/file',{method:'POST',body:form,form:true});
+      if(fileRetention.value!=='original'){
+        if(!fileText.value.trim())throw new Error('没有文字层，请人工填写或明确选择保留原件');
+        result=await api('/api/documents/import/text',{method:'POST',body:{title:fileDraft.value.name,text:fileText.value,
+          source_type:'local_file',retention:fileRetention.value}});
+      }else{
+        const compressed=await compressImage(fileDraft.value);
+        const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');
+        if(fileText.value.trim())form.append('extracted_text',fileText.value);
+        result=await api('/api/documents/import/file',{method:'POST',body:form,form:true});
+      }
     }
     const id=result.document_id;
     const saved=result.saved!==false;
@@ -304,8 +325,8 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
       <div class="grabber"></div>
       <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">照片 / PDF</button></div>
         <template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><div class="upload-box"><button class="secondary" :disabled="busy" @click="localTextInput?.click()">读取本地 .eml 邮件 / .txt 文字文件</button><input ref="localTextInput" type="file" accept=".eml,.txt,message/rfc822,text/plain" class="visually-hidden" @change="importLocalText" /><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><p class="fine-print">仅在本次页面会话中提取文字；不执行邮件 HTML，不抓取远程图片或附件。</p></div><label class="form-label">来源<select v-model="textDraft.source_type"><option value="text">粘贴文本</option><option value="mail_forward">苹果邮件复制 / 转发</option><option value="google_drive">Google Drive 复制</option><option value="local_file">本地文档文本</option></select></label><div class="radio-stack"><label><input v-model="textDraft.retention" type="radio" value="summary" />保存文书文字和分析结果</label><label><input v-model="textDraft.retention" type="radio" value="analyze_only" />仅规则分析，不存储内容</label></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择照片、截图或 PDF'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,application/pdf" class="visually-hidden" @change="selectFile" /></div><p class="fine-print">图片仅在内存中自适应压缩，尽量保护小字清晰度；上传前需明确确认保留原件。OCR 暂未启用。</p></template>
-        <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'?'确认保存原件':'开始处理'}}</button></div></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择照片、截图或 PDF'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,application/pdf" class="visually-hidden" @change="selectFile" /></div><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="fileDraft?.name?.toLowerCase().endsWith('.pdf')" class="form-label">PDF 提取原文（可核对修改）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="扫描页请人工输入原文"></textarea></label><div class="radio-stack"><label v-if="fileDraft?.name?.toLowerCase().endsWith('.pdf')"><input v-model="fileRetention" type="radio" value="analyze_only" />仅分析、不保存</label><label v-if="fileDraft?.name?.toLowerCase().endsWith('.pdf')"><input v-model="fileRetention" type="radio" value="summary" />仅保存文字（不请求 R2）</label><label><input v-model="fileRetention" type="radio" value="original" />保存私有原件到 R2</label></div><p class="fine-print">PDF 优先在本机提取文字层，不自动 OCR，不在本机持久保存。图片仅临时压缩。</p></template>
+        <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
       <template v-else-if="sheet==='filter'"><h2>筛选文书</h2><label class="form-label">可见范围<select v-model="visibilityFilter"><option value="all">全部</option><option value="mine">我拥有的</option><option value="shared">家庭共享</option></select></label><label class="form-label">归档状态<select v-model="archivedFilter"><option value="active">未归档</option><option value="archived">已归档</option><option value="all">全部</option></select></label><label class="form-label">收藏<select v-model="favoriteFilter"><option value="all">全部</option><option value="yes">仅收藏</option></select></label><label class="form-label">创建月份<input type="month" v-model="monthFilter" /></label><button class="primary full" @click="searchDocs">应用筛选</button><h3>文书类型</h3><div class="option-list"><button :class="{chosen:category===''}" @click="category='';searchDocs()">全部类型</button><button v-for="[key,label] in categoryOptions" :key="key" :class="{chosen:category===key}" @click="category=key;searchDocs()">{{label}}</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div></template>
       <template v-else-if="sheet==='field'"><h2>核对原文中的字段</h2><label class="form-label">确认值<input v-model="fieldDraft.value" /></label><label class="form-label">审核操作<select v-model="fieldDraft.state"><option value="confirmed">确认无误</option><option value="corrected">修正为此值</option><option value="rejected">无法确认 / 废弃此候选</option></select></label><label class="check-row"><input type="checkbox" v-model="fieldDraft.confirmRemote" /> 若该字段已经联动，我了解修改仅影响本 App；需要去目标 App 核对远端记录</label><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="saveField">保存</button></div></template>
       <template v-else-if="sheet==='detailsMenu'"><h2>文书操作</h2><button class="settings-line" @click="sheet='shareConfirm'">{{current.visibility==='private'?'主动分享给家人':'改为仅自己'}} <span>›</span></button><button class="settings-line" @click="toggleDocument('favorite',!current.favorite)">{{current.favorite?'取消收藏':'收藏文书'}} <span>›</span></button><button class="settings-line" @click="toggleDocument('archived',!current.archived_at)">{{current.archived_at?'取消归档':'归档（停止首页提示）'}} <span>›</span></button><button class="settings-line danger-text" @click="askTrash">移入回收站 <span>›</span></button><div class="sheet-actions"><button class="secondary full" @click="sheet=''">取消</button></div></template>
