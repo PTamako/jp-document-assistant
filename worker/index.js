@@ -131,6 +131,13 @@ function listShape(d){return {id:d.id,category:d.category,title:d.title,visibili
 async function analyzeStored(env,doc,force=false){
   if(doc.analysis_status==='needs_review' && !force)return {cached:true};
   if(doc.import_mode==='analyze_only')bad('仅分析内容不长期保存');
+  // This is the final guard across ALL callers, not just the source-text editor.
+  // Never regenerate a candidate/idempotency key after any remote attempt.
+  const emitted=await dbFirst(env.DB,`SELECT COUNT(*) count FROM integration_links
+    WHERE candidate_id IN (SELECT id FROM action_candidates WHERE document_id=?)
+      AND attempt_count>0`,doc.id);
+  if(Number(emitted?.count||0)>0)
+    bad('已尝试过跨应用联动，重新解析会更换候选幂等键；请保留已同步记录','INTEGRATION_HISTORY_LOCKED',409);
   if(!doc.extracted_text_ja)bad('尚无可处理的日文文字。图片 OCR 未接入，请先粘贴文字','OCR_NOT_READY',422);
   const oldCount=await dbFirst(env.DB,`SELECT COUNT(*) count FROM document_fields WHERE document_id=? AND review_state!='unreviewed'`,doc.id);
   if(oldCount?.count>0)bad('已存在人工审核字段，不能直接覆盖','REVIEW_LOCKED',409);

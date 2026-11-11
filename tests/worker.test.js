@@ -888,3 +888,33 @@ test('Google Drive Picker source provenance is recorded only after explicit orig
  assert.equal(denied.data.code,'INVALID_SOURCE');
  assert.equal(env._blobs.size,before);
 });
+
+
+test('direct reanalysis cannot destroy remote attempts or regenerate idempotency keys',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const created=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+  retention:'summary',source_type:'text',
+  text:'納付金額：1,200円\n納付期限：令和8年11月30日（月)'
+ }});
+ assert.equal(created.response.status,201);
+ const id=created.data.document_id;
+ let candidates=(await req(env,`/api/documents/${id}/candidates`,auth(owner))).data.items;
+ assert.ok(candidates.length);
+ const c=candidates[0],actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ const target=c.candidate_kind==='finance'?'kakebo':c.candidate_kind==='homeflow_task'?'homeflow':'zhixue';
+ const linkId='link-lock-'+id;
+ env.DB.sql.prepare(`INSERT INTO integration_links(id,candidate_id,target,idempotency_key,state,attempt_count,updated_at)
+   VALUES(?,?,?,?,?,?,?)`).run(linkId,c.id,target,'jda:'+target+':'+c.id,'failed',1,new Date().toISOString());
+ // Reproduce a future client forcing analysis instead of using the source-text editor.
+ env.DB.sql.prepare('UPDATE documents SET analysis_status=? WHERE id=?').run('draft',id);
+ const blocked=await req(env,`/api/documents/${id}/analyze`,{
+  method:'POST',...auth(owner),data:{}
+ });
+ assert.equal(blocked.response.status,409,JSON.stringify(blocked.data));
+ assert.equal(blocked.data.code,'INTEGRATION_HISTORY_LOCKED');
+ candidates=(await req(env,`/api/documents/${id}/candidates`,auth(owner))).data.items;
+ assert.ok(candidates.some(item=>item.id===c.id));
+ const preserved=env.DB.sql.prepare('SELECT id,attempt_count FROM integration_links WHERE id=?').get(linkId);
+ assert.equal(preserved.id,linkId);
+ assert.equal(preserved.attempt_count,1);
+});

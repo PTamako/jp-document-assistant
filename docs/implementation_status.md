@@ -90,3 +90,5 @@
 - 修正日历订阅新增时遗留的错位 `change-password`、重复 `components`、孤立的响应对象。保留 50 条真实路径与 51 个 operationId。
 - 新增 YAML 解析器真实读取 OpenAPI 3.1 文档，CI 会拒绝不完整语法、重复键，并检验 Google Drive 来源、OCR 手动重试及 UTC 预算的响应契约。
 - 此次修改尚需以实际最新 GitHub Actions 的完整结果验收；不自动部署或迁移生产数据。
+
+- 保护联动幂等历史：统一 `analyzeStored()` 内禁止对已经发出过远程请求的文书重新生成候选 ID；即使通过未来新增的重新分析入口，也不能抹除目标 App 的既有同步记录。新增直达 API 回归测试，最新 CI 仍需核验。
