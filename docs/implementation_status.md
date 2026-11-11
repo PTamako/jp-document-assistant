@@ -110,3 +110,9 @@
 - 修复整个文书已进回收站后，仍能通过独立备份原件路径读取原件的问题。
 - 新增 Mock R2 丢失/补传故障及回收站原件访问拒绝两项测试。尚未经过真实 R2/D1 环境验收。
 - 仅修改现有 Draft PR；生产资源、目标 App 均未改动。
+
+## 2026-11-11 上线计划与 Google Picker CSP 续作（本次提交待 CI）
+
+- 新增 docs/production_deployment_plan.md：记录已核实的 6 Worker / 6 D1 / 2 私有 R2、全账号账单缺 Billing Read 因而未知、生产资源审批、Secrets、迁移命令、故障隔离和回滚，以及真实验收硬门槛。
+- 修复 Google Picker 官方按需脚本/文件读取被默认 CSP 拦截；仅允许已知 Google OAuth/Picker 脚本、框架与 Drive API 来源，保留 object-src none、frame-ancestors none；新增静态响应 CSP 回归测试。真 Google OAuth/iPhone 仍需审批后验收。
+- 未创建任何 Cloudflare 资源、Preview、Cron 或生产写入；四份 PR 均保持 Draft。

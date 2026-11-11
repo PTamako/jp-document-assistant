@@ -1001,3 +1001,21 @@ test('trashed document original is not downloadable through backup endpoint',asy
   assert.equal((await req(env,'/api/documents/'+id+'/trash',{method:'POST',...auth(owner),data:{}})).response.status,200);
   assert.equal((await req(env,path,auth(owner))).response.status,404);
 });
+
+
+test('Google Picker CSP allows only explicitly trusted Google origins',async()=>{
+  const env=makeEnv();
+  const page=await req(env,'/');
+  assert.equal(page.response.status,200);
+  const csp=page.response.headers.get('Content-Security-Policy');
+  assert.ok(csp);
+  assert.match(csp,/script-src 'self' https:\/\/accounts\.google\.com https:\/\/apis\.google\.com;/);
+  assert.match(csp,/connect-src 'self' https:\/\/www\.googleapis\.com https:\/\/accounts\.google\.com https:\/\/oauth2\.googleapis\.com https:\/\/apis\.google\.com;/);
+  assert.match(csp,/frame-src 'self' blob: https:\/\/accounts\.google\.com https:\/\/docs\.google\.com https:\/\/drive\.google\.com;/);
+  assert.match(csp,/object-src 'none'/);
+  assert.match(csp,/frame-ancestors 'none'/);
+  assert.doesNotMatch(csp,/unsafe-eval|\*/);
+  const unauthorized=await req(env,'/api/health');
+  assert.equal(unauthorized.response.status,200);
+  assert.equal(unauthorized.response.headers.get('Cache-Control'),'no-store');
+});
