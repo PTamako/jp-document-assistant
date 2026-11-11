@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import app from '../worker/index.js';
 import {hmacHex} from '../worker/security.js';
+import {createZip} from '../web/src/zip.js';
+import {readBackup,restoreBatch} from '../web/src/backup-client.js';
 
 if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
@@ -255,4 +257,58 @@ test('a second use of an invite cannot create a user, including racing join atte
   assert.deepEqual([a.response.status,b.response.status].sort(),[201,409]);
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) count FROM users').get().count,2);
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) count FROM password_credentials').get().count,2);
+});
+
+
+test('ZIP + original R2 roundtrip restores missing originals without duplicating metadata',async()=>{
+  const source=makeEnv(),owner=await boot(source);
+  const bytes=new Uint8Array([255,216,255,224,10,20,30,40]);
+  const form=new FormData();form.append('file',new File([bytes],'original.jpg',{type:'image/jpeg'}));form.append('retention','original');
+  const imported=await req(source,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+  assert.equal(imported.response.status,201);
+  const sourceId=imported.data.document_id;
+  const archive=(await req(source,'/api/backups/export?scope=all',auth(owner))).data;
+  const a=archive.documents[0].attachments[0];
+  a.backup_path=`originals/${sourceId}/${a.id}.jpg`;
+  archive.includes_originals=true;
+  const original=await req(source,`/api/backups/original/${sourceId}/${a.id}`,auth(owner));
+  assert.equal(original.response.status,200);
+  const originalBytes=new Uint8Array(await original.response.arrayBuffer());
+  const zip=createZip([{name:'manifest.json',bytes:JSON.stringify(archive)},{name:a.backup_path,bytes:originalBytes}]);
+  const parsed=await readBackup(new File([zip],'family.zip',{type:'application/zip'}));
+  assert.equal(parsed.data.documents.length,1);
+  const target=makeEnv(),restoreOwner=await boot(target);
+  const api=async (path,options={})=>{
+    const isForm=options.body instanceof FormData;
+    const r=await req(target,path,{method:options.method||'GET',...auth(restoreOwner),
+      ...(isForm?{form:options.body}:{data:options.body})});
+    if(!r.response.ok)throw Error(`${path}: ${JSON.stringify(r.data)}`);
+    return r.data;
+  };
+  // Simulate a previous metadata-only restore. A later ZIP containing originals
+  // must still upload those originals, not skip them as a duplicate document.
+  const metadata=await api('/api/backups/import-confirm',{method:'POST',body:{...archive,confirm:'RESTORE_METADATA'}});
+  assert.equal(metadata.restored.length,1);
+  const first=await restoreBatch(api,parsed,true);
+  assert.equal(first.metadata_restored,0);
+  assert.equal(first.already_existed,1);
+  assert.equal(first.originals_restored,1);
+  assert.deepEqual(first.failures,[]);
+  const docId=metadata.restored[0];
+  const saved=(await api(`/api/documents/${docId}`)).document;
+  assert.equal(saved.attachments.length,1);
+  const savedId=saved.attachments[0].id;
+  const read=await req(target,`/api/documents/${docId}/attachments/${savedId}/content`,auth(restoreOwner));
+  assert.deepEqual(new Uint8Array(await read.response.arrayBuffer()),bytes);
+  const again=await restoreBatch(api,parsed,true);
+  assert.equal(again.originals_restored,0);
+  assert.equal(again.already_restored_originals,1);
+  assert.equal(target._blobs.size,1);
+  // Simulate a lost physical R2 object while metadata remains. A verified user
+  // backup must recover bytes instead of falsely reporting already-restored.
+  const key=[...target._blobs.keys()][0];target._blobs.delete(key);
+  const recovered=await restoreBatch(api,parsed,true);
+  assert.equal(recovered.originals_restored,1);
+  assert.equal(target._blobs.size,1);
+  assert.deepEqual(target._blobs.get(key),bytes);
 });

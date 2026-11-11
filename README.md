@@ -4,7 +4,7 @@
 
 ## 当前可运行的代码
 
-- Vue 3 / Vite 移动端 SPA：双人独立登录、今日摘要、文书库、字段核验、原文与原件按需查看、收藏/归档、搜索、回收站、附件操作、备份/恢复界面和 iPhone 安全区样式。**不启用缓存私人资料的 Service Worker**。
+- Vue 3 / Vite 移动端 SPA：双人独立登录、单家庭与双人上限数据库约束、今日摘要、文书库、字段核验、原文与原件按需查看、收藏/归档、搜索、回收站、附件操作、备份/恢复界面和 iPhone 安全区样式。**不启用缓存私人资料的 Service Worker**。
 - Cloudflare Workers API + D1：一次性初始化、邀请加入、14 天可撤销会话、HttpOnly Cookie/CSRF/登录限速，私人/共享文书隔离，日文文字规则抽取，和历转换与星期复核、金额取证、人工修改；OCR 原图不会被当作已识别。
 - 私有 R2：图片/PDF 明确确认后上传、前端内存压缩、内容哈希去重、按需 GET、单附件/整份回收站与最后引用的永久物理删除，失败保留待清理状态并支持重试；异常上传的对象可由所有者手动执行小批清理，不使用 R2 LIST。
 - 每批最多五份文书的 JSON/ZIP 备份；可选 AES-256-GCM + PBKDF2 加密、原件 SHA-256 校验、从备份确认恢复文书和附件；不自动重写其他 App。
@@ -25,7 +25,7 @@ npm run build
 
 ## 云端环境（**未部署**）
 
-1. 使用新的正式 D1，**不能用家計簿、HomeFlow、知学的数据库**，对新库按 0001 → 0002 → 0003 → 0004 顺序执行迁移，执行前先备份和演练。本仓库中 `wrangler.jsonc` 的 D1 和 R2 ID 是占位符，部署前须由所有者审核并填入真实绑定。
+1. 使用新的正式 D1，**不能用家計簿、HomeFlow、知学的数据库**，对新库按 0001 → 0002 → 0003 → 0004 → 0005 顺序执行迁移，执行前先备份和演练。本仓库中 `wrangler.jsonc` 的 D1 和 R2 ID 是占位符，部署前须由所有者审核并填入真实绑定。
 2. 单个正式 Worker 的静态资源托管 `dist/`，绑定 `DB`、私有 `DOCUMENTS` R2（可以使用已有 Bucket 的受限制前缀），不得为本项目建立 Preview。
 3. 密钥仅写入 Worker Secrets，**不要提交至 GitHub**：`SESSION_HMAC_KEY`（高熵随机）、`BOOTSTRAP_ADMIN_TOKEN`（只用于首次管理员初始化）。可选的服务桥需要分别设置 `KAKEBO_BRIDGE_SECRET`、`HOMEFLOW_BRIDGE_SECRET`、`ZHIXUE_BRIDGE_SECRET` 和对应 `*_BRIDGE_SERVICE` / 固定 HTTPS `*_BRIDGE_URL`；双人身份映射保存在仅服务端可见的 `BRIDGE_USER_MAP` Secret。
 4. 视觉 OCR 默认不启用。只有样本验证且明确接受预算后再设 `ENABLE_EXPERIMENTAL_OCR=true`、绑定 `AI`，使用保守的 `OCR_CALLS_PER_USER_DAY`。**模型调用可能消耗同一个 Cloudflare 账户的共享免费用量，不能保证零账单**。

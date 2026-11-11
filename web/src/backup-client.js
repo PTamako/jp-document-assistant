@@ -78,9 +78,10 @@ export async function restoreBatch(api,backup,confirm){
   const preview=await api('/api/backups/import-preview',{method:'POST',body:data});
   if(!confirm)return {preview:preview.preview};
   const commit=await api('/api/backups/import-confirm',{method:'POST',body:{...data,confirm:'RESTORE_METADATA'}});
-  const failures=[];let uploaded=0;
+  const failures=[];let uploaded=0,already_restored_originals=0;
   for(const m of commit.index_map||[]){
-    if(m.skipped)continue;
+    // A metadata-only restore may already exist. Restore its missing original
+    // attachments as well: metadata dedupe must not suppress R2 restoration.
     const entry=data.documents[m.index];
     for(const a of entry.attachments||[]){
       if(!a.backup_path)continue;
@@ -88,9 +89,10 @@ export async function restoreBatch(api,backup,confirm){
         const bytes=members.get(a.backup_path);
         const form=new FormData();form.append('file',new File([bytes],a.file_label||'original',{type:a.mime}));
         form.append('sha256',a.object_sha256);form.append('label',a.file_label||'原件');form.append('sort_order',String(a.sort_order||0));
-        await api(`/api/documents/${m.id}/attachments/restore-upload`,{method:'POST',body:form,form:true});uploaded++;
+        const outcome=await api(`/api/documents/${m.id}/attachments/restore-upload`,{method:'POST',body:form,form:true});
+        if(outcome.already_restored)already_restored_originals++;else uploaded++;
       }catch{failures.push({document_id:m.id,attachment_id:a.id});}
     }
   }
-  return {metadata_restored:commit.restored.length,already_existed:commit.skipped.length,originals_restored:uploaded,failures};
+  return {metadata_restored:commit.restored.length,already_existed:commit.skipped.length,originals_restored:uploaded,already_restored_originals,failures};
 }

@@ -23,8 +23,18 @@ export async function restoreUpload(request,env,p,id){
   if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(file.type))bad('原件类型不支持');
   const bytes=new Uint8Array(await file.arrayBuffer());
   if(!fileSign(file.type,bytes)||await sha256(bytes)!==expected)bad('原件内容与备份校验值不一致','HASH_MISMATCH',422);
-  const old=await first(env.DB,"SELECT id FROM attachments WHERE document_id=? AND sha256=? AND state='active'",id,expected);
-  if(old)return json({ok:true,already_restored:true,attachment_id:old.id});
+  const old=await first(env.DB,`SELECT a.id,o.object_key,o.state object_state FROM attachments a
+    LEFT JOIN storage_objects o ON o.id=a.object_id
+    WHERE a.document_id=? AND a.sha256=? AND a.state='active'`,id,expected);
+  if(old){
+    if(old.object_state!=='ready'||!old.object_key)bad('原件正在删除或尚未就绪，不能覆盖','ORIGINAL_NOT_READY',409);
+    // D1 metadata alone does not prove the physical R2 object exists. Only an
+    // explicit user-provided backup with a verified digest can repair this key.
+    if(await env.DOCUMENTS.head(old.object_key))return json({ok:true,already_restored:true,attachment_id:old.id});
+    try{await env.DOCUMENTS.put(old.object_key,bytes,{httpMetadata:{contentType:file.type}});}
+    catch{return json({ok:false,error:'R2_RESTORE_FAILED'},503);}
+    return json({ok:true,restored_missing:true,attachment_id:old.id});
+  }
   let obj=await first(env.DB,"SELECT id,object_key FROM storage_objects WHERE owner_id=? AND sha256=? AND mime=? AND quality_profile='backup-restore' AND state='ready'",p.user_id,expected,file.type);
   const now=isoNow();
   if(!obj){
