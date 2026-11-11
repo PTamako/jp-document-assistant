@@ -1228,3 +1228,53 @@ test('confirmed Gmail text import remains private and deduplicates without any i
   assert.equal(repeated.data.document_id,first.data.document_id);
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,1);
 });
+
+
+test('append attachment dedup repairs missing R2; failures never claim reused success',async()=>{
+ const env=makeEnv(),p=await boot(env),bytes=new Uint8Array([255,216,255,224,33,34,35,36]);
+ const t=await req(env,'/api/documents/import/text',{method:'POST',...auth(p),
+   data:{retention:'summary',source_type:'text',text:'申請書 2026年12月1日'}});
+ assert.equal(t.response.status,201);
+ const id=t.data.document_id;
+ const form=()=>{const f=new FormData();f.append('file',new File([bytes],'page.jpg',{type:'image/jpeg'}));f.append('retention','original');return f;};
+ const first=await req(env,'/api/documents/'+id+'/attachments',{method:'POST',...auth(p),form:form()});
+ assert.equal(first.response.status,201,JSON.stringify(first.data));
+ const key=[...env._blobs.keys()][0],aid=first.data.attachment_id;
+ env._blobs.delete(key);
+ const savePut=env.DOCUMENTS.put;
+ env.DOCUMENTS.put=async()=>{throw Error('injected R2 error')};
+ const failed=await req(env,'/api/documents/'+id+'/attachments',{method:'POST',...auth(p),form:form()});
+ assert.equal(failed.response.status,503,JSON.stringify(failed.data));assert.equal(failed.data.code,'R2_REPAIR_FAILED');
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM attachments WHERE document_id=?').get(id).n,1);
+ env.DOCUMENTS.put=savePut;
+ const result=await req(env,'/api/documents/'+id+'/attachments',{method:'POST',...auth(p),form:form()});
+ assert.equal(result.response.status,200,JSON.stringify(result.data));
+ assert.equal(result.data.reused,true);assert.equal(result.data.attachment_id,aid);
+ assert.deepEqual(env._blobs.get(key),bytes);
+});
+
+test('append page reuses owner object only after safe repair; different owners cannot share objects',async()=>{
+ const env=makeEnv(),p=await boot(env),bytes=new Uint8Array([255,216,255,224,51,52,53,54]);
+ const doc=async(text,actor=p)=>{const r=await req(env,'/api/documents/import/text',{
+   method:'POST',...auth(actor),data:{source_type:'text',retention:'summary',text}});assert.equal(r.response.status,201);return r.data.document_id;};
+ const f=()=>{const form=new FormData();form.append('file',new File([bytes],'page.jpg',{type:'image/jpeg'}));form.append('retention','original');return form;};
+ const a=await doc('お知らせ A');
+ const first=await req(env,'/api/documents/'+a+'/attachments',{method:'POST',...auth(p),form:f()});
+ assert.equal(first.response.status,201);
+ const key=[...env._blobs.keys()][0];env._blobs.delete(key);
+ const b=await doc('お知らせ B');
+ const used=await req(env,'/api/documents/'+b+'/attachments',{method:'POST',...auth(p),form:f()});
+ assert.equal(used.response.status,201,JSON.stringify(used.data));
+ assert.deepEqual(env._blobs.get(key),bytes);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,1);
+ const invite=await req(env,'/api/household/invites',{method:'POST',...auth(p),data:{invitee_email:'other-owner@example.invalid'}});
+ assert.equal(invite.response.status,201);
+ const join=await req(env,'/api/household/join',{method:'POST',data:{email:'other-owner@example.invalid',invite_token:invite.data.invite_token,password:'other-owner-secret123'}});
+ assert.equal(join.response.status,201,JSON.stringify(join.data));
+ const other={cookie:join.response.headers.get('set-cookie').split(';')[0],csrf:join.data.csrf_token};
+ const c=await doc('他人の私的な資料',other);
+ const separately=await req(env,'/api/documents/'+c+'/attachments',{method:'POST',...auth(other),form:f()});
+ assert.equal(separately.response.status,201,JSON.stringify(separately.data));
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,2);
+ assert.equal(env._blobs.size,2);
+});

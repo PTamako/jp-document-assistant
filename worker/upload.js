@@ -26,12 +26,28 @@ export async function attachPage(request,env,p,id){
   const bytes=new Uint8Array(await file.arrayBuffer());
   if(!validSignature(mime,bytes))bad('文件签名与类型不匹配','INVALID_MEDIA',415);
   const digest=await sha(bytes),label=String(file.name||'文书页').replace(/[\x00-\x1f]/g,'').slice(0,150);
-  const prior=await first(env.DB,`SELECT a.id FROM attachments a JOIN storage_objects o ON o.id=a.object_id
+  const prior=await first(env.DB,`SELECT a.id,o.object_key,o.state object_state FROM attachments a
+    JOIN storage_objects o ON o.id=a.object_id
     WHERE a.document_id=? AND o.sha256=? AND a.state='active'`,id,digest);
-  if(prior)return json({ok:true,reused:true,attachment_id:prior.id});
+  if(prior){
+    if(prior.object_state!=='ready')bad('原件正在清理或尚未就绪，请先核对该文书','ORIGINAL_NOT_READY',409);
+    // Explicit user upload carries verified bytes. A D1 ready row is not
+    // proof that R2 still holds the object; repair before claiming reuse.
+    try{
+      if(!(await env.DOCUMENTS.head(prior.object_key)))
+        await env.DOCUMENTS.put(prior.object_key,bytes,{httpMetadata:{contentType:mime}});
+    }catch{bad('R2 原件缺失或补传失败，未确认附件复用成功','R2_REPAIR_FAILED',503);}
+    return json({ok:true,reused:true,attachment_id:prior.id});
+  }
   const quality='web-upload-v1';
   let obj=await first(env.DB,"SELECT id,object_key FROM storage_objects WHERE owner_id=? AND sha256=? AND mime=? AND quality_profile=? AND state='ready'",p.user_id,digest,mime,quality);
   const now=isoNow();
+  if(obj){
+    try{
+      if(!(await env.DOCUMENTS.head(obj.object_key)))
+        await env.DOCUMENTS.put(obj.object_key,bytes,{httpMetadata:{contentType:mime}});
+    }catch{bad('旧扫描页原件丢失且补传失败，未创建新附件','R2_REPAIR_FAILED',503);}
+  }
   if(!obj){
     const oid=randomToken(16),key=`${p.user_id}/${randomToken(20)}`;
     try{await run(env.DB,'INSERT INTO storage_objects(id,owner_id,bucket,object_key,sha256,bytes,mime,quality_profile,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',oid,p.user_id,env.R2_BUCKET_NAME||'private',key,digest,bytes.length,mime,quality,'uploading',now,now);}

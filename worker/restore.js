@@ -45,6 +45,9 @@ export async function restoreUpload(request,env,p,id){
     catch{return json({ok:false,error:'R2_RESTORE_FAILED'},503);}
     return json({ok:true,restored_missing:true,attachment_id:old.id});
   }
+  const attachmentCount=await first(env.DB,'SELECT COUNT(*) n FROM attachments WHERE document_id=?',id);
+  if(Number(attachmentCount?.n||0)>=30)
+    bad('每份文书最多30个附件，不能继续恢复新原件','ATTACHMENT_LIMIT',413);
   let obj=await first(env.DB,"SELECT id,object_key FROM storage_objects WHERE owner_id=? AND sha256=? AND mime=? AND quality_profile='backup-restore' AND state='ready'",p.user_id,expected,file.type);
   const now=isoNow();
   if(!obj){
@@ -57,7 +60,7 @@ export async function restoreUpload(request,env,p,id){
   }
   // An owner-scoped, ready D1 row may outlive its physical R2 bytes.
   // A verified user backup must repair missing bytes before making a new link.
-  if(obj && !(await env.DOCUMENTS.head(obj.object_key))){
+  if(obj && Number(attachmentCount?.n||0)<30 && !(await env.DOCUMENTS.head(obj.object_key))){
     try{await env.DOCUMENTS.put(obj.object_key,bytes,{httpMetadata:{contentType:file.type}});}
     catch{bad('原件 R2 丢失且补传失败；未建立附件引用','R2_REPAIR_FAILED',503);}
   }
