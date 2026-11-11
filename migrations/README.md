@@ -1,6 +1,6 @@
 # D1 migrations (initial schema for a NEW standalone application)
 
-Order: `0001_init.sql` then `0002_indexes.sql`. Both scripts are additive initial migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
+Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
 
 **Production safety:** The SQL is tested against local `sqlite3`, **not yet against real D1**. Do not auto-run on production; confirm a backup, current schema, and a production migration plan, and get approval. App-level logic must enforce exactly two users, permissions, imports, 2-phase R2 cleanup, idempotency, and transactional CAS updates. The SQLite trigger additionally blocks a third non-left account in the same household.
 

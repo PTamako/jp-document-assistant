@@ -13,6 +13,7 @@ const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_LIST = 10;
 const fieldsOf = ['due_date','amount_jpy','net_salary'];
 const fullDate = /^(?:19|20)\d{2}-\d{2}-\d{2}$/;
+const validCivilDate = value => fullDate.test(value) && Number.isFinite(Date.parse(value+'T00:00:00Z')) && new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
 const dbRun = (db,sql,...args) => db.prepare(sql).bind(...args).run();
 const dbFirst = (db,sql,...args) => db.prepare(sql).bind(...args).first();
 const dbAll = async (db,sql,...args) => (await db.prepare(sql).bind(...args).all()).results || [];
@@ -98,12 +99,18 @@ async function handleAuth(request,env,url){
     const credentials=await newCredential(data.password),uid=randomToken(16);
     const count=await dbFirst(env.DB,`SELECT COUNT(*) count FROM users WHERE household_id=? AND status!='left'`,invite.household_id);
     if(count.count>=2)bad('家庭成员已满','HOUSEHOLD_FULL',409);
-    // CAS on accepted_at and two-person SQL trigger eliminate two concurrent joins.
-    try{await batch(env.DB,[
-      ['UPDATE household_invites SET accepted_at=? WHERE id=? AND accepted_at IS NULL',now,invite.id],
-      ['INSERT INTO users(id,household_id,email_norm,display_name,role,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',uid,invite.household_id,email,String(data.display_name||'').slice(0,50),'member',now,now],
-      ['INSERT INTO password_credentials(user_id,password_salt,password_hash,iterations,updated_at) VALUES(?,?,?,?,?)',uid,credentials.password_salt,credentials.password_hash,credentials.iterations,now]
+    // The first UPDATE wins the invite. Each following INSERT is gated on the
+    // preceding statement's SQLite changes() value in the same D1 transaction.
+    // A raced or already-consumed invite cannot create an extra user/session.
+    let joined;
+    try{joined=await batch(env.DB,[
+      ['UPDATE household_invites SET accepted_at=? WHERE id=? AND accepted_at IS NULL AND expires_at>?',now,invite.id,now],
+      [`INSERT INTO users(id,household_id,email_norm,display_name,role,created_at,updated_at)
+        SELECT ?,?,?,?,?,?,? WHERE changes()=1`,uid,invite.household_id,email,String(data.display_name||'').slice(0,50),'member',now,now],
+      [`INSERT INTO password_credentials(user_id,password_salt,password_hash,iterations,updated_at)
+        SELECT ?,?,?,?,? WHERE changes()=1`,uid,credentials.password_salt,credentials.password_hash,credentials.iterations,now]
     ]);}catch{bad('邀请码使用失败或家庭已满','INVITE_CONFLICT',409);}
+    if(joined.some(r=>r.meta?.changes!==1))bad('邀请码已被使用，请重新邀请','INVITE_CONFLICT',409);
     const session=await createSession(env,uid);
     return json({ok:true,user:{id:uid,role:'member'},csrf_token:session.csrf},201,{'Set-Cookie':cookieForSession(session.cookie)});
   }
@@ -265,7 +272,7 @@ async function updateField(request,env,p,fieldId){
   if(normalized.length>400)bad('值超出长度');
   if(fieldsOf.includes(field.field_key)&&data.review_state!=='rejected'){
     if(field.value_type==='money'&&!/^[1-9]\d{0,11}$/.test(normalized))bad('金额必须是正整数日元');
-    if(field.value_type==='date'&&(!fullDate.test(normalized)||Number.isNaN(Date.parse(normalized))))bad('请输入有效日期');
+    if(field.value_type==='date'&&!validCivilDate(normalized))bad('请输入真实存在的日期');
   }
   const now=isoNow();
   await dbRun(env.DB,'UPDATE document_fields SET normalized_value=?,review_state=?,reviewed_by=?,updated_at=? WHERE id=?',normalized,data.review_state,p.user_id,now,fieldId);
@@ -467,9 +474,21 @@ async function route(request,env){
       const body=await readJson(request,110000);
       if(!validString(body.text,100000))bad('请输入可核验的日文文字');
       const confirmed=await dbFirst(env.DB,"SELECT COUNT(*) count FROM document_fields WHERE document_id=? AND review_state IN ('confirmed','corrected')",id);
+      // Even a failed response may hide a successful remote write. Never regenerate
+      // candidate IDs after the first integration attempt, or retries could create
+      // a second ledger entry, task, or vocabulary item in the target app.
+      const sent=await dbFirst(env.DB,`SELECT COUNT(*) count FROM integration_links
+        WHERE candidate_id IN (SELECT id FROM action_candidates WHERE document_id=?)
+          AND (attempt_count>0 OR state IN ('sending','synced','linked_existing','failed'))`,id);
+      if(Number(sent?.count||0)>0)bad('存在已发出的跨应用联动，不能重建候选及幂等键；请在目标 App 修改记录，原文保持不变','INTEGRATION_HISTORY_LOCKED',409);
       if(confirmed.count>0&&!body.confirm_reset_review)bad('已有人工核对字段，覆盖原文将清除现有审核，请再次确认','REVIEW_RESET_REQUIRED',409);
-      if(confirmed.count>0) await dbRun(env.DB,'DELETE FROM document_fields WHERE document_id=?',id);
-      await dbRun(env.DB,"UPDATE documents SET extracted_text_ja=?,analysis_status='draft',updated_at=?,version=version+1 WHERE id=? AND owner_id=?",body.text.trim(),isoNow(),id,p.user_id);
+      // Only user-visible local candidates may be regenerated. Keep the source
+      // and its reviewed fields consistent by using a D1 batch transaction.
+      const now=isoNow();
+      await batch(env.DB,[
+        ['DELETE FROM document_fields WHERE document_id=?',id],
+        ["UPDATE documents SET extracted_text_ja=?,analysis_status='draft',updated_at=?,version=version+1 WHERE id=? AND owner_id=?",body.text.trim(),now,id,p.user_id]
+      ]);
       const updated=await ownedDocument(env.DB,id,p,'active');
       const result=await analyzeStored(env,updated,true);
       return json({ok:true,analysis_status:result.result?.analysis_status||'needs_review',fields:result.result?.fields||[],message:'文字已保存为待人工核对的分析结果'});

@@ -6,6 +6,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INIT = (ROOT / 'migrations' / '0001_init.sql').read_text()
 INDEXES = (ROOT / 'migrations' / '0002_indexes.sql').read_text()
+GUARDS = (ROOT / 'migrations' / '0005_single_household.sql').read_text()
 NOW = '2026-11-11T00:00:00Z'
 
 
@@ -14,6 +15,7 @@ def conn():
     db.execute('PRAGMA foreign_keys=ON')
     db.executescript(INIT)
     db.executescript(INDEXES)
+    db.executescript(GUARDS)
     return db
 
 
@@ -31,6 +33,9 @@ class SchemaTests(unittest.TestCase):
         seed(self.db)
     def tearDown(self):
         self.db.close()
+    def test_one_household_only(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute('INSERT INTO households VALUES(?,?,?,?)',('h2','other',NOW,NOW))
     def test_no_third_household_user(self):
         with self.assertRaises(sqlite3.IntegrityError):
             self.db.execute('INSERT INTO users VALUES(?,?,?,?,?,?,?,?)',('u3','h1','u3@example.invalid','third','member','active',NOW,NOW))

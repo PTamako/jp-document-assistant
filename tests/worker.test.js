@@ -4,12 +4,13 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import app from '../worker/index.js';
+import {hmacHex} from '../worker/security.js';
 
 if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -36,8 +37,8 @@ function makeEnv(){
   };
   return {DB:db,DOCUMENTS:r2,ASSETS:{fetch:()=>new Response('app')},SESSION_HMAC_KEY:'local-test-secret-with-enough-entropy-abcdef',BOOTSTRAP_ADMIN_TOKEN:'local-only-bootstrap-admin-123456',R2_BUCKET_NAME:'test-private',_blobs:blobs};
 }
-async function req(env,path,{method='GET',data,cookie,csrf,form}={}){
-  const headers={Origin:'https://app.example.test'};
+async function req(env,path,{method='GET',data,cookie,csrf,form,extraHeaders={}}={}){
+  const headers={Origin:'https://app.example.test',...extraHeaders};
   if(cookie)headers.Cookie=cookie;
   if(csrf)headers['X-CSRF-Token']=csrf;
   let body;
@@ -157,6 +158,7 @@ test('backup JSON roundtrip only restores metadata and does not send remote inte
   assert.equal(confirmed.data.remote_syncs_sent,0);
 });
 
+
 test('signed ledger integration requires reviewed fields, uses fixed key and safely retries lost responses',async()=>{
   const env=makeEnv(),user=await boot(env);
   const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(user),data:{
@@ -194,6 +196,11 @@ test('signed ledger integration requires reviewed fields, uses fixed key and saf
   }};
   const first=await req(env,`/api/candidates/${candidate.id}/commit`,options);
   assert.equal(first.response.status,503);
+  const blockedReset=await req(env,`/api/documents/${id}/source-text`,{
+    method:'PATCH',...auth(user),data:{text:'ご請求金額：900円',confirm_reset_review:true}
+  });
+  assert.equal(blockedReset.response.status,409);
+  assert.equal(blockedReset.data.code,'INTEGRATION_HISTORY_LOCKED');
   const retry=await req(env,`/api/candidates/${candidate.id}/commit`,options);
   assert.equal(retry.response.status,200,JSON.stringify(retry.data));
   assert.equal(retry.data.remote_id,'entry-001');
@@ -201,4 +208,51 @@ test('signed ledger integration requires reviewed fields, uses fixed key and saf
   assert.equal(again.data.already_synced,true);
   assert.equal(callCount,2);
   assert.equal(targetWrites.size,1);
+});
+
+
+test('invalid calendar dates are rejected during manual verification',async()=>{
+  const env=makeEnv(),user=await boot(env);
+  const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(user),data:{
+    retention:'summary',source_type:'text',text:'納付期限：令和8年2月28日\n納付金額：1,200円'
+  }});
+  const doc=(await req(env,`/api/documents/${imp.data.document_id}`,auth(user))).data.document;
+  const deadline=doc.fields.find(x=>x.field_key==='due_date');
+  assert.ok(deadline);
+  const invalid=await req(env,`/api/fields/${deadline.id}`,{method:'PATCH',...auth(user),data:{review_state:'corrected',normalized_value:'2026-02-30'}});
+  assert.equal(invalid.response.status,400);
+  const valid=await req(env,`/api/fields/${deadline.id}`,{method:'PATCH',...auth(user),data:{review_state:'confirmed',normalized_value:'2026-02-28'}});
+  assert.equal(valid.response.status,200);
+});
+
+test('permanent document deletion preserves an R2 object still referenced elsewhere',async()=>{
+  const env=makeEnv(),user=await boot(env);
+  const add=()=>{const f=new FormData();f.append('file',new File([new Uint8Array([255,216,255,224,1,2,3,4])],'same.jpg',{type:'image/jpeg'}));f.append('retention','original');return f;};
+  const first=await req(env,'/api/documents/import/file',{method:'POST',...auth(user),form:add()});
+  assert.equal(first.response.status,201);
+  const oldId=first.data.document_id;
+  assert.equal((await req(env,`/api/documents/${oldId}/trash`,{method:'POST',...auth(user),data:{}})).response.status,200);
+  const second=await req(env,'/api/documents/import/file',{method:'POST',...auth(user),form:add()});
+  assert.equal(second.response.status,201);
+  assert.notEqual(second.data.document_id,oldId);
+  assert.equal(env._blobs.size,1);
+  const removed=await req(env,`/api/documents/${oldId}/permanent-delete`,{method:'POST',...auth(user),data:{confirm:'DELETE_FOREVER'}});
+  assert.equal(removed.response.status,200,JSON.stringify(removed.data));
+  assert.equal(removed.data.r2_deleted_objects,0);
+  assert.equal(env._blobs.size,1);
+  const current=(await req(env,`/api/documents/${second.data.document_id}`,auth(user))).data.document;
+  assert.equal(current.attachments.length,1);
+  assert.equal((await req(env,`/api/documents/${second.data.document_id}/attachments/${current.attachments[0].id}/content`,auth(user))).response.status,200);
+});
+
+
+test('a second use of an invite cannot create a user, including racing join attempts',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const invite=await req(env,'/api/household/invites',{method:'POST',...auth(owner),data:{invitee_email:'family@example.com'}});
+  assert.equal(invite.response.status,201);
+  const join=()=>req(env,'/api/household/join',{method:'POST',data:{invite_token:invite.data.invite_token,email:'family@example.com',password:'another-long-password',display_name:'家人'}});
+  const [a,b]=await Promise.all([join(),join()]);
+  assert.deepEqual([a.response.status,b.response.status].sort(),[201,409]);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) count FROM users').get().count,2);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) count FROM password_credentials').get().count,2);
 });
