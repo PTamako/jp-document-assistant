@@ -7,6 +7,7 @@ import app from '../worker/index.js';
 import {hmacHex} from '../worker/security.js';
 import {createZip} from '../web/src/zip.js';
 import {readBackup,restoreBatch} from '../web/src/backup-client.js';
+import {readLocalText} from '../web/src/mail-import.js';
 
 if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
@@ -402,4 +403,27 @@ test('simultaneous attachment deletions converge on one physical R2 cleanup',asy
   assert.equal(env._blobs.size,0);
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,0);
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM deletion_jobs').get().n,0);
+});
+
+test('user-selected EML is decoded in RAM, then explicitly imported as private text without R2 reads',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const body=[
+    'From: issuer@example.invalid','Subject: Payment notice',
+    'MIME-Version: 1.0','Content-Type: text/plain; charset=UTF-8','',
+    '納付期限：令和8年11月30日','ご請求金額：1,200円'
+  ].join('\r\n');
+  const file=new File([body],'mail.eml',{type:'message/rfc822'});
+  const parsed=await readLocalText(file);
+  assert.equal(parsed.source_type,'mail_forward');
+  assert.equal(env._blobs.size,0);
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+    title:parsed.title,text:parsed.text,source_type:parsed.source_type,retention:'summary'
+  }});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  const detail=(await req(env,`/api/documents/${imported.data.document_id}`,auth(owner))).data.document;
+  assert.equal(detail.visibility,'private');
+  assert.ok(detail.fields.some(f=>f.field_key==='due_date'));
+  assert.ok(detail.fields.some(f=>f.field_key==='amount_jpy'));
+  assert.equal(env.DB.sql.prepare('SELECT source_type FROM document_sources LIMIT 1').get().source_type,'mail_forward');
+  assert.equal(env._blobs.size,0);
 });
