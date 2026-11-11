@@ -12,7 +12,8 @@
 
 ## 1A. 最新开发与验证状态
 
-- GitHub 主仓库 Draft PR #1 最新已验证提交 `ed79213870c8402be6f2eb1e14cdf19a0c17d53b`；[CI #43036305622](https://github.com/PTamako/jp-document-assistant/actions/runs/43036305622) 通过 72/72 Node、11/11 SQLite/API、Vue build。已有新增安全补偿、权限、个人会话、OCR 冷却与 CSP 回归，但没有真实生产写入或设备验收。
+- GitHub 主仓库 Draft PR #1 本轮最新经 CI 验证的代码 `84249bc7989512d735b31b2bbc068072a4971cb9`；[CI #43039499158](https://github.com/PTamako/jp-document-assistant/actions/runs/43039499158) 通过 80/80 Node、11/11 SQLite/API、Vue build。已有新增安全补偿、权限、个人会话、OCR 冷却与 CSP 回归，但没有真实生产写入或设备验收。
+- 新增按需 Gmail 用户发起 OAuth/只读逐封查看（非 historyId 自动增量）、跨账号 OAuth 清除、加密备份篡改回归。Google Scope 审核及真机尚未完成。参见 docs/gmail_oauth_setup.md。
 - 设计契约当前 53 路径 / 54 操作；OpenAPI 严格 YAML 与 Python/Node 契约测试通过。知学双人私密句卡与独立身份尚未完成，Gmail 最小权限 OAuth 与实际日语 OCR 质量仍未验收；这些不是生产审批之外可忽略的事项。
 
 ## 2. Cloudflare 账号只读盘点（截至 2026-11-11）

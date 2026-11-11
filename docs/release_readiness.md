@@ -21,7 +21,7 @@
 
 ## 1A. 最新 CI 与实际 Cloudflare 核验
 
-- 主 PR #1 最新保存点 `ed79213870c8402be6f2eb1e14cdf19a0c17d53b`；[GitHub Actions #43036305622](https://github.com/PTamako/jp-document-assistant/actions/runs/43036305622)：72/72 Node、11/11 SQLite/API 及 Vue Build 全部通过（2026-11-11）。属于开发环境自动化验收，**并未通过真实 Cloudflare D1/R2 或 iPhone 双人验收**。
+- 主 PR #1 最新已核验代码 `84249bc7989512d735b31b2bbc068072a4971cb9`；[GitHub Actions #43039499158](https://github.com/PTamako/jp-document-assistant/actions/runs/43039499158)：80/80 Node、11/11 SQLite/API 及 Vue Build 全部通过（2026-11-11）。属于开发环境自动化验收，**并未通过真实 Cloudflare D1/R2 或 iPhone 双人验收**。
 - 连接 Cloudflare 只读检查：全账号 6 Worker、6 D1、2 R2 Bucket，两个现有 R2 Bucket 的 r2.dev 均关闭且无自定义公开域名；文书助手专用 Worker/D1 均不存在。
 - Cloudflare Billing/Usage API 未获 Billing Read 权限（403）。实际计费、剩余月度容量、D1 日读写、R2 Class A/B、Workers AI Neurons 都是 **未知**，不代表零费用。
 - 三份接收端 PR 均仍为 Draft；知学单用户结构未实现双人私密句卡，必须保持该写入路径 fail-closed。
@@ -48,3 +48,9 @@
 ## 4. 当前发布判断
 
 **不可直接上线**。主要非代码门槛：脱敏 OCR 的真实精度和单位用量，Google OAuth 和 Gmail 审核，知学句卡双人隔离，真实目标服务联调，两个 iPhone 的隐私/备份验证，以及生产资源审批。项目已具备可供审核的开发代码和自动化回归基础，但不能等同于完整验收。
+
+## 2026-11-11 Gmail 与备份完整性审核增量
+
+- Gmail：用户点击才请求受限 readonly OAuth；token 仅会话内存、谷歌 Scope 单独验证、5 件分页、选定一封才读 MIME 文字、不请求附件、手动保存并沿用私密导入 SHA 去重；已加入静态和纯模拟测试。Google 正式授权审批、撤销真机、完整 historyId 自动增量都未验收。
+- 备份：新增 AES-GCM 错误密码、密文篡改、缺失/修改原件、版本不支持的失败拒绝测试；真实 D1/R2 灾难恢复仍需经过批准后在可控环境验证。
+- Cloudflare 生产费用用量读取权限缺失：未知，不假定为零或充足。一个正式 Worker、专用 D1、私有 R2 方案仍只是拟议，未执行。

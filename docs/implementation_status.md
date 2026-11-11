@@ -28,7 +28,7 @@
 | 非财务条款解读 | 政策、合同、活动、说明书的关键限制词句显示日文原文证据、中文说明与人工核对动作；文书版本日期线索与官方现行有效性严格分开 | 纯规则抽取，不作机器全文翻译或法律实时验证 |
 | OCR | 按需实验模型、同 R2 对象结果缓存、失败和空响应去重、人工修正；个人与本应用 UTC 额度双重硬上限，24h 卡住需用户再次确认 | Mock 测试通过；**真实脱敏日本文书准确率、Neurons/张仍未验证**，默认禁用 |
 
-当前最新 CI：主工程 **72/72 项 Node + 11/11 项 SQLite/API 契约** 通过；GitHub Actions 对主工程执行语法、测试及 Vue 构建。所有目标 PR 均必须在最新提交 CI 通过后才可视为通过对应 CI，不能以旧提交结果代替。
+当前最后一轮代码 CI：主工程 **80/80 项 Node + 11/11 项 SQLite/API 契约** 通过；GitHub Actions 对主工程执行语法、测试及 Vue 构建。所有目标 PR 均必须在最新提交 CI 通过后才可视为通过对应 CI，不能以旧提交结果代替。
 
 ## 仍未完成的功能 / 真正上线阻塞
 
@@ -164,3 +164,10 @@
 ## 2026-11-11 Gmail 账户范围收紧（本次提交待 CI）
 
 - 检查 Google 官方 token model 文档后明确 include_granted_scopes=false、hasGrantedAllScopes 验证范围；取消弹窗时提示，且 Gmail Token 在文书助手换账号/新登录及组件卸载时清除。Google revoke 撤销的是应用授权集合，已在配置文档披露。
+
+## 2026-11-11 最终本轮代码验证记录
+
+- 最新经完整 CI 验证的代码 SHA：`84249bc7989512d735b31b2bbc068072a4971cb9`；[GitHub Actions #43039499158](https://github.com/PTamako/jp-document-assistant/actions/runs/43039499158) **成功：80/80 Node、11/11 SQLite/API、Vue 生产构建**。
+- Gmail 按需只读 OAuth 代码、五件分页、选定单封 MIME、用户主动保存、内存 Token 清除、Google Scope 最小授权检查、新登录/换人隔离和显式撤销已通过 Mock/静态合同测试；未配置正式 Google OAuth，尚未进行真实 Gmail 或 iPhone 实测；自动 historyId 同步仍未实现。
+- 加密 ZIP 增加错误密码、篡改、缺失原件及版本不支持安全拒绝测试。不是声称完成了任意历史版本迁移。
+- **真实部署验收未完成，绝不可因 CI 绿灯变更四个 PR 为 Ready / 自动合并/部署。**
