@@ -26,6 +26,7 @@ let gmailGeneration=0;
 const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),inviteEmail=ref(''),inviteToken=ref('');
 const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
 const accountEpoch=createAccountEpoch();
+let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
@@ -44,7 +45,7 @@ async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={})
   const headers={}; if(body&&!form)headers['Content-Type']='application/json';
   if(!['GET','HEAD'].includes(method)&&csrf.value)headers['X-CSRF-Token']=csrf.value;
   if(idempotencyKey)headers['Idempotency-Key']=idempotencyKey;
-  const resp=await fetch(path,{method,headers,body:form?body:(body?JSON.stringify(body):undefined),credentials:'same-origin',cache:'no-store',signal});
+  const resp=await fetch(path,{method,headers,body:form?body:(body?JSON.stringify(body):undefined),credentials:'same-origin',cache:'no-store',signal:signal||accountController.signal});
   const contentType=resp.headers.get('Content-Type')||'';
   const data=contentType.includes('application/json')?await resp.json():null;
   accountEpoch.assertCurrent(epoch);
@@ -59,6 +60,7 @@ function accountApi(snapshot){
 }
 function clearPrivateWorkspace(){
   accountEpoch.invalidate(); // Reject responses from the previous account.
+  accountController.abort();accountController=new AbortController();
   loadSerial++;loadingPage.value=false;busy.value=false;detailLoading.value=false;
   clearGmailSession();revokeOriginal();closeSheet();current.value=null;
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
@@ -266,6 +268,7 @@ async function importFromGoogleDrive(){
     if(!file)return; // Canceling Google Picker does not request an R2 upload or import.
     if(/\.(?:eml|txt)$/i.test(file.name)){
       const parsed=await readLocalText(file);
+      accountEpoch.assertCurrent(epoch);
       textDraft.title=parsed.title;textDraft.text=parsed.text;
       textDraft.source_type='google_drive';textDraft.retention='summary';
       localImportNote.value='已从所选 Google 文件提取文字；请核对后决定是否保存。';
@@ -277,7 +280,7 @@ async function importFromGoogleDrive(){
       fileRetention.value=isTextLayer?'summary':'original';
       if(isTextLayer){
         const parsed=await extractDocumentText(file);
-        if(fileDraft.value!==file)return;
+        if(!accountEpoch.isCurrent(epoch)||fileDraft.value!==file)return;
         fileText.value=parsed.text;
         fileWarning.value=parsed.warning||'';
       }
@@ -385,7 +388,22 @@ async function confirmRunOcr(){
   }catch(e){problem(e);}
   finally{busy.value=false;}
 }
-async function exportData(){busy.value=true;try{const d=await exportBatch(api,{scope:backupScope.value,month:backupScope.value==='month'?backupMonth.value:'',year:backupScope.value==='year'?backupMonth.value.slice(0,4):'',offset:backupOffset.value,includes_originals:backupIncludeOriginals.value,password:backupPass.value});backupOffset.value=d.next_offset??0;flash(`已生成 ${d.name}（${d.document_count} 份文书、${d.original_count} 个原件）`);}catch(e){problem(e);}finally{busy.value=false;}}
+async function exportData(){
+  const epoch=accountEpoch.snapshot(),controller=accountController;busy.value=true;
+  try{
+    const d=await exportBatch(accountApi(epoch),{
+      scope:backupScope.value,month:backupScope.value==='month'?backupMonth.value:'',
+      year:backupScope.value==='year'?backupMonth.value.slice(0,4):'',
+      offset:backupOffset.value,includes_originals:backupIncludeOriginals.value,
+      password:backupPass.value,signal:controller.signal,
+      assertCurrent:()=>accountEpoch.assertCurrent(epoch)
+    });
+    accountEpoch.assertCurrent(epoch);
+    backupOffset.value=d.next_offset??0;
+    flash(`已生成 ${d.name}（${d.document_count} 份文书、${d.original_count} 个原件）`);
+  }catch(e){if(accountEpoch.isCurrent(epoch))problem(e);}
+  finally{if(accountEpoch.isCurrent(epoch))busy.value=false;}
+}
 async function selectBackup(event){
  const file=event.target.files?.[0];if(!file)return;
  const epoch=accountEpoch.snapshot();
@@ -433,7 +451,7 @@ async function showOriginal(a){
   const epoch=accountEpoch.snapshot(),id=current.value.id;
   revokeOriginal();busy.value=true;
   try{
-    const response=await fetch(`/api/documents/${id}/attachments/${a.id}/content`,{credentials:'same-origin',cache:'no-store'});
+    const response=await fetch(`/api/documents/${id}/attachments/${a.id}/content`,{credentials:'same-origin',cache:'no-store',signal:accountController.signal});
     accountEpoch.assertCurrent(epoch);
     if(!response.ok)throw new Error('无法读取私人原件');
     const blob=await response.blob();

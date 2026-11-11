@@ -26,21 +26,27 @@ function download(blob,name){
   const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.rel='noopener';a.click();
   setTimeout(()=>URL.revokeObjectURL(url),30000);
 }
-export async function exportBatch(api,{scope='all',month='',year='',offset=0,includes_originals=false,password=''}){
+export async function exportBatch(api,{scope='all',month='',year='',offset=0,includes_originals=false,password='',signal,assertCurrent=()=>{}}){
+  assertCurrent();
   const query=new URLSearchParams({scope,offset:String(offset)});
   if(month)query.set('month',month);if(year)query.set('year',year);
   const data=await api(`/api/backups/export?${query}`);
+  assertCurrent();
   if(!data.documents?.length)throw Error('当前范围没有需要备份的文书');
   const entries=[{name:'manifest.json',bytes:''}], originals=[];
   if(includes_originals){
     for(const entry of data.documents){
       for(const a of entry.attachments||[]){
         if(!a.download_path||!a.object_sha256)throw Error('某个原件缺失；请先核对文件状态');
-        const response=await fetch(a.download_path,{credentials:'same-origin',cache:'no-store'});
+        assertCurrent();
+        const response=await fetch(a.download_path,{credentials:'same-origin',cache:'no-store',signal});
+        assertCurrent();
         if(!response.ok)throw Error('原件下载失败，请缩小备份范围重试');
         const bytes=new Uint8Array(await response.arrayBuffer());
+        assertCurrent();
         if(bytes.length>8*1024*1024)throw Error('单附件超过8MB，暂不支持此分包');
         await verifySha256(bytes,a.object_sha256);
+        assertCurrent();
         const name=`originals/${entry.document.id}/${a.id}.${mimeExt[a.mime]||'bin'}`;
         originals.push({name,bytes});a.backup_path=name;
       }
@@ -54,6 +60,7 @@ export async function exportBatch(api,{scope='all',month='',year='',offset=0,inc
   const bytes=includes_originals?originals.length:0;
   const file=password?await encryptZip(zip,password):zip;
   const filename=`jp-document-assistant-${new Date().toISOString().slice(0,10)}-${offset}.${password?'jda':'zip'}`;
+  assertCurrent();
   download(file,filename);
   return {name:filename,document_count:data.documents.length,original_count:bytes,next_offset:data.next_offset,encrypted:!!password};
 }
