@@ -67,3 +67,13 @@ test('Cloudflare PBKDF2 is within supported 100k iteration bound and frontend gu
  const backend=read('worker/index.js');
  assert.match(backend,/path==='\/api\/auth\/status'/);
 });
+
+test('CI uses committed npm lockfile and avoids duplicate main pushes',()=>{
+ const lock=JSON.parse(read('package-lock.json'));
+ assert.equal(lock.name,'jp-document-assistant');
+ assert.equal(lock.lockfileVersion,3);
+ assert.ok(lock.packages['']);
+ assert.match(ci,/npm ci --no-audit --no-fund/);
+ assert.doesNotMatch(ci,/^  push:/m);
+ assert.doesNotMatch(ci,/JPDA_LOCK_CHUNK|JDA_AUTH_DIAG/);
+});

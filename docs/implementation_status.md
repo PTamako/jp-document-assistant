@@ -1,3 +1,14 @@
+## 2026-11-12（JST）最终续接：GitHub 自动发布与三端接收配置
+
+- 文书助手 GitHub main 已部署到唯一正式 Worker，Cloudflare Workers Builds 仅在 main 业务代码变更时自动测试+构建+部署（Preview 关闭），最新基线 Cloudflare Version `730f117b-6975-4d4b-af71-b002de0582cd`。真实 Worker 同账号 Service Bindings：HomeFlow 与知学；家計簿通过 HTTPS Pages 受限接收。没有新增 Worker、D1、R2、Cron。
+- 已在 Cloudflare 保护配置中为三个目标分别设置独立 HMAC 密钥对（源端与接收端），从未提交 GitHub。家計簿 Pages 的 JPDA_BRIDGE_ENABLED / JPDA_BRIDGE_ALLOWED_USER 使用 secret_text 防止生产部署清除；重新部署 ID `913ae435-73f5-4dcc-9bcc-cc6c7af4cbf3` 验证 success 且四项生产 Secret 均保留。
+- 仅文书助手已经初始化的首个 owner 账号获准用家計簿与知学生词联动；提交每条仍需本人在文书助手确认，且目标端验证签名与幂等。HomeFlow 接收端已部署、HMAC 已配置但启用/账号白名单保持关闭：它有两名成员，文书助手账号无法与其中一个独立认证匹配，防止误关联私人任务。
+- 真实公网无写入安全验收：<https://github.com/PTamako/jp-document-assistant/actions/runs/43120233669>：JPDA health 200（OCR experimental）、已初始化状态 200、未登录私人 API 401、HomeFlow 未签名 404、家計簿和知学未签名各 401，六项 PASS。后续相关 PR/主分支代码变更有专用 `.github/workflows/live-production-smoke.yml`。
+- OCR 使用正式 Worker AI Binding、单人每天 1 次/本应用 UTC 日共 1 次，仅未验证候选，禁止自动记账。日本文书 OCR 的真实精度/Neurons 费用仍未经许可样本与真实用量验收，不能称为完整 AI 功能通过。
+- 对生产发布启用 package-lock.json + npm ci：防止随时间升级间接依赖，同时 Workers Builds 具备依赖缓存条件。GitHub pre-merge CI 只在 PR 执行；Cloudflare main 构建执行全测试与部署，不额外重复 GitHub main 生产 build。
+- 当前 Cloudflare Builds 使用现有的 **用户级知学 build token**（不是文书助手专用 token），因为通过连接器创建的账号级专用 Token 被 Cloudflare Builds 判定为 stale/invalid 并已撤销。待在 Cloudflare 控制台配置文书助手**专用用户级 Token**，避免跨项目长期共享。Billing Usage 当前 API 权限 403，不能保证不存在费用。
+- 尚未经过测试的真实业务：双手机登录隔离、真实 OCR 质量、基于确认候选的家計簿/知学成功写入及重复响应幂等、HomeFlow 独立身份映射后任务写入、知学双人私密句卡（仍禁用）。对这几项的后续验收不得擅自创建财务/积分/学习数据或宣称全部通过。
+
 
 ## 受限 Cloudflare 部署后的最终验收记录（2026-11-12 JST）
 

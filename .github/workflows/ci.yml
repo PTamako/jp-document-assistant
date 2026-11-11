@@ -1,8 +1,6 @@
-name: Local-only CI (no Cloudflare preview or deployment)
+name: Pre-merge CI (Cloudflare handles main deployment)
 on:
   pull_request:
-  push:
-    branches: [main]
 concurrency:
   group: local-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -17,11 +15,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - name: Install frontend/build dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Source syntax
         run: npm run check:syntax
       - name: Unit and in-memory D1 tests
@@ -30,26 +29,3 @@ jobs:
         run: npm run build
       - name: Check built asset metadata (no network API)
         run: test -f dist/index.html && test -f dist/manifest.webmanifest
-
-      - name: Approved diagnostic of account initialization and login error (synthetic)
-        run: |
-          node --input-type=module <<'JS'
-          const base='https://jp-document-assistant.yupan6706.workers.dev';
-          const requests=[
-            {route:'/api/auth/bootstrap',payload:{email:'synthetic-login-check@example.invalid',password:'synthetic-long-password-testing-only',setup_token:'definitely-invalid-token-do-not-initialize',display_name:'synthetic'}},
-            {route:'/api/auth/login',payload:{email:'synthetic-login-check@example.invalid',password:'synthetic-long-password-testing-only'}}
-          ];
-          for(const {route,payload} of requests){
-            const r=await fetch(base+route,{method:'POST',headers:{'Content-Type':'application/json','Origin':base},body:JSON.stringify(payload)});
-            const b=await r.text();
-            console.log('JDA_AUTH_DIAG',route,r.status,b.slice(0,450));
-          }
-          JS
-
-      - name: Temporary lockfile export for reviewed deterministic release
-        if: github.event_name == 'pull_request'
-        run: |
-          test -f package-lock.json
-          printf 'JPDA_LOCK_BEGIN:%s\n' "$GITHUB_SHA"
-          base64 -w0 package-lock.json | fold -w 4096 | sed 's/^/JPDA_LOCK_CHUNK:/'
-          printf 'JPDA_LOCK_END:%s\n' "$(sha256sum package-lock.json | awk '{print $1}')"
