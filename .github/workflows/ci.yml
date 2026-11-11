@@ -30,3 +30,11 @@ jobs:
         run: npm run build
       - name: Check built asset metadata (no network API)
         run: test -f dist/index.html && test -f dist/manifest.webmanifest
+
+      - name: Package production Vue assets for approved manual Cloudflare release (no deploy)
+        if: github.event_name == 'pull_request'
+        run: |
+          tar -czf /tmp/jda-ui-assets.tar.gz -C dist .
+          printf 'JDA_ASSET_BEGIN:%s\n' "$GITHUB_SHA"
+          base64 -w0 /tmp/jda-ui-assets.tar.gz | fold -w 4096 | sed 's/^/JDA_ASSET_CHUNK:/'
+          printf 'JDA_ASSET_END:%s\n' "$(sha256sum /tmp/jda-ui-assets.tar.gz | cut -d ' ' -f1)"
