@@ -34,7 +34,7 @@ function d1() {
 function makeEnv(){
   const db=d1(), blobs=new Map(),r2={
     async put(key,data){blobs.set(key,new Uint8Array(data));},
-    async get(key){return blobs.has(key)?{body:new Blob([blobs.get(key)]).stream()}:null;},
+    async get(key){const data=blobs.get(key);return data?{body:new Blob([data]).stream(),arrayBuffer:()=>new Blob([data]).arrayBuffer()}:null;},
     async head(key){return blobs.has(key)?{size:blobs.get(key).length}:null;},
     async delete(key){blobs.delete(key);}
   };
