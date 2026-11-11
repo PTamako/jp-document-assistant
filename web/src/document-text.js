@@ -48,15 +48,33 @@ function centralEntries(bytes){
  if(p!==start+size||[...map.keys()].some(n=>/\/vbaProject\.bin$/i.test(n)))invalid('Office ZIP 异常或含宏');
  return map;
 }
+async function inflateChecked(data,expected){
+  if(typeof DecompressionStream!=='function')invalid('当前设备不支持 Office 解压，请复制文字导入');
+  let reader;
+  try{reader=new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();}
+  catch{invalid('Office 解压格式不支持，请用手动文字导入');}
+  let total=0;const chunks=[];
+  try{
+    for(;;){
+      const next=await reader.read();if(next.done)break;
+      total+=next.value.byteLength;
+      if(total>expected||total>MAX_XML)invalid('Office 实际解压大小超过安全限制');
+      chunks.push(next.value);
+    }
+  }catch(e){
+    if(e?.message==='Office 实际解压大小超过安全限制')throw e;
+    invalid('Office 压缩文件损坏，无法读取');
+  }finally{try{await reader.cancel();}catch{}reader.releaseLock();}
+  if(total!==expected)invalid('Office 解压结果与声明长度不一致');
+  const out=new Uint8Array(total);let offset=0;
+  for(const chunk of chunks){out.set(chunk,offset);offset+=chunk.length;}
+  return out;
+}
 async function xmlPart(bytes,map,name){
  const part=map.get(name);if(!part)return '';
  if(part.length>MAX_XML)invalid('Office XML 内容过大');
  let content=bytes.subarray(part.offset,part.offset+part.packed);
- if(part.method===8){
-  if(typeof DecompressionStream!=='function')invalid('当前设备不支持 Office 解压，请复制文字导入');
-  const stream=new Blob([content]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-  content=new Uint8Array(await new Response(stream).arrayBuffer());
- }
+ if(part.method===8)content=await inflateChecked(content,part.length);
  if(content.length!==part.length||crc32(content)!==part.crc)invalid('Office ZIP 数据校验失败');
  let s;try{s=decoder.decode(content);}catch{invalid('Office XML 不是合法 UTF-8');}
  if(/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/i.test(s))invalid('Office XML 存在不安全声明');
@@ -90,9 +108,10 @@ async function xlsx(bytes,map){
   if(shared.length>=20000)invalid('XLSX 字符串过多');
   shared.push(inlineText(match[1]));
  }
- const output=[];let formulas=false,styles=false;
+ const output=[];let formulas=false,styles=false,outputLength=0;
+ const append=line=>{outputLength+=line.length+1;if(outputLength>MAX_TEXT)invalid('Excel 内容超过 10 万字符');output.push(line);};
  for(let i=0;i<sheets.length;i++){
-  const xml=await xmlPart(bytes,map,sheets[i]);output.push('【工作表 '+(i+1)+' · '+sheets[i]+'】');
+  const xml=await xmlPart(bytes,map,sheets[i]);append('【工作表 '+(i+1)+' · '+sheets[i]+'】');
   let count=0;const rows=new Map();
   for(const m of xml.matchAll(/<c(?=\s|>)([^>]*)>([\s\S]*?)<\/c>/g)){
    if(++count>20000)invalid('Excel 单元格过多');
@@ -109,20 +128,36 @@ async function xlsx(bytes,map){
     else value=entity(raw);
    }
    if(!value)continue;
-   value=String(value).trim();output.push(pos+': '+value);
+   value=String(value).trim();append(pos+': '+value);
    const row=Number(pos.match(/\d+$/)[0]);if(!rows.has(row))rows.set(row,[]);rows.get(row).push({pos,value});
-   if(output.join('\n').length>MAX_TEXT)invalid('Excel 内容超过 10 万字符');
+
   }
   for(const cells of rows.values())for(let k=0;k<cells.length-1;k++){
    const a=cells[k],b=cells[k+1];
    if(/納付|支払|請求|申請|締切|期限|金額|支給|控除/.test(a.value)&&/\d{4}年|[0-9]{4}[-/.]|^[0-9,]+$/.test(b.value))
-    output.push('【'+a.pos+'→'+b.pos+'】'+a.value+'：'+b.value);
+    append('【'+a.pos+'→'+b.pos+'】'+a.value+'：'+b.value);
   }
  }
  const warnings=['Excel 只读取现有单元格值，不计算公式，也不推断日期格式'];
  if(formulas)warnings.push('公式显示为文件缓存值，可能过期');
  if(styles)warnings.push('日期与百分比可能显示为原始数值');
  return {text:output.join('\n'),warning:warnings.join('。'),pages_read:sheets.length};
+}
+// Production upload guard: validate OOXML structure before any R2 PUT.
+export async function validateOfficeBytes(bytes,mime){
+ const docx='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+ const xlsx='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+ if(!(bytes instanceof Uint8Array)||!bytes.length||bytes.length>LIMIT||![docx,xlsx].includes(mime))
+   invalid('Office 文件大小或格式无效');
+ const map=centralEntries(bytes);
+ const main=mime===docx?'word/document.xml':'xl/workbook.xml';
+ if(!map.has('[Content_Types].xml')||!map.has(main))invalid('Office 必需的 XML 部件缺失');
+ const types=await xmlPart(bytes,map,'[Content_Types].xml');
+ if(!/<Types(?:\s|\/?>)/.test(types))invalid('Office 内容类型声明无效');
+ const mainXml=await xmlPart(bytes,map,main);
+ if(mime===docx&&!/<w:document(?:\s|>)/.test(mainXml))invalid('Word 主文档无效');
+ if(mime===xlsx&&!/<(?:\w+:)?workbook(?:\s|\/?>)/.test(mainXml))invalid('Excel 工作簿结构无效');
+ return true;
 }
 export async function extractOfficeFile(file){
  if(!file||file.size<1||file.size>LIMIT)invalid('Office 文件必须小于 8 MB');

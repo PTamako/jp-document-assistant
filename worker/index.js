@@ -7,6 +7,7 @@ import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
 import { ocrAttachment } from './ocr.js';
 import { attachPage,cleanupOrphans } from './upload.js';
+import { validateOfficeBytes } from '../web/src/document-text.js';
 
 // One production Worker. No R2 LIST, no polling cron, no browser-owned R2 credentials.
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -180,10 +181,7 @@ function fileSignature(mime,bytes){
   if(mime==='application/pdf')return new TextDecoder().decode(bytes.slice(0,5))==='%PDF-';
   if(mime==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'||mime==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'){
     if(bytes[0]!==80||bytes[1]!==75||bytes[2]!==3||bytes[3]!==4)return false;
-    const names=new TextDecoder().decode(bytes);
-    return names.includes('[Content_Types].xml')&&
-      names.includes(mime.endsWith('document')?'word/document.xml':'xl/workbook.xml')&&
-      !/vbaProject\.bin|\.exe|\.js(?:\x00|\s|$)/i.test(names);
+    return true; // Validate ZIP directory, XML and CRC before R2 PUT.
   }
   return false;
 }
@@ -203,6 +201,9 @@ async function handleFileImport(request,env,p){
   if((mime===docx&&!ext.endsWith('.docx'))||(mime===xlsx&&!ext.endsWith('.xlsx')))bad('Office 文件名与格式不一致','INVALID_FILE',415);
   const bytes=new Uint8Array(await file.arrayBuffer());
   if(!fileSignature(mime,bytes))bad('文件内容与声明类型不一致','INVALID_FILE',415);
+  if(mime===docx||mime===xlsx){
+    try{await validateOfficeBytes(bytes,mime);}catch{bad('Office 文件结构无效、含宏或文件已损坏，请重新导出为标准 DOCX/XLSX','INVALID_OFFICE',415);}
+  }
   const extractedValue=form.get('extracted_text');
   if(extractedValue!==null&&(typeof extractedValue!=='string'||extractedValue.length>100000))bad('提取文字无效','INVALID_TEXT',413);
   const extracted=typeof extractedValue==='string'?extractedValue.trim():'';
