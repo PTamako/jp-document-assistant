@@ -1,0 +1,319 @@
+<script setup>
+import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick } from 'vue';
+import { compressImage } from './compress.js';
+import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
+
+const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
+const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
+const tabs=[{id:'today',name:'今日',icon:'◉'},{id:'docs',name:'文书',icon:'▤'},{id:'links',name:'联动',icon:'◇'},{id:'mine',name:'我的',icon:'☰'}];
+const pages=reactive({today:{items:[],next:0,loaded:false},docs:{items:[],next:0,loaded:false},links:{items:[],next:0,loaded:false}});
+const loadingPage=ref(false),search=ref(''),category=ref('');
+const cats={salary:'工资／奖金',bank:'银行／信用卡',tax:'税务／缴纳',utility:'水电燃气',housing:'房屋租赁',campaign:'活动／优惠',policy:'法规／政策',manual:'使用说明',travel:'旅行交通',delivery:'配送订单',other:'其他'};
+const categoryOptions=Object.entries(cats);
+const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
+const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),inputMode=ref('text');
+const fieldDraft=reactive({id:'',value:'',state:'confirmed'}),trashItems=ref([]),usage=ref(null),inviteEmail=ref(''),inviteToken=ref('');
+const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
+const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
+const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
+const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
+const pendingAttachment=ref(null),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
+const integrationConfigured=ref(false);
+
+const fieldLabel={due_date:'办理／缴费期限',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）'};
+const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
+const showDue=(v)=>v?String(v):'日期待确认';
+const pageData=computed(()=>pages[activeTab.value]||{items:[],next:null,loaded:true});
+function flash(message){notice.value=message;error.value='';}
+function problem(err){error.value=err?.message || '操作失败'; notice.value='';}
+async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={}){
+  const headers={}; if(body&&!form)headers['Content-Type']='application/json';
+  if(!['GET','HEAD'].includes(method)&&csrf.value)headers['X-CSRF-Token']=csrf.value;
+  if(idempotencyKey)headers['Idempotency-Key']=idempotencyKey;
+  const resp=await fetch(path,{method,headers,body:form?body:(body?JSON.stringify(body):undefined),credentials:'same-origin',cache:'no-store',signal});
+  const contentType=resp.headers.get('Content-Type')||'';
+  const data=contentType.includes('application/json')?await resp.json():null;
+  if(!resp.ok)throw new Error(data?.message||`HTTP ${resp.status}`);
+  return data;
+}
+async function boot(){
+  try {const d=await api('/api/me');user.value=d.user;csrf.value=d.csrf_token;await selectTab('today');}
+  catch {user.value=null;}
+}
+async function submitAuth(){
+  busy.value=true;error.value='';
+  try {
+    const path={login:'/api/auth/login',bootstrap:'/api/auth/bootstrap',join:'/api/household/join'}[authMode.value];
+    const d=await api(path,{method:'POST',body:{...auth}});
+    csrf.value=d.csrf_token;auth.password='';auth.setup_token='';auth.invite_token='';
+    await boot();flash('登录成功');
+  } catch(e){problem(e);} finally {busy.value=false;}
+}
+async function logout(){
+  try{await api('/api/auth/logout',{method:'POST'});}catch{}
+  revokeOriginal();current.value=null;csrf.value='';user.value=null;auth.password='';
+  for(const p of Object.values(pages)){p.items=[];p.next=0;p.loaded=false;}
+  closeSheet();
+}
+async function loadTab(tab,append=false){
+  const page=pages[tab];if(!page)return;
+  if(loadingPage.value&&append)return;
+  const token=++loadSerial;loadingPage.value=true;
+  try{
+    const endpoint=tab==='today'?'/api/today':tab==='docs'?'/api/documents':'/api/integrations';
+    const q=tab==='docs'?`&q=${encodeURIComponent(search.value)}&category=${encodeURIComponent(category.value)}&archived=${archivedFilter.value}&favorite=${favoriteFilter.value}&visibility=${visibilityFilter.value}&month=${monthFilter.value}`:'';
+    const d=await api(`${endpoint}?limit=5&offset=${append?(page.next||0):0}${q}`);
+    if(token!==loadSerial)return;
+    page.items=append?[...page.items,...d.items]:d.items;
+    page.next=d.next_offset;page.loaded=true;
+  }catch(e){if(token===loadSerial)problem(e);}finally{if(token===loadSerial)loadingPage.value=false;}
+}
+async function selectTab(tab){
+  activeTab.value=tab;
+  if(pages[tab]&&!pages[tab].loaded)await loadTab(tab);
+  if(tab==='mine'&&!usage.value)loadUsage();
+}
+async function searchDocs(){pages.docs.loaded=false;await loadTab('docs');closeSheet();}
+async function loadUsage(){try{usage.value=await api('/api/usage');}catch(e){problem(e);}}
+async function openDoc(id){
+  detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];detailTab.value='explain';
+  try{
+    const d=await api(`/api/documents/${id}`);current.value=d.document;
+    const c=await api(`/api/documents/${id}/candidates`);detailCandidates.value=c.items||[];
+  }catch(e){problem(e);}finally{detailLoading.value=false;}
+}
+function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
+function closeSheet(){sheet.value='';editTextDraft.value='';fileDraft.value=null;textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';}
+function openImport(mode='text'){inputMode.value=mode;sheet.value='import';}
+function selectFile(event){const file=event.target.files?.[0];if(!file)return;fileDraft.value=file;sheet.value='import';inputMode.value='file';}
+async function importDocument(){
+  busy.value=true;error.value='';
+  try{
+    let result;
+    if(inputMode.value==='text'){
+      if(!textDraft.text.trim())throw new Error('请先粘贴或输入日文内容');
+      result=await api('/api/documents/import/text',{method:'POST',body:{title:textDraft.title,text:textDraft.text,source_type:textDraft.source_type,retention:textDraft.retention}});
+    }else{
+      if(!fileDraft.value)throw new Error('请先选择照片或 PDF');
+      const compressed=await compressImage(fileDraft.value);
+      const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');
+      result=await api('/api/documents/import/file',{method:'POST',body:form,form:true});
+    }
+    const id=result.document_id;
+    const saved=result.saved!==false;
+    flash(saved?(inputMode.value==='file'?'原件已保存；OCR 尚未启用':(result.reused?'已关联此前导入的文书':'文字已导入，字段待确认')):'规则预览已完成，内容未保存');
+    if(!saved){notice.value+=(result.analysis?.explanation_zh?`：${result.analysis.explanation_zh}`:'');}
+    closeSheet();
+    if(saved){for(const p of Object.values(pages))p.loaded=false;await loadTab(activeTab.value==='mine'?'docs':activeTab.value);if(id)await openDoc(id);}
+  }catch(e){problem(e);}finally{busy.value=false;}
+}
+function startField(field){fieldDraft.id=field.id;fieldDraft.value=field.normalized_value||'';fieldDraft.state=field.review_state==='unreviewed'?'confirmed':field.review_state;sheet.value='field';}
+async function saveField(){busy.value=true;try{
+  await api(`/api/fields/${fieldDraft.id}`,{method:'PATCH',body:{normalized_value:fieldDraft.value,review_state:fieldDraft.state}});
+  const id=current.value.id;sheet.value='';await openDoc(id);flash('字段已保存');
+}catch(e){problem(e);}finally{busy.value=false;}}
+function askTrash(){sheet.value='trashConfirm';}
+async function trashCurrent(){busy.value=true;try{
+  await api(`/api/documents/${current.value.id}/trash`,{method:'POST',body:{}});
+  closeSheet();closeDetail();for(const p of Object.values(pages))p.loaded=false;await loadTab(activeTab.value);
+  flash('已移入回收站，原件保留可恢复');
+}catch(e){problem(e);}finally{busy.value=false;}}
+async function showRecycle(){sheet.value='recycle';await refreshTrash();}
+async function refreshTrash(reset=true){try{if(reset)recycleOffset.value=0;
+  const d=await api(`/api/recycle?limit=5&offset=${recycleOffset.value}`);
+  trashItems.value=reset?d.items:[...trashItems.value,...d.items];recycleNext.value=d.next_offset;
+  const a=await api('/api/recycle/attachments');attachmentTrashItems.value=a.items;
+}catch(e){problem(e);}}
+async function loadMoreTrash(){if(recycleNext.value===null)return;recycleOffset.value=recycleNext.value;await refreshTrash(false);}
+async function restoreAttachment(d,a){busy.value=true;try{await api(`/api/documents/${d}/attachments/${a}/restore`,{method:'POST',body:{}});await refreshTrash();flash('附件已恢复，没有重复上传 R2');}catch(e){problem(e);}finally{busy.value=false;}}
+async function trashAttachment(a){if(!current.value)return;busy.value=true;try{
+  await api(`/api/documents/${current.value.id}/attachments/${a.id}/trash`,{method:'POST',body:{}});
+  const id=current.value.id;await openDoc(id);flash('附件已移入回收站，文字结果保留');
+}catch(e){problem(e);}finally{busy.value=false;}}
+async function deleteAttachment(){if(!pendingAttachment.value)return;busy.value=true;try{
+ const a=pendingAttachment.value;await api(`/api/documents/${a.document_id}/attachments/${a.id}/permanent-delete`,{method:'POST',body:{confirm:'DELETE_FOREVER'}});
+ pendingAttachment.value=null;sheet.value='recycle';await refreshTrash();flash('附件最后一个引用已清理');
+}catch(e){problem(e);}finally{busy.value=false;}}
+async function appendFiles(event){const files=Array.from(event.target.files||[]);if(!files.length||!current.value)return;
+ busy.value=true;try{for(const f of files){const optimized=await compressImage(f);const form=new FormData();form.append('file',optimized,optimized.name);form.append('retention','original');await api(`/api/documents/${current.value.id}/attachments`,{method:'POST',body:form,form:true});}
+ await openDoc(current.value.id);flash(`已添加 ${files.length} 页原件，尚待人工确认识别内容`);
+ }catch(e){problem(e);}finally{busy.value=false;if(extraFileInput.value)extraFileInput.value.value='';}}
+function editText(){editTextDraft.value=current.value?.extracted_text_ja||'';sheet.value='editText';}
+async function saveSourceText(){busy.value=true;try{await api(`/api/documents/${current.value.id}/source-text`,{method:'PATCH',body:{text:editTextDraft.value,confirm_reset_review:true}});const id=current.value.id;sheet.value='';editTextDraft.value='';await openDoc(id);flash('文字已保存并重新生成待核验字段');}catch(e){problem(e);}finally{busy.value=false;}}
+async function runOcr(a){busy.value=true;try{const d=await api(`/api/documents/${current.value.id}/ocr`,{method:'POST',body:{confirm:true,attachment_id:a.id}});editTextDraft.value=d.text;sheet.value='editText';flash('OCR 候选未自动保存，请对照原件核验');}catch(e){problem(e);}finally{busy.value=false;}}
+async function exportData(){busy.value=true;try{const d=await exportBatch(api,{scope:backupScope.value,month:backupScope.value==='month'?backupMonth.value:'',year:backupScope.value==='year'?backupMonth.value.slice(0,4):'',offset:backupOffset.value,includes_originals:backupIncludeOriginals.value,password:backupPass.value});backupOffset.value=d.next_offset??0;flash(`已生成 ${d.name}（${d.document_count} 份文书、${d.original_count} 个原件）`);}catch(e){problem(e);}finally{busy.value=false;}}
+async function selectBackup(event){const file=event.target.files?.[0];if(!file)return;backupFile.value=file;busy.value=true;try{restoreArchive.value=await readBackup(file,backupPass.value);const d=await restoreBatch(api,restoreArchive.value,false);restorePreview.value=d.preview;sheet.value='restoreBackup';}catch(e){problem(e);}finally{busy.value=false;}}
+async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(api,restoreArchive.value,true);sheet.value='';backupFile.value=null;restoreArchive.value=null;restorePreview.value=[];for(const page of Object.values(pages))page.loaded=false;flash(`已恢复 ${r.metadata_restored} 份资料、${r.originals_restored} 个原件；失败 ${r.failures.length} 件`);}catch(e){problem(e);}finally{busy.value=false;}}
+async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
+async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
+ candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
+ candidateDraft.date=d.confirmed_fields?.due_date||new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});
+ candidateDraft.category='';candidateDraft.payment_source='';candidateDraft.note='';candidateDraft.title=item.payload?.title||current.value.title;
+ candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.privacy_confirmed=false;
+ candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||'';
+ sheet.value='candidate';integrationConfigured.value=d.available;
+ }catch(e){problem(e);}}
+async function commitApprovedCandidate(){busy.value=true;try{const id=candidateDraft.id;
+ const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance'};
+ const d=await api(`/api/candidates/${id}/commit`,{method:'POST',body,idempotencyKey:`jda-${id}`});
+ sheet.value='';await openDoc(current.value.id);flash(d.already_synced?'已存在对应的联动记录':'联动已获目标 App 确认');
+ }catch(e){problem(e);}finally{busy.value=false;}}
+
+async function restore(id){busy.value=true;try{
+  const d=await api(`/api/documents/${id}/restore`,{method:'POST',body:{}});
+  await refreshTrash();for(const p of Object.values(pages))p.loaded=false;flash(d.warning||'文书已恢复');
+}catch(e){problem(e);}finally{busy.value=false;}}
+const pendingDelete=ref(null);
+function askPermanent(id){pendingDelete.value=id;sheet.value='permanent';}
+async function permanentDelete(){busy.value=true;try{
+  await api(`/api/documents/${pendingDelete.value}/permanent-delete`,{method:'POST',body:{confirm:'DELETE_FOREVER'}});
+  pendingDelete.value=null;sheet.value='recycle';await refreshTrash();flash('数据库与最后引用的 R2 原件已执行清理');
+}catch(e){problem(e);}finally{busy.value=false;}}
+async function issueInvite(){busy.value=true;try{
+  const d=await api('/api/household/invites',{method:'POST',body:{invitee_email:inviteEmail.value}});inviteToken.value=d.invite_token;flash('邀请码仅供指定邮箱，48小时有效');
+}catch(e){problem(e);}finally{busy.value=false;}}
+async function showOriginal(a){
+  revokeOriginal();busy.value=true;
+  try{
+    const response=await fetch(`/api/documents/${current.value.id}/attachments/${a.id}/content`,{credentials:'same-origin',cache:'no-store'});
+    if(!response.ok)throw new Error('无法读取私人原件');
+    const blob=await response.blob();originalMime.value=blob.type;originalUrl.value=URL.createObjectURL(blob);sheet.value='original';
+  }catch(e){problem(e);}finally{busy.value=false;}
+}
+function revokeOriginal(){if(originalUrl.value)URL.revokeObjectURL(originalUrl.value);originalUrl.value='';}
+async function changeShare(){
+  const newVisibility=current.value.visibility==='private'?'shared':'private';
+  busy.value=true;
+  try{await api(`/api/documents/${current.value.id}`,{method:'PATCH',body:{visibility:newVisibility,version:current.value.version,confirm_sensitive_share:newVisibility==='shared'}});
+    sheet.value='';await openDoc(current.value.id);flash(newVisibility==='shared'?'已主动设为家庭共享':'已设为私人文书');
+  }catch(e){problem(e);}finally{busy.value=false;}
+}
+const dueState=(v)=>{if(!v)return '待确认';const today=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});return v<today?'已逾期':v===today?'今天到期':'近期';};
+const labelFor=(key)=>fieldLabel[key]||key;
+const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
+onMounted(boot);
+onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
+</script>
+
+<template>
+<div class="app-shell">
+  <template v-if="!user">
+    <div class="auth-shell">
+      <div class="auth-symbol">文</div>
+      <p class="eyebrow">PRIVATE FAMILY SPACE</p>
+      <h1>日本生活文书助手</h1>
+      <p class="muted auth-intro">看懂日文通知，确认重要日期。两人家庭，默认私人保存。</p>
+      <div class="auth-panel">
+        <div class="segments"><button v-for="m in [{id:'login',name:'登录'},{id:'bootstrap',name:'首次设置'},{id:'join',name:'接受邀请'}]" :key="m.id" :class="{selected:authMode===m.id}" @click="authMode=m.id;error=''">{{m.name}}</button></div>
+        <form @submit.prevent="submitAuth" class="stack">
+          <label>邮箱<input v-model.trim="auth.email" type="email" required autocomplete="username" placeholder="you@example.com" /></label>
+          <label>密码（至少 12 位）<input v-model="auth.password" type="password" required minlength="12" autocomplete="current-password" placeholder="个人独立密码" /></label>
+          <label v-if="authMode!=='login'">显示名称<input v-model="auth.display_name" maxlength="50" placeholder="家庭昵称" /></label>
+          <label v-if="authMode==='bootstrap'">初始化令牌<input v-model="auth.setup_token" type="password" required placeholder="Cloudflare Secret" /></label>
+          <label v-if="authMode==='join'">家庭邀请码<input v-model="auth.invite_token" required placeholder="由家庭管理员提供" /></label>
+          <button class="primary action-large" :disabled="busy" type="submit">{{busy?'处理中…':authMode==='login'?'登录':authMode==='join'?'加入家庭':'初始化私人空间'}}</button>
+        </form>
+      </div>
+      <p class="fine-print">内容保存在私有云端；不在浏览器持久保存工资、原图或 OCR 文字。</p>
+    </div>
+  </template>
+  <template v-else>
+    <header class="topbar"><div><p class="eyebrow">日本生活文书助手 · 仅家庭使用</p><h1>{{tabs.find(t=>t.id===activeTab)?.name}}</h1></div><button class="round ghost" aria-label="导入文书" @click="openImport()">＋</button></header>
+    <main class="main-content">
+      <section v-if="activeTab==='today'" class="page-surface" key="today">
+        <div class="welcome"><div><p class="eyebrow">TODAY · あんしん</p><h2>重要的事，别漏掉。</h2><p class="muted">待确认与截止事项会集中显示。日期未经人工核验前不会自动创建提醒。</p></div><div class="welcome-mark">日</div></div>
+        <div class="section-head"><h3>需要你关注</h3><span>{{pageData.items.length}} 件</span></div>
+        <div v-if="!pageData.items.length&&!loadingPage" class="empty">还没有需要处理的文书。<button class="text-button" @click="openImport()">导入第一份</button></div>
+        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon">{{d.category==='salary'?'¥':d.category==='campaign'?'%':'文'}}</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showDue(d.due_date)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{d.analysis_status==='needs_review'?'待核验':dueState(d.due_date)}}</span></button>
+        <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('today',true)">{{loadingPage?'加载中…':'加载更多'}}</button>
+      </section>
+      <section v-else-if="activeTab==='docs'" class="page-surface" key="docs">
+        <div class="search-row"><input v-model="search" type="search" placeholder="搜索标题或中文摘要" @keyup.enter="searchDocs" /><button class="filter-button" aria-label="文书筛选" @click="sheet='filter'">筛选</button><button class="filter-button" @click="searchDocs">查找</button></div>
+        <div class="section-head"><h3>文书库</h3><span>{{category?cats[category]:'全部类型'}}</span></div>
+        <div v-if="!pageData.items.length&&!loadingPage" class="empty">没有匹配的文书。</div>
+        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon">▤</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{d.favorite?'★ · ':''}}{{cats[d.category]||d.category}} · {{d.visibility==='shared'?'家庭共享':'仅自己'}}{{d.archived_at?' · 已归档':''}}</p></div><span class="state-tag">{{d.analysis_status==='needs_review'?'待核验':'已保存'}}</span></button>
+        <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('docs',true)">加载更多</button>
+      </section>
+      <section v-else-if="activeTab==='links'" class="page-surface" key="links">
+        <div class="info-note">三个 App 的安全服务桥尚未建立。这里先展示候选预览，不会自动记账、发提醒或写入生词本。</div>
+        <div class="section-head"><h3>待确认的联动</h3><span>独立核验 · 幂等</span></div>
+        <div v-if="!pageData.items.length&&!loadingPage" class="empty">文书识别后的财务、任务、学习建议会出现在这里。</div>
+        <button class="item-card" v-for="item in pageData.items" :key="item.id" @click="openDoc(item.document_id)"><div class="item-icon">◇</div><div class="item-info"><div class="item-title">{{candidateLabel[item.candidate_kind]}}</div><p>{{item.title}} · {{item.integration_state||'待接入'}}</p></div><span class="state-tag">预览</span></button>
+        <button v-if="pageData.next!==null" class="load-more" @click="loadTab('links',true)">加载更多</button>
+      </section>
+      <section v-else class="page-surface" key="mine">
+        <div class="profile-card"><div class="avatar">{{(user.display_name||user.email||'我').slice(0,1).toUpperCase()}}</div><div><h3>{{user.display_name||'家庭成员'}}</h3><p class="muted">{{user.email}} · {{user.role==='owner'?'管理员':'家庭成员'}}</p></div></div>
+        <div class="section-head"><h3>家庭与数据</h3></div>
+        <button class="settings-line" v-if="user.role==='owner'" @click="sheet='invite'">邀请第二位家庭成员 <span>›</span></button>
+        <button class="settings-line" @click="showRecycle">回收站 · 仅自己的文书 <span>›</span></button>
+        <button class="settings-line" @click="sheet='backup'">备份与恢复（ZIP / 加密） <span>›</span></button>
+        <button class="settings-line" @click="loadUsage">刷新服务用量 <span>↻</span></button>
+        <div class="info-note" v-if="usage">Cloudflare 全账号免费额度：<strong>未确认</strong>。本地统计 AI 调用 {{usage.local_today.ai_calls}} 次，不代表全账号剩余额度。</div>
+        <button class="settings-line" @click="logout">退出当前账号 <span>›</span></button>
+        <p class="fine-print">原件按需从私有 R2 读取；删除文书不会删除其他三个 App 的已确认数据。</p>
+      </section>
+    </main>
+    <nav class="bottom-nav" aria-label="主要导航"><button v-for="tab in tabs" :key="tab.id" @click="selectTab(tab.id)" :class="{active:activeTab===tab.id}"><span class="nav-symbol">{{tab.icon}}</span><span>{{tab.name}}</span></button></nav>
+  </template>
+  <div v-if="notice" class="status-toast" role="status"><span>{{notice}}</span><button @click="notice=''" aria-label="关闭提示">×</button></div>
+  <div v-if="error" class="status-toast error-toast" role="alert"><span>{{error}}</span><button @click="error=''" aria-label="关闭错误">×</button></div>
+
+  <div v-if="current" class="detail-surface" role="dialog" aria-modal="true" aria-label="文书详情">
+    <div class="detail-top"><button class="round ghost" @click="closeDetail" aria-label="返回">‹</button><strong>文书详情</strong><button class="round ghost" @click="sheet='detailsMenu'" aria-label="更多操作">···</button></div>
+    <div class="detail-body">
+      <p class="eyebrow">{{cats[current.category]||current.category}} · {{current.visibility==='shared'?'家庭共享':'仅自己'}}</p>
+      <h2>{{current.title}}</h2>
+      <p class="detail-note">{{current.analysis_status==='needs_review'?'规则抽取 · 等待人工确认':'文书已保存'}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
+      <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
+      <section v-if="detailTab==='explain'"><div class="content-card"><h3>中文说明</h3><p class="multiline">{{current.explanation_zh||'当前仅保存原件。图像 OCR 尚未验证，建议使用粘贴文字导入。'}}</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
+      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button" @click="amountVisible=!amountVisible">{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>原文：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
+      <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':'截止日：'+item.payload.due_on}}</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div><p class="fine-print">HomeFlow 负责任务提醒，家計簿负责收支。这里不会自动写入。</p></section>
+      <section v-if="detailTab==='study'"><h3 class="section-title">值得记住的日文词语</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id"><strong>{{item.payload.term}}</strong><p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入</button></div><div v-if="!detailCandidates.some(c=>c.candidate_kind==='vocabulary')" class="empty">尚未找到可复用词语。</div></section>
+      <section v-if="detailTab==='original'"><div class="content-card"><h3>原文与原件</h3><p class="multiline" v-if="current.extracted_text_ja">{{current.extracted_text_ja}}</p><p v-else class="muted">原文尚未提取。你可以主动查看私有附件，查看时才会请求 R2。</p><button class="secondary full" @click="editText">人工输入 / 修正 OCR 文字</button><button class="secondary full" @click="extraFileInput?.click()">＋ 添加扫描页或附件</button><input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" /><div class="attachment-row" v-for="a in current.attachments" :key="a.id"><button class="secondary" @click="showOriginal(a)">查看 · {{a.file_label}}</button><button class="secondary small" @click="runOcr(a)">尝试 OCR</button><button class="secondary small danger-text" @click="trashAttachment(a)">移入回收站</button></div></div><p class="fine-print">不在后台预取原图或保存至本机持久缓存。</p></section>
+    </div>
+  </div>
+
+  <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeSheet()">
+    <section class="bottom-sheet" role="dialog" aria-modal="true" :aria-label="sheet">
+      <div class="grabber"></div>
+      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">照片 / PDF</button></div>
+        <template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><label class="form-label">来源<select v-model="textDraft.source_type"><option value="text">粘贴文本</option><option value="mail_forward">苹果邮件复制 / 转发</option><option value="google_drive">Google Drive 复制</option><option value="local_file">本地文档文本</option></select></label><div class="radio-stack"><label><input v-model="textDraft.retention" type="radio" value="summary" />保存文书文字和分析结果</label><label><input v-model="textDraft.retention" type="radio" value="analyze_only" />仅规则分析，不存储内容</label></div></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择照片、截图或 PDF'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,application/pdf" class="visually-hidden" @change="selectFile" /></div><p class="fine-print">图片仅在内存中自适应压缩，尽量保护小字清晰度；上传前需明确确认保留原件。OCR 暂未启用。</p></template>
+        <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'?'确认保存原件':'开始处理'}}</button></div></template>
+      <template v-else-if="sheet==='filter'"><h2>筛选文书</h2><label class="form-label">可见范围<select v-model="visibilityFilter"><option value="all">全部</option><option value="mine">我拥有的</option><option value="shared">家庭共享</option></select></label><label class="form-label">归档状态<select v-model="archivedFilter"><option value="active">未归档</option><option value="archived">已归档</option><option value="all">全部</option></select></label><label class="form-label">收藏<select v-model="favoriteFilter"><option value="all">全部</option><option value="yes">仅收藏</option></select></label><label class="form-label">创建月份<input type="month" v-model="monthFilter" /></label><button class="primary full" @click="searchDocs">应用筛选</button><h3>文书类型</h3><div class="option-list"><button :class="{chosen:category===''}" @click="category='';searchDocs()">全部类型</button><button v-for="[key,label] in categoryOptions" :key="key" :class="{chosen:category===key}" @click="category=key;searchDocs()">{{label}}</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div></template>
+      <template v-else-if="sheet==='field'"><h2>核对原文中的字段</h2><label class="form-label">确认值<input v-model="fieldDraft.value" /></label><label class="form-label">审核操作<select v-model="fieldDraft.state"><option value="confirmed">确认无误</option><option value="corrected">修正为此值</option><option value="rejected">无法确认 / 废弃此候选</option></select></label><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="saveField">保存</button></div></template>
+      <template v-else-if="sheet==='detailsMenu'"><h2>文书操作</h2><button class="settings-line" @click="sheet='shareConfirm'">{{current.visibility==='private'?'主动分享给家人':'改为仅自己'}} <span>›</span></button><button class="settings-line" @click="toggleDocument('favorite',!current.favorite)">{{current.favorite?'取消收藏':'收藏文书'}} <span>›</span></button><button class="settings-line" @click="toggleDocument('archived',!current.archived_at)">{{current.archived_at?'取消归档':'归档（停止首页提示）'}} <span>›</span></button><button class="settings-line danger-text" @click="askTrash">移入回收站 <span>›</span></button><div class="sheet-actions"><button class="secondary full" @click="sheet=''">取消</button></div></template>
+      <template v-else-if="sheet==='shareConfirm'"><h2>确认家庭可见范围</h2><p>共享后第二位家庭成员可以读取标题、原文、字段和附件。工资、银行、税务资料可能含敏感信息。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="changeShare">{{current.visibility==='private'?'确认共享':'确认设为私人'}}</button></div></template>
+      <template v-else-if="sheet==='trashConfirm'"><h2>移入回收站？</h2><p>文书将从普通列表隐藏。R2 原件仍占空间，但可随时恢复。永久删除需另行确认。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="destructive" :disabled="busy" @click="trashCurrent">移入回收站</button></div></template>
+      <template v-else-if="sheet==='recycle'"><h2>回收站</h2><p class="muted">保留直到手动永久清理，删除后不能直接恢复。</p><div v-if="!trashItems.length" class="empty">回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+      <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
+      <template v-else-if="sheet==='permanent'"><h2 class="danger-text">永久删除文书？</h2><p>将从 D1 清理私人内容，并在没有其他文书引用该原件时同步物理删除 R2 文件。不能撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" :disabled="busy" @click="permanentDelete">确认永久删除</button></div></template>
+      <template v-else-if="sheet==='invite'"><h2>邀请家人</h2><p class="muted">一个家庭最多两人，邀请仅对指定邮箱有效。</p><label class="form-label">对方邮箱<input v-model="inviteEmail" type="email" placeholder="family@example.com" /></label><button class="primary full" @click="issueInvite" :disabled="busy">生成 48 小时邀请码</button><label v-if="inviteToken" class="form-label">仅复制给家人使用<input :value="inviteToken" readonly @focus="$event.target.select()" /></label><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+      <template v-else-if="sheet==='editText'"><h2>人工核对日文原文</h2><p class="fine-print">请对照原图确认。修改文字将重新生成全部候选字段，先前审核的字段会被重置，不会自动记账或创建任务。</p><textarea v-model="editTextDraft" rows="10" placeholder="请输入或粘贴日文内容"></textarea><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!editTextDraft.trim()" @click="saveSourceText">保存并重新分析</button></div></template>
+      <template v-else-if="sheet==='backup'"><h2>备份与恢复</h2><p class="fine-print">一次最多 5 份、ZIP 不超过 32 MB。请保存到你选择的 iCloud Drive/电脑，不在本 App 长期保存。仅 JSON 无法恢复永久删除后的原件。</p>
+        <label class="form-label">备份范围<select v-model="backupScope" @change="backupOffset=0"><option value="all">我的全部文书（分包）</option><option value="month">某个月份</option><option value="year">某个年份</option></select></label>
+        <label v-if="backupScope!=='all'" class="form-label">{{backupScope==='year'?'年份（如 2026）':'月份（如 2026-11）'}}<input v-model="backupMonth" :placeholder="backupScope==='year'?'2026':'2026-11'" /></label>
+        <label class="check-row"><input type="checkbox" v-model="backupIncludeOriginals" /> 包含 R2 私有原件（需要按需下载）</label>
+        <label class="form-label">可选备份加密密码（至少12位）<input v-model="backupPass" type="password" autocomplete="new-password" placeholder="留空则输出未加密 ZIP" /></label>
+        <p v-if="!backupPass" class="info-note">未加密备份可能包含个人资料。建议使用长密码加密，密码丢失将无法解密。</p>
+        <button class="primary full" :disabled="busy" @click="exportData">{{backupOffset?'导出下一包':'导出第一包'}}</button>
+        <div class="section-head"><h3>从备份恢复</h3></div><button class="secondary full" @click="backupInput?.click()">选择 ZIP / 加密 JDA 文件</button><input ref="backupInput" type="file" accept=".zip,.jda,application/zip" class="visually-hidden" @change="selectBackup" />
+        <div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+      <template v-else-if="sheet==='restoreBackup'"><h2>确认恢复备份</h2><p>检查恢复内容。仅在点击确认后写入 D1 和私有 R2，不重发三个 App 的历史财务/任务/学习记录。</p><div v-for="(x,i) in restorePreview" :key="i" class="recycle-row"><div class="item-info"><strong>{{x.title}}</strong><small>{{x.action==='skip_duplicate'?'已存在 · 跳过':'恢复资料'}}{{x.has_original_reference?' · 原件按备份内容恢复':''}}</small></div></div><div class="sheet-actions"><button class="secondary" @click="sheet='backup'">取消</button><button class="primary" :disabled="busy" @click="confirmRestore">确认恢复</button></div></template>
+      <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2><p class="fine-print">只有目标应用独立授权、服务端签名与账户映射配置完成才能写入。重复提交沿用同一幂等键。</p>
+        <label v-if="candidateDraft.kind==='finance'" class="form-label">实际付款 / 到账日期<input v-model="candidateDraft.date" type="date" /></label>
+        <label v-if="candidateDraft.kind==='finance'" class="form-label">目标账本分类<input v-model="candidateDraft.category" placeholder="例如：税金・社会保険" /></label>
+        <label v-if="candidateDraft.kind==='finance'" class="form-label">目标账本支付方式 / 账户<input v-model="candidateDraft.payment_source" placeholder="填写目标 App 已存在的名称" /></label>
+        <label v-if="candidateDraft.kind==='finance'" class="form-label">备注<input v-model="candidateDraft.note" /></label>
+        <label v-if="candidateDraft.kind==='homeflow_task'" class="form-label">任务名称<input v-model="candidateDraft.title" maxlength="120" /></label>
+        <label v-if="candidateDraft.kind==='homeflow_task'" class="form-label">任务可见范围<select v-model="candidateDraft.visibility"><option value="private">仅自己</option><option v-if="current.visibility==='shared'" value="household">家庭共享</option></select></label>
+        <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
+        <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
+        <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
+        <p v-if="!integrationConfigured" class="info-note">目标安全桥接尚未配置。你仍可预览，但现在提交会明确失败、不会修改另一个 App。</p>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured" @click="commitApprovedCandidate">本人确认后同步</button></div></template>
+      <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
+    </section>
+  </div>
+</div>
+</template>

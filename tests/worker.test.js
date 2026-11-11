@@ -1,0 +1,158 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
+import { webcrypto } from 'node:crypto';
+import app from '../worker/index.js';
+
+if (!globalThis.crypto) globalThis.crypto=webcrypto;
+const root = new URL('../', import.meta.url);
+function d1() {
+  const sql=new DatabaseSync(':memory:');
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql']){
+    sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
+  }
+  const wrap = statement => ({
+    bind(...params){return wrap(sql.prepare(statement).bind ? statement : statement)._bound(params);},
+    _bound(params){return {
+      first:async()=>sql.prepare(statement).get(...params)||null,
+      all:async()=>({results:sql.prepare(statement).all(...params)}),
+      run:async()=>({meta:{changes:sql.prepare(statement).run(...params).changes}}),
+      _runSync:()=>sql.prepare(statement).run(...params)
+    }}
+  });
+  return {sql,prepare(statement){return wrap(statement);},async batch(stmts){
+    sql.exec('BEGIN IMMEDIATE');try{
+      const out=stmts.map(x=>x._runSync());sql.exec('COMMIT');return out.map(x=>({meta:{changes:x.changes}}));
+    }catch(e){sql.exec('ROLLBACK');throw e;}
+  }};
+}
+function makeEnv(){
+  const db=d1(), blobs=new Map(),r2={
+    async put(key,data){blobs.set(key,new Uint8Array(data));},
+    async get(key){return blobs.has(key)?{body:new Blob([blobs.get(key)]).stream()}:null;},
+    async head(key){return blobs.has(key)?{size:blobs.get(key).length}:null;},
+    async delete(key){blobs.delete(key);}
+  };
+  return {DB:db,DOCUMENTS:r2,ASSETS:{fetch:()=>new Response('app')},SESSION_HMAC_KEY:'local-test-secret-with-enough-entropy-abcdef',BOOTSTRAP_ADMIN_TOKEN:'local-only-bootstrap-admin-123456',R2_BUCKET_NAME:'test-private',_blobs:blobs};
+}
+async function req(env,path,{method='GET',data,cookie,csrf,form}={}){
+  const headers={Origin:'https://app.example.test'};
+  if(cookie)headers.Cookie=cookie;
+  if(csrf)headers['X-CSRF-Token']=csrf;
+  let body;
+  if(form){body=form;}else if(data!==undefined){headers['Content-Type']='application/json';body=JSON.stringify(data);}
+  const response=await app.fetch(new Request(`https://app.example.test${path}`,{method,headers,body}),env);
+  const type=response.headers.get('Content-Type')||'';
+  return {response,data:type.includes('application/json')?await response.json():null};
+}
+async function boot(env){
+  const r=await req(env,'/api/auth/bootstrap',{method:'POST',data:{setup_token:env.BOOTSTRAP_ADMIN_TOKEN,email:'a@example.com',password:'owner-long-secret123',display_name:'甲'}});
+  assert.equal(r.response.status,201,JSON.stringify(r.data));
+  return {cookie:r.response.headers.get('set-cookie').split(';')[0],csrf:r.data.csrf_token,user:r.data.user};
+}
+function auth(p){return {cookie:p.cookie,csrf:p.csrf};}
+
+test('bootstrap is one-time, default private and text import needs review',async()=>{
+  const env=makeEnv(),p=await boot(env);
+  const second=await req(env,'/api/auth/bootstrap',{method:'POST',data:{setup_token:env.BOOTSTRAP_ADMIN_TOKEN,email:'x@example.com',password:'some-long-password'}});
+  assert.equal(second.response.status,409);
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(p),data:{title:'缴费通知',retention:'summary',source_type:'text',visibility:'shared',text:'納付期限：令和8年11月30日（月）\n納付金額：12,340円\n税額 12340'}});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  const d=await req(env,`/api/documents/${imported.data.document_id}`,auth(p));
+  assert.equal(d.data.document.visibility,'private');
+  assert.equal(d.data.document.fields.find(x=>x.field_key==='due_date').normalized_value,'2026-11-30');
+  assert.equal(d.data.document.fields.find(x=>x.field_key==='amount_jpy').normalized_value,'12340');
+  assert.equal(d.data.document.analysis_status,'needs_review');
+  const dup=await req(env,'/api/documents/import/text',{method:'POST',...auth(p),data:{retention:'summary',source_type:'text',text:'納付期限：令和8年11月30日（月）\n納付金額：12,340円\n税額 12340'}});
+  assert.equal(dup.data.document_id,imported.data.document_id);
+});
+
+test('private documents are not exposed to invited user and shared only when confirmed',async()=>{
+  const env=makeEnv(),a=await boot(env);
+  const inv=await req(env,'/api/household/invites',{method:'POST',...auth(a),data:{invitee_email:'b@example.com'}});
+  const joined=await req(env,'/api/household/join',{method:'POST',data:{invite_token:inv.data.invite_token,email:'b@example.com',password:'member-long-secret123',display_name:'乙'}});
+  assert.equal(joined.response.status,201,JSON.stringify(joined.data));
+  const b={cookie:joined.response.headers.get('set-cookie').split(';')[0],csrf:joined.data.csrf_token};
+  const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(a),data:{retention:'summary',source_type:'text',text:'申請はこちら 11月30日'}});
+  const id=imp.data.document_id;
+  assert.equal((await req(env,`/api/documents/${id}`,auth(b))).response.status,404);
+  const doc=(await req(env,`/api/documents/${id}`,auth(a))).data.document;
+  const fail=await req(env,`/api/documents/${id}`,{method:'PATCH',...auth(a),data:{visibility:'shared',version:doc.version}});
+  assert.equal(fail.response.status,409);
+  const ok=await req(env,`/api/documents/${id}`,{method:'PATCH',...auth(a),data:{visibility:'shared',version:doc.version,confirm_sensitive_share:true}});
+  assert.equal(ok.response.status,200);
+  assert.equal((await req(env,`/api/documents/${id}`,auth(b))).response.status,200);
+  assert.equal((await req(env,`/api/documents/${id}/trash`,{method:'POST',...auth(b),data:{}})).response.status,404);
+});
+
+test('trash restores without deleting R2; permanent deletion removes R2 and private rows',async()=>{
+  const env=makeEnv(),a=await boot(env);
+  const bytes=new Uint8Array([0xff,0xd8,0xff,0xe0,1,2,3,4]);
+  const f=new FormData();f.append('file',new File([bytes],'scan.jpg',{type:'image/jpeg'}));f.append('retention','original');
+  const imp=await req(env,'/api/documents/import/file',{method:'POST',...auth(a),form:f});
+  assert.equal(imp.response.status,201,JSON.stringify(imp.data));
+  const id=imp.data.document_id;assert.equal(env._blobs.size,1);
+  let t=await req(env,`/api/documents/${id}/trash`,{method:'POST',...auth(a),data:{}});
+  assert.equal(t.response.status,200);assert.equal(env._blobs.size,1);
+  assert.equal((await req(env,`/api/documents/${id}`,auth(a))).response.status,404);
+  assert.equal((await req(env,`/api/documents/${id}/restore`,{method:'POST',...auth(a),data:{}})).response.status,200);
+  assert.equal(env._blobs.size,1);
+  await req(env,`/api/documents/${id}/trash`,{method:'POST',...auth(a),data:{}});
+  const gone=await req(env,`/api/documents/${id}/permanent-delete`,{method:'POST',...auth(a),data:{confirm:'DELETE_FOREVER'}});
+  assert.equal(gone.response.status,200,JSON.stringify(gone.data));
+  assert.equal(env._blobs.size,0);
+  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n),0);
+});
+
+test('CSRF rejects state mutation and target-app bridge fails closed',async()=>{
+  const env=makeEnv(),p=await boot(env);
+  const failed=await req(env,'/api/documents/import/text',{method:'POST',cookie:p.cookie,data:{retention:'summary',source_type:'text',text:'納付金額 1200円'}});
+  assert.equal(failed.response.status,403);
+  const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(p),data:{retention:'summary',source_type:'text',text:'ご請求金額：1,200円\n納付期限 令和8年11月30日'}});
+  const id=imp.data.document_id;
+  const cand=(await req(env,`/api/documents/${id}/candidates`,auth(p))).data.items;
+  assert.ok(cand.length>0);
+  const commit=await req(env,`/api/candidates/${cand[0].id}/commit`,{method:'POST',...auth(p),data:{}});
+  assert.equal(commit.response.status,409);
+  const confirmed=await req(env,`/api/candidates/${cand[0].id}/commit`,{method:'POST',...auth(p),data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true,date:'2026-11-12',category:'税金',payment_source:'銀行'}});
+  assert.equal(confirmed.response.status,400); // Idempotency-Key required; no remote call
+  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+});
+
+test('explicit attachment trash / restore / permanent delete and R2 failure retry',async()=>{
+  const env=makeEnv(),a=await boot(env);
+  const f=new FormData();f.append('file',new File([new Uint8Array([255,216,255,224,9,8,7,6])],'file.jpg',{type:'image/jpeg'}));f.append('retention','original');
+  const added=await req(env,'/api/documents/import/file',{method:'POST',...auth(a),form:f});
+  const id=added.data.document_id;
+  const detail=(await req(env,`/api/documents/${id}`,auth(a))).data.document;
+  const aid=detail.attachments[0].id;
+  const deny=await req(env,`/api/documents/${id}/attachments/${aid}/permanent-delete`,{method:'POST',...auth(a),data:{confirm:'DELETE_FOREVER'}});
+  assert.equal(deny.response.status,409);
+  assert.equal((await req(env,`/api/documents/${id}/attachments/${aid}/trash`,{method:'POST',...auth(a),data:{}})).response.status,200);
+  assert.equal((await req(env,`/api/documents/${id}/attachments/${aid}/restore`,{method:'POST',...auth(a),data:{}})).response.status,200);
+  await req(env,`/api/documents/${id}/attachments/${aid}/trash`,{method:'POST',...auth(a),data:{}});
+  let firstTry=true;
+  env.DOCUMENTS.delete=async k=>{if(firstTry){firstTry=false;throw Error('fake r2 failure')}env._blobs.delete(k)};
+  const fail=await req(env,`/api/documents/${id}/attachments/${aid}/permanent-delete`,{method:'POST',...auth(a),data:{confirm:'DELETE_FOREVER'}});
+  assert.equal(fail.response.status,503);
+  assert.equal(env._blobs.size,1);
+  const retry=await req(env,`/api/documents/${id}/attachments/${aid}/permanent-delete`,{method:'POST',...auth(a),data:{confirm:'DELETE_FOREVER'}});
+  assert.equal(retry.response.status,200,JSON.stringify(retry.data));
+  assert.equal(env._blobs.size,0);
+  assert.equal((await req(env,`/api/documents/${id}`,auth(a))).data.document.attachments.length,0);
+});
+
+test('backup JSON roundtrip only restores metadata and does not send remote integrations',async()=>{
+  const env=makeEnv(),a=await boot(env);
+  const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(a),data:{retention:'summary',source_type:'text',text:'納付期限：令和8年11月30日\n納付金額：500円'}});
+  assert.equal(imp.response.status,201);
+  const exportDoc=(await req(env,'/api/backups/export?scope=all',auth(a))).data;
+  assert.equal(exportDoc.documents.length,1);
+  assert.equal(exportDoc.documents[0].fields.length,2);
+  const preview=await req(env,'/api/backups/import-preview',{method:'POST',...auth(a),data:exportDoc});
+  assert.equal(preview.data.preview[0].action,'skip_duplicate');
+  const confirmed=await req(env,'/api/backups/import-confirm',{method:'POST',...auth(a),data:{...exportDoc,confirm:'RESTORE_METADATA'}});
+  assert.equal(confirmed.data.restored.length,0);
+  assert.equal(confirmed.data.remote_syncs_sent,0);
+});

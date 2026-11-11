@@ -1,0 +1,15 @@
+{
+  // Production only. Replace database_id with your newly created production D1 id.
+  // NEVER run `wrangler deploy` until backups, resource IDs and auth secrets are reviewed.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jp-document-assistant",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-11-11",
+  "assets": {"directory":"./dist", "binding":"ASSETS", "not_found_handling":"single-page-application"},
+  "d1_databases": [{"binding":"DB", "database_name":"jp-document-assistant", "database_id":"REPLACE_WITH_EXISTING_OR_NEW_PRODUCTION_D1_ID", "migrations_dir":"migrations"}],
+  "r2_buckets": [{"binding":"DOCUMENTS", "bucket_name":"REPLACE_WITH_PRIVATE_PRODUCTION_R2_BUCKET"}],
+  "vars": {"R2_BUCKET_NAME":"REPLACE_WITH_PRIVATE_PRODUCTION_R2_BUCKET"},
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {"enabled":false}
+}

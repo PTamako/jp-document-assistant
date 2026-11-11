@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.dev.vars
+.env
+.env.*
+.wrangler/
+*.sqlite
+*.sqlite-journal
+.DS_Store
+__pycache__/
+*.pyc
+.D1_BACKUPS/

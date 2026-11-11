@@ -1,0 +1,526 @@
+import { randomToken, hashString, hmacHex, safeEqual, newCredential, checkPassword, parseCookie, cookieForSession, clearingCookie, sameOrigin, normalizedEmail, validatePassword, isoNow } from './security.js';
+import { parseJapaneseText } from './analysis.js';
+import { json, failure, readJson, bad, validString } from './http.js';
+import { attachmentTrash, attachmentRestore, attachmentDelete, attachmentList } from './lifecycle.js';
+import { planBackup, exportBackup, previewImport, confirmImport } from './backup.js';
+import { restoreUpload, backupOriginal } from './restore.js';
+import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
+import { ocrAttachment } from './ocr.js';
+import { attachPage,cleanupOrphans } from './upload.js';
+
+// One production Worker. No R2 LIST, no polling cron, no browser-owned R2 credentials.
+const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_LIST = 10;
+const fieldsOf = ['due_date','amount_jpy','net_salary'];
+const fullDate = /^(?:19|20)\d{2}-\d{2}-\d{2}$/;
+const dbRun = (db,sql,...args) => db.prepare(sql).bind(...args).run();
+const dbFirst = (db,sql,...args) => db.prepare(sql).bind(...args).first();
+const dbAll = async (db,sql,...args) => (await db.prepare(sql).bind(...args).all()).results || [];
+const batch = (db,statements) => db.batch(statements.map(([sql,...args])=>db.prepare(sql).bind(...args)));
+function protectedResponse(resp){
+  if(!resp || resp.status===101)return resp;
+  const h=new Headers(resp.headers);
+  h.set('Referrer-Policy','no-referrer');
+  h.set('X-Content-Type-Options','nosniff');
+  h.set('X-Frame-Options','DENY');
+  h.set('Permissions-Policy','camera=(self), microphone=(), geolocation=()');
+  if(!h.has('Content-Security-Policy'))h.set('Content-Security-Policy',"default-src 'self'; img-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; object-src 'none'; frame-src 'self' blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  return new Response(resp.body,{status:resp.status,statusText:resp.statusText,headers:h});
+}
+function requireBinding(env,key){ if(!env[key]) bad(`尚未配置 ${key}，操作不可用`,'NOT_CONFIGURED',503); }
+async function requireSession(request,env){
+  requireBinding(env,'DB'); requireBinding(env,'SESSION_HMAC_KEY');
+  const cookie=parseCookie(request,'__Host-da_session');
+  if(!cookie || !/^[a-f0-9]{64}$/.test(cookie)) bad('请先登录','UNAUTHENTICATED',401);
+  const hash=await hashString(cookie);
+  const session=await dbFirst(env.DB,`SELECT s.id session_id,s.user_id,s.expires_at,u.household_id,u.role,u.display_name,u.email_norm,u.status
+    FROM sessions s JOIN users u ON u.id=s.user_id
+    WHERE s.secret_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND u.status='active'`,hash,isoNow());
+  if(!session)bad('登录已失效，请重新登录','UNAUTHENTICATED',401);
+  const csrf=await hmacHex(env.SESSION_HMAC_KEY,`csrf:${cookie}`);
+  return {...session,csrf};
+}
+function requireMutation(request,principal){
+  if(!sameOrigin(request)) bad('来源验证失败','BAD_ORIGIN',403);
+  if(!safeEqual(request.headers.get('X-CSRF-Token')||'',principal.csrf)) bad('请求校验失败，请刷新重试','BAD_CSRF',403);
+}
+async function createSession(env,userId){
+  const cookie=randomToken(32), now=isoNow(),expires=new Date(Date.now()+14*86400000).toISOString();
+  await dbRun(env.DB,'INSERT INTO sessions(id,user_id,secret_hash,expires_at,created_at) VALUES(?,?,?,?,?)',randomToken(16),userId,await hashString(cookie),expires,now);
+  return {cookie,csrf:await hmacHex(env.SESSION_HMAC_KEY,`csrf:${cookie}`),expires};
+}
+async function recordThrottle(env,identity,failed){
+  const now=isoNow();
+  if(!failed){await dbRun(env.DB,'DELETE FROM auth_throttle WHERE identity_hash=?',identity); return;}
+  await dbRun(env.DB,`INSERT INTO auth_throttle(identity_hash,failures,blocked_until,updated_at) VALUES(?,1,NULL,?)
+    ON CONFLICT(identity_hash) DO UPDATE SET failures=failures+1,
+    blocked_until=CASE WHEN failures+1>=6 THEN ? ELSE blocked_until END,
+    updated_at=excluded.updated_at`,identity,now,new Date(Date.now()+15*60000).toISOString());
+}
+async function handleAuth(request,env,url){
+  requireBinding(env,'DB');requireBinding(env,'SESSION_HMAC_KEY');
+  if(!sameOrigin(request))bad('来源验证失败','BAD_ORIGIN',403);
+  const data=await readJson(request,12000), path=url.pathname, now=isoNow();
+  if(path==='/api/auth/bootstrap'){
+    requireBinding(env,'BOOTSTRAP_ADMIN_TOKEN');
+    const count=await dbFirst(env.DB,'SELECT COUNT(*) count FROM households');
+    if(Number(count?.count||0)>0)bad('家庭已初始化','ALREADY_INITIALIZED',409);
+    if(!safeEqual(await hashString(String(data.setup_token||'')),await hashString(env.BOOTSTRAP_ADMIN_TOKEN)))bad('初始化凭证无效','INVALID_SETUP_TOKEN',403);
+    const email=normalizedEmail(data.email);
+    if(!email||!validatePassword(data.password))bad('需要有效邮箱和至少12位密码');
+    const credentials=await newCredential(data.password),hid=randomToken(16),uid=randomToken(16);
+    await batch(env.DB,[
+      ['INSERT INTO households(id,name,created_at,updated_at) VALUES(?,?,?,?)',hid,'家庭',now,now],
+      ['INSERT INTO users(id,household_id,email_norm,display_name,role,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',uid,hid,email,String(data.display_name||'').slice(0,50),'owner',now,now],
+      ['INSERT INTO password_credentials(user_id,password_salt,password_hash,iterations,updated_at) VALUES(?,?,?,?,?)',uid,credentials.password_salt,credentials.password_hash,credentials.iterations,now]
+    ]);
+    const session=await createSession(env,uid);
+    return json({ok:true,user:{id:uid,display_name:String(data.display_name||'').slice(0,50),role:'owner'},csrf_token:session.csrf},201,{'Set-Cookie':cookieForSession(session.cookie)});
+  }
+  if(path==='/api/auth/login'){
+    const email=normalizedEmail(data.email);
+    if(!email||typeof data.password!=='string')bad('邮箱或密码错误','INVALID_CREDENTIALS',401);
+    const identity=await hashString(`login:${email}`);
+    const throttle=await dbFirst(env.DB,'SELECT blocked_until FROM auth_throttle WHERE identity_hash=?',identity);
+    if(throttle?.blocked_until && throttle.blocked_until>now)bad('尝试次数过多，请稍后再试','RATE_LIMITED',429);
+    const user=await dbFirst(env.DB,`SELECT u.id,u.display_name,u.role,p.password_salt,p.password_hash,p.iterations
+      FROM users u JOIN password_credentials p ON p.user_id=u.id WHERE u.email_norm=? AND u.status='active'`,email);
+    if(!user || !(await checkPassword(data.password,user))){await recordThrottle(env,identity,true);bad('邮箱或密码错误','INVALID_CREDENTIALS',401);}
+    await recordThrottle(env,identity,false);
+    const session=await createSession(env,user.id);
+    return json({ok:true,user:{id:user.id,display_name:user.display_name,role:user.role},csrf_token:session.csrf},200,{'Set-Cookie':cookieForSession(session.cookie)});
+  }
+  if(path==='/api/household/join'){
+    const email=normalizedEmail(data.email);
+    if(!email||!validatePassword(data.password)||typeof data.invite_token!=='string')bad('邀请码、邮箱或密码无效');
+    const invite=await dbFirst(env.DB,`SELECT i.* FROM household_invites i WHERE i.token_hash=? AND i.accepted_at IS NULL AND i.expires_at>?`,await hashString(data.invite_token),now);
+    if(!invite || invite.invitee_email_norm!==email)bad('邀请码无效或过期','INVALID_INVITE',403);
+    const credentials=await newCredential(data.password),uid=randomToken(16);
+    const count=await dbFirst(env.DB,`SELECT COUNT(*) count FROM users WHERE household_id=? AND status!='left'`,invite.household_id);
+    if(count.count>=2)bad('家庭成员已满','HOUSEHOLD_FULL',409);
+    // CAS on accepted_at and two-person SQL trigger eliminate two concurrent joins.
+    try{await batch(env.DB,[
+      ['UPDATE household_invites SET accepted_at=? WHERE id=? AND accepted_at IS NULL',now,invite.id],
+      ['INSERT INTO users(id,household_id,email_norm,display_name,role,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',uid,invite.household_id,email,String(data.display_name||'').slice(0,50),'member',now,now],
+      ['INSERT INTO password_credentials(user_id,password_salt,password_hash,iterations,updated_at) VALUES(?,?,?,?,?)',uid,credentials.password_salt,credentials.password_hash,credentials.iterations,now]
+    ]);}catch{bad('邀请码使用失败或家庭已满','INVITE_CONFLICT',409);}
+    const session=await createSession(env,uid);
+    return json({ok:true,user:{id:uid,role:'member'},csrf_token:session.csrf},201,{'Set-Cookie':cookieForSession(session.cookie)});
+  }
+  bad('接口不存在','NOT_FOUND',404);
+}
+async function visibleDocument(db,id,p,allowedLifecycle='active'){
+  return dbFirst(db,`SELECT d.* FROM documents d WHERE d.id=? AND d.lifecycle=? AND
+    (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,id,allowedLifecycle,p.user_id,p.household_id);
+}
+async function ownedDocument(db,id,p,lifecycle=null){
+  const doc=await dbFirst(db,`SELECT * FROM documents WHERE id=? AND owner_id=? ${lifecycle?`AND lifecycle='${lifecycle}'`:''}`,id,p.user_id);
+  if(!doc)bad('文书不存在或没有操作权限','NOT_FOUND',404);
+  return doc;
+}
+function listShape(d){return {id:d.id,category:d.category,title:d.title,visibility:d.visibility,analysis_status:d.analysis_status,lifecycle:d.lifecycle,created_at:d.created_at,updated_at:d.updated_at,version:d.version,favorite:!!d.favorite,archived_at:d.archived_at||null,tags:JSON.parse(d.tags_json||'[]')};}
+async function analyzeStored(env,doc,force=false){
+  if(doc.analysis_status==='needs_review' && !force)return {cached:true};
+  if(doc.import_mode==='analyze_only')bad('仅分析内容不长期保存');
+  if(!doc.extracted_text_ja)bad('尚无可处理的日文文字。图片 OCR 未接入，请先粘贴文字','OCR_NOT_READY',422);
+  const oldCount=await dbFirst(env.DB,`SELECT COUNT(*) count FROM document_fields WHERE document_id=? AND review_state!='unreviewed'`,doc.id);
+  if(oldCount?.count>0)bad('已存在人工审核字段，不能直接覆盖','REVIEW_LOCKED',409);
+  const result=parseJapaneseText(doc.extracted_text_ja);
+  const now=isoNow();
+  const stmts=[
+    ['DELETE FROM integration_links WHERE candidate_id IN (SELECT id FROM action_candidates WHERE document_id=?)',doc.id],
+    ['DELETE FROM action_candidates WHERE document_id=?',doc.id],
+    ['DELETE FROM document_fields WHERE document_id=?',doc.id],
+    ['UPDATE documents SET category=?,summary_zh=?,explanation_zh=?,analysis_status=?,extraction_version=?,updated_at=?,version=version+1 WHERE id=?',result.category,result.summary_zh,result.explanation_zh,result.analysis_status,'rules-v1',now,doc.id]
+  ];
+  for(const f of result.fields){stmts.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',randomToken(16),doc.id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);}
+  const amount=result.fields.find(f=>f.field_key==='net_salary'||f.field_key==='amount_jpy');
+  if(amount && !['bank','travel','hotel','shopping','delivery','medical','policy','terms','manual','campaign'].includes(result.category)){
+    const kind=result.category==='salary'?'income':'expense';
+    stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'finance',JSON.stringify({kind,amount_jpy:Number(amount.normalized_value),currency:'JPY',payment_confirmed:false,category:result.category,note:'必须人工确认实际到账/付款并防重'}),now,now]);
+  }
+  const due=result.fields.find(f=>f.field_key==='due_date');
+  if(due){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify({title:`确认：${doc.title.slice(0,40)}`,due_on:due.normalized_value,visibility:doc.visibility,requires_confirmation:true}),now,now]);}
+  for(const v of result.vocabulary){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'vocabulary',JSON.stringify({term:v.term,reading:v.reading,meaning_zh:v.meaning_zh,language:'ja',source:'rules-v1',requires_privacy_review:true}),now,now]);}
+  await batch(env.DB,stmts);
+  return {cached:false,result};
+}
+async function handleImportText(request,env,p){
+  const data=await readJson(request);
+  if(!validString(data?.text,100000)||!['text','mail_forward','gmail','google_drive','local_file'].includes(data.source_type)||!['analyze_only','summary'].includes(data.retention))bad('文字、来源或保存方式无效');
+  if(data.visibility && !['private','shared'].includes(data.visibility))bad('可见范围无效');
+  const raw=data.text.trim(),parsed=parseJapaneseText(raw);
+  if(data.retention==='analyze_only')return json({ok:true,saved:false,analysis:parsed});
+  const sha=await hashString(raw), now=isoNow();
+  const previous=await dbFirst(env.DB,`SELECT id FROM documents WHERE owner_id=? AND content_sha256=? AND lifecycle='active'`,p.user_id,sha);
+  if(previous)return json({ok:true,reused:true,document_id:previous.id});
+  const id=randomToken(16),title=(String(data.title||'').trim()||raw.split(/\r?\n/)[0].slice(0,60)||'未命名文书').slice(0,200);
+  // Default private even when shared is requested for sensitive documents.
+  const sensitive=['salary','tax','bank'].includes(parsed.category);
+  const visibility=(data.visibility==='shared'&&!sensitive)?'shared':'private';
+  await batch(env.DB,[
+    ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,extracted_text_ja,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,visibility,parsed.category,title,raw,'summary',sha,'draft',now,now],
+    ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,data.source_type,sha,now]
+  ]);
+  const doc=await ownedDocument(env.DB,id,p);
+  await analyzeStored(env,doc);
+  return json({ok:true,saved:true,reused:false,document_id:id},201);
+}
+function fileSignature(mime,bytes){
+  if(mime==='image/jpeg')return bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff;
+  if(mime==='image/png')return bytes.slice(0,8).every((b,i)=>b===[137,80,78,71,13,10,26,10][i]);
+  if(mime==='image/webp')return new TextDecoder().decode(bytes.slice(0,4))==='RIFF'&&new TextDecoder().decode(bytes.slice(8,12))==='WEBP';
+  if(mime==='application/pdf')return new TextDecoder().decode(bytes.slice(0,5))==='%PDF-';
+  return false;
+}
+async function handleFileImport(request,env,p){
+  requireBinding(env,'DOCUMENTS');
+  const len=Number(request.headers.get('Content-Length')||0);
+  if(len>MAX_FILE_BYTES+10000)bad('文件超出 8MB 限制','FILE_TOO_LARGE',413);
+  const form=await request.formData(),file=form.get('file');
+  if(!file||typeof file.arrayBuffer!=='function'||file.size<=0||file.size>MAX_FILE_BYTES)bad('请选择不超过 8MB 的文件');
+  if(form.get('retention')!=='original')bad('文件上传仅支持明确选择保存原件，普通分析请粘贴可复制文字');
+  const mime=String(file.type||'').toLowerCase();
+  if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(mime))bad('仅支持 JPEG/PNG/WebP/PDF');
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  if(!fileSignature(mime,bytes))bad('文件内容与声明类型不一致','INVALID_FILE',415);
+  const sha=await hashStringBytes(bytes),now=isoNow();
+  const existingDoc=await dbFirst(env.DB,`SELECT id FROM documents WHERE owner_id=? AND content_sha256=? AND lifecycle='active'`,p.user_id,sha);
+  if(existingDoc)return json({ok:true,reused:true,document_id:existingDoc.id});
+  const quality='web-upload-v1',existingObj=await dbFirst(env.DB,`SELECT * FROM storage_objects WHERE owner_id=? AND sha256=? AND mime=? AND quality_profile=? AND state='ready'`,p.user_id,sha,mime,quality);
+  const id=randomToken(16),oid=existingObj?.id||randomToken(16),key=existingObj?.object_key||`${p.user_id}/${randomToken(20)}`;
+  const label=String(file.name||'文书原件').replace(/[\x00-\x1f]/g,'').slice(0,150);
+  if(!existingObj){
+    await dbRun(env.DB,'INSERT INTO storage_objects(id,owner_id,bucket,object_key,sha256,bytes,mime,quality_profile,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',oid,p.user_id,env.R2_BUCKET_NAME||'private',key,sha,bytes.length,mime,quality,'uploading',now,now);
+    try{await env.DOCUMENTS.put(key,bytes,{httpMetadata:{contentType:mime}});await dbRun(env.DB,"UPDATE storage_objects SET state='ready',updated_at=? WHERE id=?",isoNow(),oid);}
+    catch(err){await dbRun(env.DB,"UPDATE storage_objects SET state='delete_failed',updated_at=? WHERE id=?",isoNow(),oid);bad('文件存储失败，请稍后重试','UPLOAD_FAILED',503);}
+  }
+  try{await batch(env.DB,[
+    ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,'private','other',label,'original',sha,'needs_review',now,now],
+    ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,mime.startsWith('image/')?'image':'local_file',sha,now],
+    ['INSERT INTO attachments(id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',randomToken(16),id,oid,label,0,sha,now,now]
+  ]);}catch{
+    // If a transient D1 failure follows a successful PUT, storage_objects is retained for compensating cleanup.
+    bad('已上传但保存索引失败，请联系管理员检查存储清理','METADATA_FAILED',503);
+  }
+  return json({ok:true,saved:true,document_id:id,ocr_status:'not_available',message:'原件已私有保存；图片/PDF 自动 OCR 尚未启用，可粘贴文字继续解析。'},201);
+}
+async function hashStringBytes(bytes){const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');}
+async function getDocDetail(db,doc){
+  const fields=await dbAll(db,`SELECT id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,review_state,source_page FROM document_fields WHERE document_id=? ORDER BY field_key`,doc.id);
+  const attachments=await dbAll(db,`SELECT id,file_label,page_no,state FROM attachments WHERE document_id=? AND state='active' ORDER BY sort_order`,doc.id);
+  return {...listShape(doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,fields,attachments,confirmed_at:doc.confirmed_at};
+}
+async function handleList(env,p,url){
+  const limit=Math.min(MAX_LIST,Math.max(1,Number(url.searchParams.get('limit')||5)||5));
+  const offset=Math.max(0,Math.min(10000,Number(url.searchParams.get('offset')||0)||0));
+  const filter=String(url.searchParams.get('category')||'').slice(0,30);
+  const q=String(url.searchParams.get('q')||'').trim().slice(0,60);
+  const visibility=url.searchParams.get('visibility')||'all';
+  const archived=url.searchParams.get('archived')||'active';
+  const favorite=url.searchParams.get('favorite')||'all';
+  const month=url.searchParams.get('month')||'';
+  let sql=`SELECT id,category,title,visibility,analysis_status,lifecycle,created_at,updated_at,version,favorite,archived_at,tags_json FROM documents WHERE lifecycle='active' AND (owner_id=? OR (household_id=? AND visibility='shared'))`;
+  const args=[p.user_id,p.household_id];
+  if(filter){sql+=' AND category=?';args.push(filter);}
+  if(visibility==='mine')sql+=' AND owner_id=?',args.push(p.user_id);
+  if(visibility==='shared')sql+=" AND visibility='shared'";
+  if(archived==='active')sql+=' AND archived_at IS NULL';
+  if(archived==='archived')sql+=' AND archived_at IS NOT NULL';
+  if(favorite==='yes')sql+=' AND favorite=1';
+  if(/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))sql+=' AND substr(created_at,1,7)=?',args.push(month);
+  if(q){sql+=` AND (title LIKE ? ESCAPE '\\' OR summary_zh LIKE ? ESCAPE '\\')`;const escaped=q.replace(/[\\%_]/g,'\\$&');args.push(`%${escaped}%`,`%${escaped}%`);}
+  sql+=' ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?';args.push(limit+1,offset);
+  const rows=await dbAll(env.DB,sql,...args);
+  return json({items:rows.slice(0,limit).map(listShape),next_offset:rows.length>limit?offset+limit:null});
+}
+async function updateDoc(request,env,p,doc){
+  if(doc.owner_id!==p.user_id)bad('仅文书所有者可以修改','FORBIDDEN',403);
+  const data=await readJson(request,10000);
+  const updates=[],values=[];
+  for(const [key,max] of [['title',200],['category',40]]){
+    if(data[key]!==undefined){if(!validString(data[key],max))bad(`${key} 无效`);updates.push(`${key}=?`);values.push(data[key].trim());}
+  }
+  if(data.favorite!==undefined){if(typeof data.favorite!=='boolean')bad('收藏值无效');updates.push('favorite=?');values.push(data.favorite?1:0);}
+  if(data.archived!==undefined){if(typeof data.archived!=='boolean')bad('归档值无效');updates.push('archived_at=?');values.push(data.archived?isoNow():null);}
+  if(data.tags!==undefined){if(!Array.isArray(data.tags)||data.tags.length>8||!data.tags.every(x=>typeof x==='string'&&x.length>0&&x.length<=32))bad('标签必须在 8 个以内且每项不超过 32 字');updates.push('tags_json=?');values.push(JSON.stringify([...new Set(data.tags)]));}
+  if(data.visibility!==undefined){
+    if(!['private','shared'].includes(data.visibility))bad('共享状态无效');
+    if(data.visibility==='shared' && !data.confirm_sensitive_share)bad('共享前必须再次确认文件内容和隐私','SHARE_CONFIRM_REQUIRED',409);
+    updates.push('visibility=?');values.push(data.visibility);
+  }
+  if(!updates.length)bad('没有要修改的字段');
+  if(!Number.isInteger(data.version)||data.version!==doc.version)bad('文书已被其他操作修改，请刷新','VERSION_CONFLICT',409);
+  updates.push('updated_at=?','version=version+1'); values.push(isoNow(),doc.id,p.user_id,doc.version);
+  const result=await dbRun(env.DB,`UPDATE documents SET ${updates.join(',')} WHERE id=? AND owner_id=? AND version=?`,...values);
+  if(result.meta?.changes===0)bad('编辑冲突','VERSION_CONFLICT',409);
+  return json({ok:true});
+}
+async function updateField(request,env,p,fieldId){
+  const field=await dbFirst(env.DB,`SELECT f.*,d.owner_id,d.lifecycle FROM document_fields f JOIN documents d ON d.id=f.document_id WHERE f.id=?`,fieldId);
+  if(!field||field.owner_id!==p.user_id||field.lifecycle!=='active')bad('字段不存在','NOT_FOUND',404);
+  const data=await readJson(request,6000);
+  if(!['confirmed','corrected','rejected'].includes(data.review_state))bad('审核状态无效');
+  const normalized=String(data.normalized_value ?? field.normalized_value ?? '').trim();
+  if(normalized.length>400)bad('值超出长度');
+  if(fieldsOf.includes(field.field_key)&&data.review_state!=='rejected'){
+    if(field.value_type==='money'&&!/^[1-9]\d{0,11}$/.test(normalized))bad('金额必须是正整数日元');
+    if(field.value_type==='date'&&(!fullDate.test(normalized)||Number.isNaN(Date.parse(normalized))))bad('请输入有效日期');
+  }
+  const now=isoNow();
+  await dbRun(env.DB,'UPDATE document_fields SET normalized_value=?,review_state=?,reviewed_by=?,updated_at=? WHERE id=?',normalized,data.review_state,p.user_id,now,fieldId);
+  await dbRun(env.DB,'UPDATE documents SET updated_at=?,version=version+1 WHERE id=?',now,field.document_id);
+  return json({ok:true});
+}
+async function candidatesForDoc(env,p,id){
+  const doc=await visibleDocument(env.DB,id,p);
+  if(!doc)bad('文书不存在','NOT_FOUND',404);
+  const rows=await dbAll(env.DB,`SELECT c.id,c.candidate_kind,c.payload_json,c.state,
+    i.state integration_state,i.target,i.remote_id FROM action_candidates c
+    LEFT JOIN integration_links i ON i.candidate_id=c.id WHERE c.document_id=? ORDER BY c.created_at ASC`,id);
+  return json({items:rows.map(({payload_json,...x})=>({...x,payload:JSON.parse(payload_json)}))});
+}
+async function moveToTrash(env,p,id){
+  const doc=await ownedDocument(env.DB,id,p,'active');
+  const now=isoNow();
+  await dbRun(env.DB,"UPDATE documents SET lifecycle='trashed',trashed_at=?,trashed_by=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=? AND lifecycle='active'",now,p.user_id,now,id,p.user_id);
+  return json({ok:true,document_id:id,r2_deleted:false,message:'已移入回收站，R2 原件仍保留以供恢复'});
+}
+async function restoreDoc(env,p,id){
+  const doc=await ownedDocument(env.DB,id,p,'trashed');
+  const refs=await dbAll(env.DB,`SELECT a.id,o.object_key FROM attachments a JOIN storage_objects o ON a.object_id=o.id WHERE a.document_id=? AND a.state='active'`,id);
+  let missing=[];
+  for(const ref of refs){if(!env.DOCUMENTS||!(await env.DOCUMENTS.head(ref.object_key)))missing.push(ref.id);}
+  await dbRun(env.DB,"UPDATE documents SET lifecycle='active',trashed_at=NULL,trashed_by=NULL,updated_at=?,version=version+1 WHERE id=?",isoNow(),id);
+  return json({ok:true,document_id:id,missing_attachments:missing,warning:missing.length?'部分原件缺失，已恢复摘要和可用记录':null});
+}
+async function permanentlyDelete(env,p,id){
+  let doc=await dbFirst(env.DB,'SELECT * FROM documents WHERE id=? AND owner_id=?',id,p.user_id);
+  if(!doc){
+    const tomb=await dbFirst(env.DB,"SELECT id FROM deletion_tombstones WHERE owner_id=? AND target_type='document' AND target_id=?",p.user_id,id);
+    if(tomb)return json({ok:true,already_deleted:true});
+    bad('文书不存在或无权删除','NOT_FOUND',404);
+  }
+  if(!['trashed','deletion_pending'].includes(doc.lifecycle))bad('请先将文书移入回收站','TRASH_FIRST',409);
+  if(doc.lifecycle!=='deletion_pending')await dbRun(env.DB,"UPDATE documents SET lifecycle='deletion_pending',deletion_started_at=?,updated_at=? WHERE id=?",isoNow(),isoNow(),id);
+  const attachments=await dbAll(env.DB,'SELECT object_id FROM attachments WHERE document_id=? AND object_id IS NOT NULL',id);
+  const ids=[...new Set(attachments.map(x=>x.object_id))];
+  const clearObjects=[];
+  for(const oid of ids){
+    const obj=await dbFirst(env.DB,'SELECT * FROM storage_objects WHERE id=? AND owner_id=?',oid,p.user_id);
+    if(!obj)continue;
+    const elsewhere=await dbFirst(env.DB,`SELECT COUNT(*) count FROM attachments a JOIN documents d ON d.id=a.document_id
+      WHERE a.object_id=? AND a.document_id!=?`,oid,id);
+    if(elsewhere.count>0)continue;
+    requireBinding(env,'DOCUMENTS');
+    const now=isoNow();
+    await dbRun(env.DB,"UPDATE storage_objects SET state='deletion_pending',updated_at=? WHERE id=?",now,oid);
+    await dbRun(env.DB,`INSERT INTO deletion_jobs(id,object_id,requested_by,state,created_at,updated_at) VALUES(?,?,?,'pending',?,?)
+      ON CONFLICT(object_id) DO UPDATE SET state='pending',updated_at=excluded.updated_at`,randomToken(16),oid,p.user_id,now,now);
+    try{await env.DOCUMENTS.delete(obj.object_key);}
+    catch{
+      await batch(env.DB,[
+        ["UPDATE storage_objects SET state='delete_failed',updated_at=? WHERE id=?",isoNow(),oid],
+        ["UPDATE deletion_jobs SET state='failed',attempt_count=attempt_count+1,last_error_code='R2_DELETE_FAILED',updated_at=? WHERE object_id=?",isoNow(),oid]
+      ]);
+      return failure('DELETE_RETRY_NEEDED','R2 清理失败，记录保持待清理，请在回收站重试',503);
+    }
+    clearObjects.push(oid);
+  }
+  const now=isoNow();
+  const statements=[
+    ['DELETE FROM integration_links WHERE candidate_id IN (SELECT id FROM action_candidates WHERE document_id=?)',id],
+    ['DELETE FROM action_candidates WHERE document_id=?',id],
+    ['DELETE FROM document_fields WHERE document_id=?',id],
+    ['DELETE FROM attachments WHERE document_id=?',id],
+    ['DELETE FROM document_sources WHERE document_id=?',id],
+    ['DELETE FROM document_events WHERE document_id=?',id],
+    ['DELETE FROM documents WHERE id=? AND owner_id=?',id,p.user_id]
+  ];
+  for(const oid of clearObjects){
+    statements.push(['DELETE FROM deletion_jobs WHERE object_id=?',oid],['DELETE FROM storage_objects WHERE id=?',oid]);
+  }
+  statements.push(['INSERT OR IGNORE INTO deletion_tombstones(id,owner_id,request_key,target_type,target_id,deleted_at) VALUES(?,?,?,?,?,?)',randomToken(16),p.user_id,`doc:${id}`,'document',id,now]);
+  try{await batch(env.DB,statements);}catch{
+    return failure('METADATA_CLEANUP_FAILED','原件已清理，但数据库清理尚未完成，请重试',503);
+  }
+  return json({ok:true,document_id:id,r2_deleted_objects:clearObjects.length});
+}
+async function contentForAttachment(env,p,id,aid){
+  const doc=await visibleDocument(env.DB,id,p);if(!doc)bad('文书不存在','NOT_FOUND',404);
+  const a=await dbFirst(env.DB,`SELECT o.object_key,o.mime FROM attachments a JOIN storage_objects o ON a.object_id=o.id
+    WHERE a.id=? AND a.document_id=? AND a.state='active' AND o.state='ready'`,aid,id);
+  if(!a)bad('原件不存在','NOT_FOUND',404);
+  requireBinding(env,'DOCUMENTS');
+  const result=await env.DOCUMENTS.get(a.object_key);
+  if(!result)bad('R2 原件已缺失','ORIGINAL_MISSING',404);
+  return new Response(result.body,{headers:{'Content-Type':a.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox",'Content-Disposition':'inline'}});
+}
+async function route(request,env){
+  const url=new URL(request.url),path=url.pathname,method=request.method;
+  if(!path.startsWith('/api/'))return env.ASSETS?.fetch(request) || new Response('Not found',{status:404});
+  if(method==='GET'&&path==='/api/health')return json({ok:true,service:'document-assistant',ai_ocr:'disabled',version:'0.1.0'});
+  if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
+  const p=await requireSession(request,env);
+  if(!['GET','HEAD'].includes(method))requireMutation(request,p);
+  if(method==='GET'&&path==='/api/me')return json({user:{id:p.user_id,household_id:p.household_id,email:p.email_norm,role:p.role,display_name:p.display_name},csrf_token:p.csrf});
+  if(method==='POST'&&path==='/api/auth/logout'){
+    const cookie=parseCookie(request,'__Host-da_session');
+    await dbRun(env.DB,'UPDATE sessions SET revoked_at=? WHERE secret_hash=?',isoNow(),await hashString(cookie));
+    return json({ok:true},200,{'Set-Cookie':clearingCookie()});
+  }
+  if(method==='POST'&&path==='/api/household/invites'){
+    if(p.role!=='owner')bad('仅家庭管理员可以邀请','FORBIDDEN',403);
+    const data=await readJson(request,5000),email=normalizedEmail(data.invitee_email);
+    if(!email)bad('请输入有效邮箱');
+    const members=await dbFirst(env.DB,"SELECT COUNT(*) count FROM users WHERE household_id=? AND status!='left'",p.household_id);
+    if(members.count>=2)bad('家庭成员已满','HOUSEHOLD_FULL',409);
+    const token=randomToken(24),now=isoNow();
+    await dbRun(env.DB,'INSERT INTO household_invites(id,household_id,inviter_user_id,invitee_email_norm,token_hash,expires_at,created_at) VALUES(?,?,?,?,?,?,?)',randomToken(16),p.household_id,p.user_id,email,await hashString(token),new Date(Date.now()+48*3600000).toISOString(),now);
+    // Invite delivered to owner manually; never log/send to third parties.
+    return json({ok:true,invite_token:token,expires_in_hours:48},201);
+  }
+  if(method==='GET'&&path==='/api/integrations/status')return getBridgeStatus(env,p);
+  if(method==='GET'&&path==='/api/connections'){
+    const rows=await dbAll(env.DB,'SELECT id,provider,status,created_at,updated_at FROM external_connections WHERE user_id=?',p.user_id);
+    return json({connections:rows,bridge_status:'not_configured'});
+  }
+  if(method==='POST'&&path==='/api/imports/plan'){
+    const d=await readJson(request,10000);
+    const fileSize=Number(d.file_size);
+    if(!Number.isSafeInteger(fileSize)||fileSize<0)bad('文件大小无效');
+    const mime=String(d.mime||'');
+    const supported=['text/plain','image/jpeg','image/png','image/webp','application/pdf'].includes(mime);
+    return json({accepted:supported&&fileSize<=MAX_FILE_BYTES,needs_ocr:mime.startsWith('image/')||mime==='application/pdf',estimated_upload_bytes:d.retention==='original'?fileSize:0,warnings:[...(supported?[]:['格式尚不支持']),...(fileSize>MAX_FILE_BYTES?['超过 8 MB']:[]),...(mime.startsWith('image/')||mime==='application/pdf'?['OCR 尚未通过实测，请使用可复制文字或人工输入']:[])]});
+  }
+  if(method==='POST'&&path==='/api/documents/import/text')return handleImportText(request,env,p);
+  if(method==='POST'&&path==='/api/documents/import/file')return handleFileImport(request,env,p);
+  // OCR is opt-in, quota-limited and NEVER silently approves extracted values.
+
+  if(method==='GET'&&path==='/api/documents')return handleList(env,p,url);
+  if(method==='GET'&&path==='/api/today'){
+    const limit=Math.min(10,Math.max(1,Number(url.searchParams.get('limit')||5)||5));
+    const offset=Math.max(0,Math.min(10000,Number(url.searchParams.get('offset')||0)||0));
+    const rows=await dbAll(env.DB,`SELECT d.id,d.title,d.category,d.analysis_status,d.visibility,d.created_at,
+      (SELECT f.normalized_value FROM document_fields f WHERE f.document_id=d.id AND f.field_key='due_date' LIMIT 1) due_date
+      FROM documents d WHERE d.lifecycle='active' AND d.archived_at IS NULL AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))
+      AND (d.analysis_status='needs_review' OR EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.field_key='due_date'))
+      ORDER BY CASE WHEN due_date IS NULL THEN 1 ELSE 0 END,due_date ASC,d.created_at DESC LIMIT ? OFFSET ?`,p.user_id,p.household_id,limit+1,offset);
+    return json({items:rows.slice(0,limit),next_offset:rows.length>limit?offset+limit:null});
+  }
+  if(method==='GET'&&path==='/api/integrations'){
+    const limit=5,offset=Math.max(0,Math.min(10000,Number(url.searchParams.get('offset')||0)||0));
+    const rows=await dbAll(env.DB,`SELECT c.id,c.candidate_kind,c.state,c.payload_json,d.id document_id,d.title,
+      i.state integration_state,i.remote_id FROM action_candidates c JOIN documents d ON d.id=c.document_id
+      LEFT JOIN integration_links i ON i.candidate_id=c.id
+      WHERE d.owner_id=? AND d.lifecycle='active' ORDER BY c.created_at DESC LIMIT ? OFFSET ?`,p.user_id,limit+1,offset);
+    return json({items:rows.slice(0,limit).map(({payload_json,...x})=>({...x,payload:JSON.parse(payload_json)})),next_offset:rows.length>limit?offset+limit:null});
+  }
+
+  if(method==='GET'&&path==='/api/recycle'){
+    const limit=Math.min(10,Math.max(1,Number(url.searchParams.get('limit')||5)||5));
+    const offset=Math.max(0,Math.min(10000,Number(url.searchParams.get('offset')||0)||0));
+    const month=url.searchParams.get('month')||'';
+    const args=[p.user_id];let sql="SELECT id,title,category,trashed_at,lifecycle,created_at FROM documents WHERE owner_id=? AND lifecycle IN ('trashed','deletion_pending')";
+    if(/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)){sql+=' AND substr(trashed_at,1,7)=?';args.push(month);}
+    sql+=' ORDER BY trashed_at DESC,id DESC LIMIT ? OFFSET ?';args.push(limit+1,offset);
+    const rows=await dbAll(env.DB,sql,...args);
+    return json({items:rows.slice(0,limit),next_offset:rows.length>limit?offset+limit:null});
+  }
+  if(method==='GET'&&path==='/api/recycle/attachments'){
+    const offset=Math.max(0,Math.min(10000,Number(url.searchParams.get('offset')||0)||0));
+    const rows=await dbAll(env.DB,"SELECT a.id,a.document_id,a.file_label,a.trashed_at,a.state,d.title FROM attachments a JOIN documents d ON d.id=a.document_id WHERE d.owner_id=? AND a.state IN ('trashed','deletion_pending') ORDER BY a.trashed_at DESC LIMIT 6 OFFSET ?",p.user_id,offset);
+    return json({items:rows.slice(0,5),next_offset:rows.length>5?offset+5:null});
+  }
+  if(method==='POST'&&path==='/api/recycle/empty'){
+    const data=await readJson(request,5000);
+    if(data.confirm!=='DELETE_FOREVER')bad('必须再次输入确认操作','CONFIRM_REQUIRED',409);
+    const rows=await dbAll(env.DB,"SELECT id FROM documents WHERE owner_id=? AND lifecycle IN ('trashed','deletion_pending') ORDER BY trashed_at ASC LIMIT 5",p.user_id);
+    let processed=0,failures=[];
+    for(const d of rows){const r=await permanentlyDelete(env,p,d.id);if(r.ok){processed++;}else{failures.push(d.id);}}
+    return json({ok:failures.length===0,processed,failed:failures,has_more:rows.length===5});
+  }
+  if(method==='POST'&&path==='/api/backups/plan')return planBackup(request,env,p);
+  if(method==='GET'&&path==='/api/backups/export')return exportBackup(env,p,url);
+  if(method==='POST'&&path==='/api/backups/import-preview')return previewImport(request,env,p);
+  if(method==='POST'&&path==='/api/backups/import-confirm')return confirmImport(request,env,p);
+  if(method==='POST'&&path==='/api/storage/cleanup-orphans')return cleanupOrphans(env,p);
+  if(method==='GET'&&path==='/api/usage'){
+    const day=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const usage=await dbFirst(env.DB,'SELECT ai_calls,imported_files FROM usage_daily WHERE user_id=? AND local_day=?',p.user_id,day);
+    return json({local_today:usage||{ai_calls:0,imported_files:0},cloudflare_account_remaining:null,cloudflare_account_remaining_status:'unknown',note:'跨项目账户级配额未接入，不可假定剩余为免费额度'});
+  }
+  const exportOriginal=path.match(/^\/api\/backups\/original\/([a-f0-9]{32})\/([a-f0-9]{32})$/i);
+  if(method==='GET'&&exportOriginal)return backupOriginal(env,p,exportOriginal[1],exportOriginal[2]);
+  const match=path.match(/^\/api\/documents\/([a-z0-9]+)(?:\/(.*))?$/i);
+  if(match){
+    const id=match[1],rest=match[2]||'';
+    if(!rest){
+      const doc=await visibleDocument(env.DB,id,p);
+      if(!doc)bad('文书不存在','NOT_FOUND',404);
+      if(method==='GET')return json({document:await getDocDetail(env.DB,doc)});
+      if(method==='PATCH')return updateDoc(request,env,p,doc);
+    }
+    if(method==='POST'&&rest==='ocr')return ocrAttachment(request,env,p,id);
+    if(method==='PATCH'&&rest==='source-text'){
+      const d=await ownedDocument(env.DB,id,p,'active');
+      const body=await readJson(request,110000);
+      if(!validString(body.text,100000))bad('请输入可核验的日文文字');
+      const confirmed=await dbFirst(env.DB,"SELECT COUNT(*) count FROM document_fields WHERE document_id=? AND review_state IN ('confirmed','corrected')",id);
+      if(confirmed.count>0&&!body.confirm_reset_review)bad('已有人工核对字段，覆盖原文将清除现有审核，请再次确认','REVIEW_RESET_REQUIRED',409);
+      if(confirmed.count>0) await dbRun(env.DB,'DELETE FROM document_fields WHERE document_id=?',id);
+      await dbRun(env.DB,"UPDATE documents SET extracted_text_ja=?,analysis_status='draft',updated_at=?,version=version+1 WHERE id=? AND owner_id=?",body.text.trim(),isoNow(),id,p.user_id);
+      const updated=await ownedDocument(env.DB,id,p,'active');
+      const result=await analyzeStored(env,updated,true);
+      return json({ok:true,analysis_status:result.result?.analysis_status||'needs_review',fields:result.result?.fields||[],message:'文字已保存为待人工核对的分析结果'});
+    }
+    if(method==='POST'&&rest==='analyze'){
+      const doc=await ownedDocument(env.DB,id,p,'active');
+      const result=await analyzeStored(env,doc);
+      return json({ok:true,...result});
+    }
+    if(method==='GET'&&rest==='fields'){
+      const doc=await visibleDocument(env.DB,id,p);if(!doc)bad('文书不存在','NOT_FOUND',404);
+      return json({items:await dbAll(env.DB,'SELECT id,field_key,normalized_value,value_type,source_quote,review_state FROM document_fields WHERE document_id=?',id)});
+    }
+    if(method==='GET'&&rest==='candidates')return candidatesForDoc(env,p,id);
+    if(method==='POST'&&rest==='trash')return moveToTrash(env,p,id);
+    if(method==='POST'&&rest==='restore')return restoreDoc(env,p,id);
+    if(method==='POST'&&rest==='permanent-delete'){
+      const d=await readJson(request,2000);if(d.confirm!=='DELETE_FOREVER')bad('需要二次确认','CONFIRM_REQUIRED',409);
+      return permanentlyDelete(env,p,id);
+    }
+    if(method==='POST'&&rest==='attachments')return attachPage(request,env,p,id);
+    if(method==='GET'&&rest==='attachments/recycle')return attachmentList(env,p,id);
+    if(method==='POST'&&rest==='attachments/restore-upload')return restoreUpload(request,env,p,id);
+    const attAction=rest.match(/^attachments\/([a-z0-9]+)\/(trash|restore|permanent-delete)$/i);
+    if(method==='POST'&&attAction){
+      if(attAction[2]==='trash')return attachmentTrash(env,p,id,attAction[1]);
+      if(attAction[2]==='restore')return attachmentRestore(env,p,id,attAction[1]);
+      const confirmation=await readJson(request,1000);
+      if(confirmation.confirm!=='DELETE_FOREVER')bad('必须二次确认永久删除','CONFIRM_REQUIRED',409);
+      return attachmentDelete(env,p,id,attAction[1]);
+    }
+    const content=rest.match(/^attachments\/([a-z0-9]+)\/content$/i);
+    if(method==='GET'&&content)return contentForAttachment(env,p,id,content[1]);
+  }
+  const field=path.match(/^\/api\/fields\/([a-z0-9]+)$/i);
+  if(method==='PATCH'&&field)return updateField(request,env,p,field[1]);
+  const candidate=path.match(/^\/api\/candidates\/([a-z0-9]+)\/(commit|preview)$/i);
+  if(candidate){
+    if(method==='POST'&&candidate[2]==='commit')return commitCandidate(request,env,p,candidate[1]);
+    if(method==='GET'&&candidate[2]==='preview')return candidatePreview(request,env,p,candidate[1]);
+  }
+  if(method==='POST'&&['/api/auth/start','/api/auth/complete'].includes(path))return failure('AUTH_MODE_NOT_ENABLED','邮件挑战登录暂未启用，请使用密码登录',501);
+  return failure('NOT_IMPLEMENTED','当前阶段尚未实现此接口',501);
+}
+export default {
+  async fetch(request,env){
+    try{return protectedResponse(await route(request,env));}
+    catch(err){
+      if(err?.status)return failure(err.code||'ERROR',err.message,err.status);
+      // Intentionally no PII/details in logs.
+      return failure('INTERNAL_ERROR','服务暂时不可用',500);
+    }
+  }
+};

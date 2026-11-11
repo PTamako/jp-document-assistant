@@ -1,0 +1,29 @@
+name: Local-only CI (no Cloudflare preview or deployment)
+on:
+  pull_request:
+  push:
+    branches: [main, 'feature/**']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install frontend/build dependencies
+        run: npm install --no-audit --no-fund
+      - name: Source syntax
+        run: npm run check:syntax
+      - name: Unit and in-memory D1 tests
+        run: npm test
+      - name: Build Vue UI (no deploy)
+        run: npm run build
+      - name: Check built asset metadata (no network API)
+        run: test -f dist/index.html && test -f dist/manifest.webmanifest

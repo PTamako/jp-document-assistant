@@ -1,0 +1,861 @@
+openapi: 3.1.0
+info:
+  title: 日本生活文书助手 API (contract draft)
+  version: 1.0.0-rc1
+  description: >-
+    Double-user private PWA. Single production Cloudflare Worker, D1 and private R2.
+    No preview resources. Finance is owned by 家計簿, tasks/reminders by HomeFlow,
+    vocabulary/sentences by 知学. All cross-app writes require explicit user confirmation.
+    This is a reviewed CONTRACT; target apps have not yet implemented bridge endpoints.
+servers:
+  - url: https://YOUR_PRODUCTION_DOMAIN
+    description: Placeholder, replace after formal deployment. No preview server.
+security:
+  - sessionCookie: []
+tags:
+  - name: Accounts
+  - name: Imports
+  - name: Documents
+  - name: Fields
+  - name: Integration
+  - name: Recycle
+  - name: Backup
+  - name: Usage
+paths:
+  /api/auth/start:
+    post:
+      tags: [Accounts]
+      summary: Start vetted member sign-in challenge (implementation must be security-reviewed)
+      operationId: startAuth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: {type: string, format: email}
+      responses:
+        '202': {description: Non-enumerating challenge response; never reveal whether email exists}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/auth/complete:
+    post:
+      tags: [Accounts]
+      summary: Complete vetted member challenge; set HttpOnly Secure SameSite session
+      operationId: completeAuth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, response]
+              properties:
+                challenge_id: {type: string}
+                response: {type: string}
+      responses:
+        '200': {description: Verified session established}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/auth/logout:
+    post:
+      tags: [Accounts]
+      summary: Revoke member session and clear cookie
+      operationId: logout
+      parameters: [{$ref: '#/components/parameters/Csrf'}]
+      responses:
+        '204': {description: Logged out}
+  /api/household/invites:
+    post:
+      tags: [Accounts]
+      summary: Invite precisely one second household member with an expiring single-use token
+      operationId: inviteMember
+      parameters: [{$ref: '#/components/parameters/Csrf'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invitee_email]
+              properties:
+                invitee_email: {type: string, format: email}
+      responses:
+        '201': {description: One-time invitation created; token delivered securely}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/household/join:
+    post:
+      tags: [Accounts]
+      summary: Join household after authenticating invitee; rejects a third member
+      operationId: joinHousehold
+      parameters: [{$ref: '#/components/parameters/Csrf'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invite_token]
+              properties:
+                invite_token: {type: string}
+      responses:
+        '200': {description: Joined household}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/connections:
+    get:
+      tags: [Accounts]
+      summary: List current user's OAuth and cross-app connection status (never credentials)
+      operationId: connections
+      responses:
+        '200':
+          description: Provider statuses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connections: {type: array, items: {type: object}}
+  /api/connections/{provider}/authorize:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        schema: {type: string, enum: [google_drive, gmail, kakebo, homeflow, zhixue]}
+    post:
+      tags: [Accounts]
+      summary: Begin provider-specific user-granted authorization; Gmail gated until Google approval
+      operationId: authorizeProvider
+      parameters: [{$ref: '#/components/parameters/Csrf'}]
+      responses:
+        '200':
+          description: Redirect or next authorization step with state/PKCE
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorization_url: {type: string, format: uri}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/connections/{connectionId}/revoke:
+    parameters:
+      - name: connectionId
+        in: path
+        required: true
+        schema: {type: string}
+    post:
+      tags: [Accounts]
+      summary: Revoke only this user's connected provider credentials
+      operationId: revokeConnection
+      parameters: [{$ref: '#/components/parameters/Csrf'}]
+      responses:
+        '204': {description: Revoked}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/me:
+    get:
+      tags: [Accounts]
+      summary: Return current authenticated member, family and connection status
+      operationId: me
+      responses:
+        '200':
+          description: Principal
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeResponse'}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/imports/plan:
+    post:
+      tags: [Imports]
+      summary: Analyze size, MIME and expected cost before upload; must not bill AI
+      operationId: importPlan
+      parameters: [{$ref: '#/components/parameters/Csrf'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source_type, file_size, mime, retention]
+              properties:
+                source_type: {type: string, enum: [mail_forward, gmail, image, text, google_drive, local_file]}
+                file_size: {type: integer, minimum: 0}
+                mime: {type: string, maxLength: 128}
+                page_count: {type: integer, minimum: 1, maximum: 100}
+                retention: {type: string, enum: [analyze_only, summary, original]}
+      responses:
+        '200':
+          description: Budget and format decision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted, needs_ocr, estimated_upload_bytes]
+                properties:
+                  accepted: {type: boolean}
+                  needs_ocr: {type: boolean}
+                  estimated_upload_bytes: {type: [integer, 'null']}
+                  warnings: {type: array, items: {type: string}}
+        '400': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/documents/import/text:
+    post:
+      tags: [Imports]
+      summary: Import pasted email/text or extracted text; no R2 upload by default
+      operationId: importText
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text, source_type, retention]
+              properties:
+                text: {type: string, minLength: 1, maxLength: 100000}
+                title: {type: string, maxLength: 200}
+                source_type: {type: string, enum: [text, mail_forward, gmail, google_drive, local_file]}
+                retention: {type: string, enum: [analyze_only, summary]}
+                source_version: {type: string, maxLength: 128}
+                visibility: {type: string, enum: [private, shared], default: private}
+      responses:
+        '201':
+          description: Created draft or reused document
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/DocumentCreated'}}
+        '200':
+          description: Existing deduplicated document
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/DocumentCreated'}}
+        '400': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/documents/import/file:
+    post:
+      tags: [Imports]
+      summary: Stream small accepted file through the single Worker; archive to R2 only with consent
+      operationId: importFile
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, source_type, retention]
+              properties:
+                file: {type: string, format: binary}
+                source_type: {type: string, enum: [image, local_file, mail_forward, google_drive]}
+                retention: {type: string, enum: [analyze_only, summary, original]}
+                visibility: {type: string, enum: [private, shared], default: private}
+      responses:
+        '201':
+          description: Imported file
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/DocumentCreated'}}
+        '400': {$ref: '#/components/responses/Error'}
+        '413': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/documents:
+    get:
+      tags: [Documents]
+      summary: Bounded list (D1 only, never R2 GET/LIST)
+      operationId: listDocuments
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 10, default: 5}}
+        - {name: category, in: query, schema: {type: string}}
+        - {name: visibility, in: query, schema: {type: string, enum: [mine, shared, all]}}
+        - {name: archived, in: query, schema: {type: boolean}}
+      responses:
+        '200':
+          description: Document metadata page
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/DocumentList'}}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}:
+    parameters: [{$ref: '#/components/parameters/DocumentId'}]
+    get:
+      tags: [Documents]
+      summary: Read own/shared active document, without auto-fetching R2 images
+      operationId: getDocument
+      responses:
+        '200':
+          description: Document details
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/DocumentDetail'}}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+    patch:
+      tags: [Documents]
+      summary: Change title/category/archived/shared; salary sharing requires explicit second confirmation
+      operationId: patchDocument
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/IfMatch'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                title: {type: string, maxLength: 200}
+                category: {type: string}
+                visibility: {type: string, enum: [private, shared]}
+                archived: {type: boolean}
+                confirm_sensitive_share: {type: boolean}
+      responses:
+        '200':
+          description: Updated document
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/DocumentDetail'}}
+        '409': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/analyze:
+    parameters: [{$ref: '#/components/parameters/DocumentId'}]
+    post:
+      tags: [Documents]
+      summary: Reuse cached analysis by source+version; only spend Workers AI when necessary
+      operationId: analyzeDocument
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                mode: {type: string, enum: [auto, text_only, force_recheck], default: auto}
+                force_reason: {type: string, maxLength: 200}
+      responses:
+        '200':
+          description: Existing result reused or new analysis completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, enum: [ready, needs_review, processing, failed]}
+                  cache_hit: {type: boolean}
+                  analysis_id: {type: string}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/fields:
+    parameters: [{$ref: '#/components/parameters/DocumentId'}]
+    get:
+      tags: [Fields]
+      summary: Extracted fields with source quotes and verification state
+      operationId: documentFields
+      responses:
+        '200':
+          description: Fields
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [fields]
+                properties:
+                  fields: {type: array, items: {$ref: '#/components/schemas/ExtractedField'}}
+  /api/fields/{fieldId}:
+    parameters: [{$ref: '#/components/parameters/FieldId'}]
+    patch:
+      tags: [Fields]
+      summary: Correct a field, preserving original quote and reviewer identity
+      operationId: correctField
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/IfMatch'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [normalized_value, review_state]
+              properties:
+                normalized_value: {type: string}
+                review_state: {type: string, enum: [confirmed, corrected, rejected]}
+      responses:
+        '200':
+          description: Reviewed
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/ExtractedField'}}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/candidates:
+    parameters: [{$ref: '#/components/parameters/DocumentId'}]
+    get:
+      tags: [Integration]
+      summary: Read finance, HomeFlow task, vocabulary and sentence candidates from cached analysis
+      operationId: listCandidates
+      responses:
+        '200':
+          description: Per-target candidates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates: {type: array, items: {$ref: '#/components/schemas/Candidate'}}
+  /api/candidates/{candidateId}/commit:
+    parameters: [{$ref: '#/components/parameters/CandidateId'}]
+    post:
+      tags: [Integration]
+      summary: Explicitly confirm one candidate; never automatically write to target apps
+      operationId: commitCandidate
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target, confirmed_payload]
+              properties:
+                target: {type: string, enum: [kakebo, homeflow, zhixue]}
+                confirmed_payload: {type: object, additionalProperties: true}
+                link_existing_remote_id: {type: string}
+      responses:
+        '200':
+          description: Link existing or sync success; returns remote ID if confirmed by target
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/IntegrationState'}}
+        '202':
+          description: Attempt still unknown/pending; do not assume success
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/IntegrationState'}}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/attachments/{attachmentId}/content:
+    parameters: [{$ref: '#/components/parameters/DocumentId'}, {$ref: '#/components/parameters/AttachmentId'}]
+    get:
+      tags: [Documents]
+      summary: Authenticated on-demand R2 GET (no cache, no prefetch)
+      operationId: getAttachmentContent
+      responses:
+        '200':
+          description: Binary response with Cache-Control no-store and nosniff
+          headers:
+            Cache-Control: {schema: {type: string, const: no-store}}
+            X-Content-Type-Options: {schema: {type: string, const: nosniff}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/trash:
+    parameters: [{$ref: '#/components/parameters/DocumentId'}]
+    post:
+      tags: [Recycle]
+      summary: Soft delete in D1; R2 original must remain recoverable
+      operationId: trashDocument
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      responses:
+        '200':
+          description: Trashed (no R2 DELETE)
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/LifecycleStatus'}}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/restore:
+    parameters: [{$ref: '#/components/parameters/DocumentId'}]
+    post:
+      tags: [Recycle]
+      summary: Restore D1 soft-deleted document without R2 PUT or AI rerun
+      operationId: restoreDocument
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      responses:
+        '200':
+          description: Restored, unless the source is missing
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/LifecycleStatus'}}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/permanent-delete:
+    parameters: [{$ref: '#/components/parameters/DocumentId'}]
+    post:
+      tags: [Recycle]
+      summary: Two-phase delete; physically delete last-reference R2 objects then remove private D1 data
+      operationId: deleteDocumentPermanently
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm_permanent_delete]
+              properties:
+                confirm_permanent_delete: {type: boolean, const: true}
+      responses:
+        '200':
+          description: Fully deleted from R2 and D1, irreversible without backup
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/LifecycleStatus'}}
+        '202':
+          description: Deletion pending or failed; never claim already physically deleted
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/LifecycleStatus'}}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/attachments/{attachmentId}/trash:
+    parameters: [{$ref: '#/components/parameters/AttachmentId'}]
+    post:
+      tags: [Recycle]
+      summary: Trash one image/page/attachment, leaving the document and extracted fields intact
+      operationId: trashAttachment
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      responses:
+        '200':
+          description: Attachment moved to trash (R2 retained)
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/LifecycleStatus'}}
+  /api/attachments/{attachmentId}/restore:
+    parameters: [{$ref: '#/components/parameters/AttachmentId'}]
+    post:
+      tags: [Recycle]
+      summary: Restore one attachment; no new R2 PUT
+      operationId: restoreAttachment
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      responses:
+        '200':
+          description: Attachment restored
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/LifecycleStatus'}}
+  /api/attachments/{attachmentId}/permanent-delete:
+    parameters: [{$ref: '#/components/parameters/AttachmentId'}]
+    post:
+      tags: [Recycle]
+      summary: Permanently delete one attachment; R2 physically deleted only if last reference
+      operationId: permanentDeleteAttachment
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm_permanent_delete]
+              properties:
+                confirm_permanent_delete: {type: boolean, const: true}
+      responses:
+        '200':
+          description: Fully deleted
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/LifecycleStatus'}}
+        '202':
+          description: Pending retry of R2 physical deletion
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/LifecycleStatus'}}
+  /api/recycle:
+    get:
+      tags: [Recycle]
+      summary: Paginated private/shared trash; no R2 LIST
+      operationId: listRecycle
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 10, default: 5}}
+        - {name: year, in: query, schema: {type: integer, minimum: 2000, maximum: 2100}}
+        - {name: month, in: query, schema: {type: integer, minimum: 1, maximum: 12}}
+      responses:
+        '200':
+          description: Trashed items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/LifecycleStatus'}}
+                  next_cursor: {type: [string, 'null']}
+  /api/recycle/empty:
+    post:
+      tags: [Recycle]
+      summary: Manually permanently delete selected trash; no auto expiry or new Cron
+      operationId: emptyRecycle
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selection, confirm_permanent_delete]
+              properties:
+                selection: {type: array, items: {type: string}, minItems: 1, maxItems: 100}
+                confirm_permanent_delete: {type: boolean, const: true}
+      responses:
+        '202':
+          description: Returns pending and completed counts, never false all-success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  completed: {type: integer}
+                  pending: {type: integer}
+                  failed: {type: integer}
+  /api/backups/plan:
+    post:
+      tags: [Backup]
+      summary: Estimate backup count/bytes and permission scope without reading R2
+      operationId: backupPlan
+      parameters: [{$ref: '#/components/parameters/Csrf'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, originals]
+              properties:
+                scope: {type: string, enum: [selection, month, year, all]}
+                originals: {type: boolean}
+                selected_ids: {type: array, items: {type: string}}
+                year: {type: integer}
+                month: {type: integer}
+      responses:
+        '200':
+          description: Preview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record_count: {type: integer}
+                  object_count: {type: integer}
+                  estimated_bytes: {type: [integer, 'null']}
+                  warnings: {type: array, items: {type: string}}
+  /api/backups/export:
+    post:
+      tags: [Backup]
+      summary: Stream bounded manifest/objects; client chooses saving destination
+      operationId: backupExport
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, originals]
+              properties:
+                scope: {type: string, enum: [selection, month, year, all]}
+                originals: {type: boolean}
+                selected_ids: {type: array, items: {type: string}}
+                part: {type: integer, minimum: 1, default: 1}
+      responses:
+        '200':
+          description: JSON manifest or size-bounded streamed part; secrets never included
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '413': {$ref: '#/components/responses/Error'}
+  /api/backups/import-preview:
+    post:
+      tags: [Backup]
+      summary: Validate portable manifest/hash without writing D1/R2
+      operationId: backupImportPreview
+      parameters: [{$ref: '#/components/parameters/Csrf'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [manifest], properties: {manifest: {type: object}}}
+      responses:
+        '200':
+          description: Validation report with missing objects and conflicts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: {type: boolean}
+                  conflicts: {type: array, items: {type: string}}
+                  warnings: {type: array, items: {type: string}}
+  /api/backups/import-confirm:
+    post:
+      tags: [Backup]
+      summary: Explicitly restore validated backup, re-PUT originals only if needed
+      operationId: backupImportConfirm
+      parameters: [{$ref: '#/components/parameters/Csrf'}, {$ref: '#/components/parameters/Idempotency'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [validated_import_id, confirm]
+              properties:
+                validated_import_id: {type: string}
+                confirm: {type: boolean, const: true}
+                mode: {type: string, enum: [skip_existing, restore_metadata_only, restore_with_originals], default: skip_existing}
+      responses:
+        '202':
+          description: Per-item progress; must not re-sync three target apps
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  restored: {type: integer}
+                  pending: {type: integer}
+                  failed: {type: integer}
+  /api/usage:
+    get:
+      tags: [Usage]
+      summary: This app daily usage and optional account-wide quota (unknown if unreadable)
+      operationId: usage
+      responses:
+        '200':
+          description: Actual counters and unknowns must not be replaced with 0
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app_ai_calls_today: {type: integer}
+                  account_free_remaining: {type: [integer, 'null']}
+                  account_quota_verified_at: {type: [string, 'null'], format: date-time}
+                  warning: {type: string}
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-session
+      description: HttpOnly Secure SameSite session. OAuth and target-app credentials stay server-side.
+  parameters:
+    Csrf:
+      in: header
+      name: X-CSRF-Token
+      required: true
+      schema: {type: string, minLength: 16}
+    Idempotency:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema: {type: string, minLength: 8, maxLength: 128}
+    IfMatch:
+      in: header
+      name: If-Match
+      required: true
+      schema: {type: string}
+    DocumentId:
+      in: path
+      name: documentId
+      required: true
+      schema: {type: string}
+    FieldId:
+      in: path
+      name: fieldId
+      required: true
+      schema: {type: string}
+    AttachmentId:
+      in: path
+      name: attachmentId
+      required: true
+      schema: {type: string}
+    CandidateId:
+      in: path
+      name: candidateId
+      required: true
+      schema: {type: string}
+  responses:
+    Error:
+      description: Consistent safe error; never expose OCR text, sensitive amounts or credentials in errors
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: {type: boolean, const: false}
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INVALID_INPUT, REVIEW_REQUIRED, SOURCE_UNREADABLE, CONFLICT, SOURCE_CHANGED, QUOTA_EXCEEDED, RATE_LIMITED, TARGET_UNAVAILABLE, SYNC_UNKNOWN, DELETE_PENDING, R2_DELETE_FAILED, BACKUP_INVALID, FILE_TOO_LARGE]
+            message: {type: string}
+            retryable: {type: boolean}
+    MeResponse:
+      type: object
+      properties:
+        user_id: {type: string}
+        household_id: {type: string}
+        member_role: {type: string, enum: [owner, member]}
+        connections: {type: object, additionalProperties: {type: string}}
+    DocumentCreated:
+      type: object
+      properties:
+        document_id: {type: string}
+        deduplicated: {type: boolean}
+        analysis_status: {type: string}
+        retention: {type: string}
+    DocumentSummary:
+      type: object
+      required: [id, title, category, visibility, lifecycle, created_at]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        category: {type: string}
+        visibility: {type: string, enum: [private, shared]}
+        lifecycle: {type: string, enum: [active, trashed, deletion_pending]}
+        created_at: {type: string, format: date-time}
+        is_archived: {type: boolean}
+        needs_review: {type: boolean}
+    DocumentDetail:
+      allOf:
+        - {$ref: '#/components/schemas/DocumentSummary'}
+        - type: object
+          properties:
+            summary_zh: {type: string}
+            explanation_zh: {type: string}
+            original_text_ja: {type: [string, 'null']}
+            version: {type: integer}
+            sources: {type: array, items: {type: object}}
+            attachments: {type: array, items: {type: object}}
+    DocumentList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/DocumentSummary'}}
+        next_cursor: {type: [string, 'null']}
+    ExtractedField:
+      type: object
+      required: [id, field_key, value_type, review_state]
+      properties:
+        id: {type: string}
+        field_key: {type: string}
+        raw_value: {type: [string, 'null']}
+        normalized_value: {type: [string, 'null']}
+        value_type: {type: string, enum: [text, money, date, datetime, boolean, json]}
+        original_currency: {type: [string, 'null']}
+        source_quote: {type: [string, 'null']}
+        source_page: {type: [integer, 'null']}
+        review_state: {type: string, enum: [unreviewed, confirmed, corrected, rejected]}
+    Candidate:
+      type: object
+      required: [id, kind, state, payload]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [finance, homeflow_task, vocabulary, sentence]}
+        state: {type: string, enum: [suggested, confirmed, skipped]}
+        payload: {type: object}
+        source_quote: {type: [string, 'null']}
+        target: {type: string, enum: [kakebo, homeflow, zhixue]}
+    IntegrationState:
+      type: object
+      required: [state, idempotency_key]
+      properties:
+        state: {type: string, enum: [pending, sending, synced, linked_existing, failed, skipped]}
+        idempotency_key: {type: string}
+        remote_id: {type: [string, 'null']}
+        error_code: {type: [string, 'null']}
+    LifecycleStatus:
+      type: object
+      required: [id, lifecycle, complete]
+      properties:
+        id: {type: string}
+        lifecycle: {type: string, enum: [active, trashed, deletion_pending, permanently_deleted]}
+        complete: {type: boolean}
+        affected_r2_objects: {type: [integer, 'null']}
+        pending_r2_deletes: {type: integer}
+        reason: {type: [string, 'null']}
