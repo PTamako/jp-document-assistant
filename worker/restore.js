@@ -1,5 +1,6 @@
 import { json, bad } from './http.js';
 import { randomToken,isoNow } from './security.js';
+import { validateOfficeBytes } from '../web/src/document-text.js';
 const first=(db,sql,...a)=>db.prepare(sql).bind(...a).first();
 const run=(db,sql,...a)=>db.prepare(sql).bind(...a).run();
 const batch=(db,rows)=>db.batch(rows.map(([sql,...a])=>db.prepare(sql).bind(...a)));
@@ -10,6 +11,8 @@ function fileSign(mime,b){
   if(mime==='image/png')return [137,80,78,71,13,10,26,10].every((n,i)=>b[i]===n);
   if(mime==='image/webp')return new TextDecoder().decode(b.slice(0,4))==='RIFF'&&new TextDecoder().decode(b.slice(8,12))==='WEBP';
   if(mime==='application/pdf')return new TextDecoder().decode(b.slice(0,5))==='%PDF-';
+  if(mime.startsWith('application/vnd.openxmlformats-officedocument.'))return b.length>=4&&
+    b[0]===80&&b[1]===75&&b[2]===3&&b[3]===4;
   return false;
 }
 export async function restoreUpload(request,env,p,id){
@@ -20,9 +23,16 @@ export async function restoreUpload(request,env,p,id){
   const expected=String(form.get('sha256')||''),label=String(form.get('label')||'原件').slice(0,150).replace(/[\x00-\x1f]/g,'');
   if(!/^[a-f0-9]{64}$/.test(expected))bad('必须指定可信原件 SHA-256');
   if(!file||!file.size||file.size>MAX)bad('单个原件大小必须在 1～8MB 以内','FILE_TOO_LARGE',413);
-  if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(file.type))bad('原件类型不支持');
+  const officeTypes=['application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
+  if(!['image/jpeg','image/png','image/webp','application/pdf',...officeTypes].includes(file.type))bad('原件类型不支持');
   const bytes=new Uint8Array(await file.arrayBuffer());
   if(!fileSign(file.type,bytes)||await sha256(bytes)!==expected)bad('原件内容与备份校验值不一致','HASH_MISMATCH',422);
+  if(officeTypes.includes(file.type)){
+    try{await validateOfficeBytes(bytes,file.type);}
+    catch{bad('Office 恢复文件结构无效或含不安全内容','INVALID_OFFICE',415);}
+  }
   const old=await first(env.DB,`SELECT a.id,o.object_key,o.state object_state FROM attachments a
     LEFT JOIN storage_objects o ON o.id=a.object_id
     WHERE a.document_id=? AND a.sha256=? AND a.state='active'`,id,expected);

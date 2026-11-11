@@ -179,7 +179,7 @@ function fileSignature(mime,bytes){
   if(mime==='image/png')return bytes.slice(0,8).every((b,i)=>b===[137,80,78,71,13,10,26,10][i]);
   if(mime==='image/webp')return new TextDecoder().decode(bytes.slice(0,4))==='RIFF'&&new TextDecoder().decode(bytes.slice(8,12))==='WEBP';
   if(mime==='application/pdf')return new TextDecoder().decode(bytes.slice(0,5))==='%PDF-';
-  if(mime==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'||mime==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'){
+  if(mime==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'||mime==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'||mime==='application/vnd.openxmlformats-officedocument.presentationml.presentation'){
     if(bytes[0]!==80||bytes[1]!==75||bytes[2]!==3||bytes[3]!==4)return false;
     return true; // Validate ZIP directory, XML and CRC before R2 PUT.
   }
@@ -195,13 +195,14 @@ async function handleFileImport(request,env,p){
   const ext=String(file.name||'').toLowerCase();
   const docx='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const xlsx='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const pptx='application/vnd.openxmlformats-officedocument.presentationml.presentation';
   const declared=String(file.type||'').toLowerCase();
-  const mime=declared || (ext.endsWith('.docx')?docx:ext.endsWith('.xlsx')?xlsx:'');
-  if(!['image/jpeg','image/png','image/webp','application/pdf',docx,xlsx].includes(mime))bad('仅支持 JPEG/PNG/WebP/PDF/DOCX/XLSX');
-  if((mime===docx&&!ext.endsWith('.docx'))||(mime===xlsx&&!ext.endsWith('.xlsx')))bad('Office 文件名与格式不一致','INVALID_FILE',415);
+  const mime=declared || (ext.endsWith('.docx')?docx:ext.endsWith('.xlsx')?xlsx:ext.endsWith('.pptx')?pptx:'');
+  if(!['image/jpeg','image/png','image/webp','application/pdf',docx,xlsx,pptx].includes(mime))bad('仅支持 JPEG/PNG/WebP/PDF/DOCX/XLSX/PPTX');
+  if((mime===docx&&!ext.endsWith('.docx'))||(mime===xlsx&&!ext.endsWith('.xlsx'))||(mime===pptx&&!ext.endsWith('.pptx')))bad('Office 文件名与格式不一致','INVALID_FILE',415);
   const bytes=new Uint8Array(await file.arrayBuffer());
   if(!fileSignature(mime,bytes))bad('文件内容与声明类型不一致','INVALID_FILE',415);
-  if(mime===docx||mime===xlsx){
+  if(mime===docx||mime===xlsx||mime===pptx){
     try{await validateOfficeBytes(bytes,mime);}catch{bad('Office 文件结构无效、含宏或文件已损坏，请重新导出为标准 DOCX/XLSX','INVALID_OFFICE',415);}
   }
   const extractedValue=form.get('extracted_text');
