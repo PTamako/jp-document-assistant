@@ -84,7 +84,7 @@ test('server validator rejects masquerading ZIP with unsafe OOXML and macro payl
  const names='application/vnd.openxmlformats-officedocument.';
  const bad=await make('bad.docx',[['word/document.xml',
   '<!DOCTYPE x [<!ENTITY y SYSTEM "file:///sensitive">]><w:document>&y;</w:document>']],true);
- await assert.rejects(()=>validateOfficeBytes(new Uint8Array(await bad.arrayBuffer()),names+'wordprocessingml.document'),/不安全声明/);
+ await assert.rejects(async()=>validateOfficeBytes(new Uint8Array(await bad.arrayBuffer()),names+'wordprocessingml.document'),/不安全声明/);
  const macro=await make('macro.docx',[['word/document.xml','<w:document/>'],['word/vbaProject.bin','abc']],true);
- await assert.rejects(()=>validateOfficeBytes(new Uint8Array(await macro.arrayBuffer()),names+'wordprocessingml.document'),/含宏/);
+ await assert.rejects(async()=>validateOfficeBytes(new Uint8Array(await macro.arrayBuffer()),names+'wordprocessingml.document'),/含宏/);
 });
