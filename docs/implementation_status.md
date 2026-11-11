@@ -82,3 +82,5 @@
 - 新增同一个文书助手 D1 内的 `0010_ocr_utc_budget.sql`，按 UTC 日限制两名用户合计 OCR 调用，默认一天 1 次；原先个人用量按东京日期统计保持兼容。不能用本应用计数推算 Cloudflare 账号整体免费剩余额度。
 - 图片 OCR 在意外中断后如果 `pending` 超过 24 小时，只能由用户主动勾选 `retry_stale` 再次尝试；不自动重试模型，不添加 Cron、KV 或额外服务。
 - 同时运行新的 SQLite/Node 测试后更新验收结果。生产数据与正式 Worker/R2/D1 均未修改。
+
+- Google Drive 原件导入时显式记录用户选择的来源类型，保存到 `document_sources.source_type=google_drive`；拒绝非白名单来源，未确认上传前不访问 R2，新增 Worker 回归测试。此为来源声明，不代表验证文件的法律时效。

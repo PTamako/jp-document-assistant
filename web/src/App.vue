@@ -201,7 +201,7 @@ async function importDocument(){
           source_type:fileSource.value,retention:fileRetention.value}});
       }else{
         const compressed=await compressImage(fileDraft.value);
-        const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');
+        const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');form.append('source_type',fileSource.value);
         if(fileText.value.trim())form.append('extracted_text',fileText.value);
         result=await api('/api/documents/import/file',{method:'POST',body:form,form:true});
       }

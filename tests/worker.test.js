@@ -870,3 +870,21 @@ test('stale OCR pending does not retry automatically and requires explicit secon
  const totals=env.DB.sql.prepare('SELECT calls,reserved FROM ocr_app_utc_daily').get();
  assert.equal(totals.calls,1);assert.equal(totals.reserved,0);
 });
+
+
+test('Google Drive Picker source provenance is recorded only after explicit original upload',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const file=new File([new Uint8Array([255,216,255,224,77,88,99,100])],'notice.jpg',{type:'image/jpeg'});
+ const form=new FormData();form.append('file',file);form.append('retention','original');form.append('source_type','google_drive');
+ const imported=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const source=env.DB.sql.prepare('SELECT source_type FROM document_sources WHERE document_id=?').get(imported.data.document_id);
+ assert.equal(source.source_type,'google_drive');
+ const before=env._blobs.size;
+ const badForm=new FormData();badForm.append('file',new File([new Uint8Array([255,216,255,224,51,52])],'bad.jpg',{type:'image/jpeg'}));
+ badForm.append('retention','original');badForm.append('source_type','remote_url');
+ const denied=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:badForm});
+ assert.equal(denied.response.status,400);
+ assert.equal(denied.data.code,'INVALID_SOURCE');
+ assert.equal(env._blobs.size,before);
+});

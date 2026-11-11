@@ -204,8 +204,12 @@ async function handleFileImport(request,env,p){
   const bytes=new Uint8Array(await file.arrayBuffer());
   if(!fileSignature(mime,bytes))bad('文件内容与声明类型不一致','INVALID_FILE',415);
   if(mime===docx||mime===xlsx||mime===pptx){
-    try{await validateOfficeBytes(bytes,mime);}catch{bad('Office 文件结构无效、含宏或文件已损坏，请重新导出为标准 DOCX/XLSX','INVALID_OFFICE',415);}
+    try{await validateOfficeBytes(bytes,mime);}catch{bad('Office 文件结构无效、含宏或文件已损坏，请重新导出为标准 DOCX/XLSX/PPTX','INVALID_OFFICE',415);}
   }
+  const declaredSource=String(form.get('source_type')||'');
+  if(declaredSource&&!['google_drive','local_file','image'].includes(declaredSource))
+    bad('上传原件来源标记无效','INVALID_SOURCE',400);
+  const sourceKind=declaredSource==='google_drive'?'google_drive':mime.startsWith('image/')?'image':'local_file';
   const extractedValue=form.get('extracted_text');
   if(extractedValue!==null&&(typeof extractedValue!=='string'||extractedValue.length>100000))bad('提取文字无效','INVALID_TEXT',413);
   const extracted=typeof extractedValue==='string'?extractedValue.trim():'';
@@ -222,7 +226,7 @@ async function handleFileImport(request,env,p){
   }
   try{await batch(env.DB,[
     ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,extracted_text_ja,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,'private','other',label,extracted||null,'original',sha,extracted?'draft':'needs_review',now,now],
-    ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,mime.startsWith('image/')?'image':'local_file',sha,now],
+    ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,sourceKind,sha,now],
     ['INSERT INTO attachments(id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',randomToken(16),id,oid,label,0,sha,now,now]
   ]);}catch{
     // If a transient D1 failure follows a successful PUT, storage_objects is retained for compensating cleanup.
