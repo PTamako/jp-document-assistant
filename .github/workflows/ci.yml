@@ -2,7 +2,10 @@ name: Local-only CI (no Cloudflare preview or deployment)
 on:
   pull_request:
   push:
-    branches: [main, 'feature/**']
+    branches: [main]
+concurrency:
+  group: local-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
