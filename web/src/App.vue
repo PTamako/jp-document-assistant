@@ -8,6 +8,7 @@ import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
 const passwordDraft=reactive({current_password:'',new_password:'',confirm_password:''});
+const calendarLink=ref(''),calendarStatusInfo=ref(null),calendarShowTitle=ref(false);
 const tabs=[{id:'today',name:'今日',icon:'◉'},{id:'docs',name:'文书',icon:'▤'},{id:'links',name:'联动',icon:'◇'},{id:'mine',name:'我的',icon:'☰'}];
 const pages=reactive({today:{items:[],next:0,loaded:false},docs:{items:[],next:0,loaded:false},links:{items:[],next:0,loaded:false}});
 const loadingPage=ref(false),search=ref(''),category=ref('');
@@ -52,6 +53,34 @@ async function submitAuth(){
     csrf.value=d.csrf_token;auth.password='';auth.setup_token='';auth.invite_token='';
     await boot();flash('登录成功');
   } catch(e){problem(e);} finally {busy.value=false;}
+}
+async function openCalendar(){
+ calendarLink.value='';sheet.value='calendar';
+ try{
+  const r=await api('/api/calendar/status');
+  calendarStatusInfo.value=r;calendarShowTitle.value=!!r.include_titles;
+ }catch(e){problem(e);}
+}
+async function createCalendar(){
+ busy.value=true;
+ try{
+  const r=await api('/api/calendar/subscription',{method:'POST',
+   body:{confirm:true,include_titles:calendarShowTitle.value}});
+  calendarLink.value=r.url;calendarStatusInfo.value={active:true,include_titles:calendarShowTitle.value};
+  flash('订阅链接已生成；旧链接立即失效，请妥善保管');
+ }catch(e){problem(e);}finally{busy.value=false;}
+}
+async function revokeCalendar(){
+ busy.value=true;
+ try{
+  await api('/api/calendar/revoke',{method:'POST'});
+  calendarLink.value='';calendarStatusInfo.value={active:false,include_titles:false};
+  flash('日历订阅链接已撤销');
+ }catch(e){problem(e);}finally{busy.value=false;}
+}
+async function copyCalendarLink(){
+ try{await navigator.clipboard.writeText(calendarLink.value);flash('私人订阅地址已复制');}
+ catch{problem(new Error('复制失败，请长按地址框手动选择复制'));}
 }
 async function changePassword(){
  if(passwordDraft.new_password.length<12||passwordDraft.new_password!==passwordDraft.confirm_password){
@@ -102,7 +131,7 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;ocrAttachmentPending.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;ocrAttachmentPending.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){inputMode.value=mode;sheet.value='import';}
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;
@@ -320,6 +349,7 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
         <button class="settings-line" v-if="user.role==='owner'" @click="sheet='invite'">邀请第二位家庭成员 <span>›</span></button>
         <button class="settings-line" @click="showRecycle">回收站 · 仅自己的文书 <span>›</span></button>
         <button class="settings-line" @click="sheet='backup'">备份与恢复（ZIP / 加密） <span>›</span></button>
+        <button class="settings-line" @click="openCalendar">私人日历订阅（ICS） <span>›</span></button>
         <button class="settings-line" @click="loadUsage">刷新服务用量 <span>↻</span></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">重试无引用 R2 原件清理 <span>↻</span></button>
         <div class="info-note" v-if="usage">Cloudflare 全账号免费额度：<strong>未确认</strong>。本地统计 AI 调用 {{usage.local_today.ai_calls}} 次，不代表全账号剩余额度。</div>
@@ -363,6 +393,17 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
       <template v-else-if="sheet==='recycle'"><h2>回收站</h2><p class="muted">保留直到手动永久清理，删除后不能直接恢复。</p><div v-if="!trashItems.length" class="empty">回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
       <template v-else-if="sheet==='permanent'"><h2 class="danger-text">永久删除文书？</h2><p>将从 D1 清理私人内容，并在没有其他文书引用该原件时同步物理删除 R2 文件。不能撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" :disabled="busy" @click="permanentDelete">确认永久删除</button></div></template>
+      <template v-else-if="sheet==='calendar'"><h2>私人日历订阅</h2>
+        <p class="fine-print">仅包含已人工确认的截止日期。默认隐藏文书名称、金额和个人资料。订阅链接相当于密码，请勿转发或公开。</p>
+        <p>{{calendarStatusInfo?.active?'订阅已创建；重新生成将使旧地址失效':'目前未创建订阅'}}</p>
+        <label class="check-row"><input type="checkbox" v-model="calendarShowTitle" />允许外部日历显示文书标题（隐私风险）</label>
+        <div v-if="calendarLink"><label class="form-label">仅显示一次的订阅 URL<input :value="calendarLink" readonly @focus="$event.target.select()" /></label>
+          <button class="secondary full" @click="copyCalendarLink">复制订阅地址</button>
+          <p class="fine-print">iPhone：设置 → App → 日历 → 日历账户 → 添加账户 → 其他 → 添加已订阅的日历。</p></div>
+        <div class="sheet-actions"><button class="secondary" @click="closeSheet">关闭</button>
+          <button class="secondary" v-if="calendarStatusInfo?.active" :disabled="busy" @click="revokeCalendar">撤销链接</button>
+          <button class="primary" :disabled="busy" @click="createCalendar">{{calendarStatusInfo?.active?'重新生成':'创建订阅'}}</button></div>
+      </template>
       <template v-else-if="sheet==='changePassword'"><h2>修改登录密码</h2>
         <p class="fine-print">更改后此账号在所有设备上的旧会话都将失效，必须使用新密码重新登录；不会影响家人账号。</p>
         <label class="form-label">当前密码<input v-model="passwordDraft.current_password" type="password" autocomplete="current-password" /></label>
