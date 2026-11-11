@@ -155,3 +155,8 @@
 - 新增 Gmail 仅用户主动授权、每页最多五封元数据、选定一封才读取 full MIME 文字、附件与远程跟踪图片不加载的流程。复用现有安全 EML 提取、私人文字导入和同内容 SHA 去重；前端手机 Bottom Sheet。
 - Gmail OAuth Access Token 仅 JS 模块内存，登出/切用户/更改密码清除，主动撤销检查 Google 返回状态。限定官方 Gmail API CSP，不增加 Preview/Worker/Secrets。详见 docs/gmail_oauth_setup.md。
 - 这不等于 Gmail historyId 自动增量同步；Google 限制 OAuth Scope 的审批、浏览器授权真机测试和 Gmail 实时账号读取仍未完成。所有现有云和生产数据保持不动。
+
+## 2026-11-11 ZIP 原件与 AES-GCM 篡改防护回归（新增，待 CI）
+
+- 新增 AES-GCM + PBKDF2 用户 ZIP 备份真实本地往返、错误密码、密文单字节篡改、无效加密文件头测试。
+- 新增原件缺失、SHA-256 原件内容被篡改、跨不受支持版本（明确拒绝而不伪装成功）的 ZIP 完整性测试；验证受损备份在写入 D1/R2 前失败。尚不代表所有历史 schema_version 能跨版本恢复，旧版适配仍待明确真实格式。
