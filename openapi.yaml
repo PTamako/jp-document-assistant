@@ -821,7 +821,7 @@ paths:
                   const: true
                 attachment_id:
                   type: string
-                  pattern: '^[a-f0-9]{32}
+                  pattern: "^[a-f0-9]{32}$"
                 retry_stale:
                   type: boolean
                   default: false
