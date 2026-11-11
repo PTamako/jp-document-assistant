@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fileOf as make} from './helpers/office-fixture.js';
-import {extractOfficeFile,extractDocumentText} from '../web/src/document-text.js';
+import {extractOfficeFile,extractDocumentText,validateOfficeBytes} from '../web/src/document-text.js';
 test('DOCX extracts Japanese dates, prices and XML entities without R2 or AI',async()=>{
  const word=await make('invoice.docx',[['word/document.xml',
  '<w:document><w:p><w:t>納付期限：2026年11月30日</w:t></w:p><w:tr><w:tc><w:t>請求金額</w:t></w:tc><w:tc><w:t>1,200円 &amp; 税</w:t></w:tc></w:tr></w:document>']]);
@@ -53,4 +53,38 @@ test('empty image-only DOCX reports needs_manual without fabricated OCR results'
  const output=await extractOfficeFile(doc);
  assert.equal(output.needs_manual,true);
  assert.equal(output.text,'');
+});
+
+test('real DEFLATE-compressed DOCX/XLSX text layers pass bounded parsing and upload validation',async()=>{
+ const docx=await make('packed.docx',[['word/document.xml',
+  '<w:document><w:p><w:t>ご請求金額：12,800円</w:t></w:p></w:document>']],true);
+ const xlsx=await make('packed.xlsx',[['xl/workbook.xml','<workbook/>'],
+  ['xl/worksheets/sheet1.xml','<worksheet><c r="A1" t="inlineStr"><is><t>納付期限</t></is></c></worksheet>']],true);
+ const mime='application/vnd.openxmlformats-officedocument.';
+ assert.equal(await validateOfficeBytes(new Uint8Array(await docx.arrayBuffer()),mime+'wordprocessingml.document'),true);
+ assert.equal(await validateOfficeBytes(new Uint8Array(await xlsx.arrayBuffer()),mime+'spreadsheetml.sheet'),true);
+ assert.match((await extractOfficeFile(docx)).text,/12,800円/);
+ assert.match((await extractOfficeFile(xlsx)).text,/納付期限/);
+});
+test('declared small ZIP inflation cannot expand beyond bound or write fake OCR text',async()=>{
+ const docx=await make('inflated.docx',[['word/document.xml',
+  '<w:document><w:t>'+('納付期限'.repeat(3200))+'</w:t></w:document>']],true);
+ const bytes=new Uint8Array(await docx.arrayBuffer()),view=new DataView(bytes.buffer);
+ let central=-1;
+ for(let i=0;i<bytes.length-4;i++)if(view.getUint32(i,true)===0x02014b50){
+  const length=view.getUint16(i+28,true),name=new TextDecoder().decode(bytes.subarray(i+46,i+46+length));
+  if(name==='word/document.xml'){central=i;break;}
+ }
+ assert.ok(central>0);
+ view.setUint32(central+24,1024,true);
+ await assert.rejects(()=>extractOfficeFile(new File([bytes],'inflated.docx')),/实际解压大小超过安全限制/);
+ await assert.rejects(()=>validateOfficeBytes(bytes,'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),/实际解压大小超过安全限制/);
+});
+test('server validator rejects masquerading ZIP with unsafe OOXML and macro payload',async()=>{
+ const names='application/vnd.openxmlformats-officedocument.';
+ const bad=await make('bad.docx',[['word/document.xml',
+  '<!DOCTYPE x [<!ENTITY y SYSTEM "file:///sensitive">]><w:document>&y;</w:document>']],true);
+ await assert.rejects(()=>validateOfficeBytes(new Uint8Array(await bad.arrayBuffer()),names+'wordprocessingml.document'),/不安全声明/);
+ const macro=await make('macro.docx',[['word/document.xml','<w:document/>'],['word/vbaProject.bin','abc']],true);
+ await assert.rejects(()=>validateOfficeBytes(new Uint8Array(await macro.arrayBuffer()),names+'wordprocessingml.document'),/含宏/);
 });
