@@ -20,7 +20,7 @@ const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
-const pendingAttachment=ref(null),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
+const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 
 const fieldLabel={due_date:'办理／缴费期限',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）'};
@@ -87,7 +87,7 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;ocrAttachmentPending.value=null;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){inputMode.value=mode;sheet.value='import';}
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;
@@ -187,7 +187,18 @@ async function appendFiles(event){const files=Array.from(event.target.files||[])
  }catch(e){problem(e);}finally{busy.value=false;if(extraFileInput.value)extraFileInput.value.value='';}}
 function editText(){editTextDraft.value=current.value?.extracted_text_ja||'';sheet.value='editText';}
 async function saveSourceText(){busy.value=true;try{await api(`/api/documents/${current.value.id}/source-text`,{method:'PATCH',body:{text:editTextDraft.value,confirm_reset_review:true}});const id=current.value.id;sheet.value='';editTextDraft.value='';await openDoc(id);flash('文字已保存并重新生成待核验字段');}catch(e){problem(e);}finally{busy.value=false;}}
-async function runOcr(a){busy.value=true;try{const d=await api(`/api/documents/${current.value.id}/ocr`,{method:'POST',body:{confirm:true,attachment_id:a.id}});editTextDraft.value=d.text;sheet.value='editText';flash('OCR 候选未自动保存，请对照原件核验');}catch(e){problem(e);}finally{busy.value=false;}}
+function runOcr(a){ocrAttachmentPending.value=a;sheet.value='ocrConfirm';}
+async function confirmRunOcr(){
+  if(!ocrAttachmentPending.value)return;
+  busy.value=true;
+  try{
+    const d=await api(`/api/documents/${current.value.id}/ocr`,
+      {method:'POST',body:{confirm:true,attachment_id:ocrAttachmentPending.value.id}});
+    editTextDraft.value=d.text;ocrAttachmentPending.value=null;sheet.value='editText';
+    flash(d.cached?'已复用以前的 OCR 候选，未再次请求 AI/R2':'OCR 未自动保存，请核对原件后手动保存');
+  }catch(e){problem(e);}
+  finally{busy.value=false;}
+}
 async function exportData(){busy.value=true;try{const d=await exportBatch(api,{scope:backupScope.value,month:backupScope.value==='month'?backupMonth.value:'',year:backupScope.value==='year'?backupMonth.value.slice(0,4):'',offset:backupOffset.value,includes_originals:backupIncludeOriginals.value,password:backupPass.value});backupOffset.value=d.next_offset??0;flash(`已生成 ${d.name}（${d.document_count} 份文书、${d.original_count} 个原件）`);}catch(e){problem(e);}finally{busy.value=false;}}
 async function selectBackup(event){const file=event.target.files?.[0];if(!file)return;backupFile.value=file;busy.value=true;try{restoreArchive.value=await readBackup(file,backupPass.value);const d=await restoreBatch(api,restoreArchive.value,false);restorePreview.value=d.preview;sheet.value='restoreBackup';}catch(e){problem(e);}finally{busy.value=false;}}
 async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(api,restoreArchive.value,true);sheet.value='';backupFile.value=null;restoreArchive.value=null;restorePreview.value=[];for(const page of Object.values(pages))page.loaded=false;flash(`已恢复 ${r.metadata_restored} 份资料、${r.originals_restored} 个原件；失败 ${r.failures.length} 件`);}catch(e){problem(e);}finally{busy.value=false;}}
@@ -337,6 +348,7 @@ onBeforeUnmount(()=>{revokeOriginal();fileDraft.value=null;});
       <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
       <template v-else-if="sheet==='permanent'"><h2 class="danger-text">永久删除文书？</h2><p>将从 D1 清理私人内容，并在没有其他文书引用该原件时同步物理删除 R2 文件。不能撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" :disabled="busy" @click="permanentDelete">确认永久删除</button></div></template>
       <template v-else-if="sheet==='invite'"><h2>邀请家人</h2><p class="muted">一个家庭最多两人，邀请仅对指定邮箱有效。</p><label class="form-label">对方邮箱<input v-model="inviteEmail" type="email" placeholder="family@example.com" /></label><button class="primary full" @click="issueInvite" :disabled="busy">生成 48 小时邀请码</button><label v-if="inviteToken" class="form-label">仅复制给家人使用<input :value="inviteToken" readonly @focus="$event.target.select()" /></label><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+      <template v-else-if="sheet==='ocrConfirm'"><h2>确认本次图片识别</h2><p>仅将这张私有图片发送至 Cloudflare Workers AI。可能消耗与其他应用共用的免费额度，账户余额仍未确认；此功能默认关闭，只有管理员启用后可用。</p><p class="fine-print">相同图片会复用已完成的识别候选。结果不能作为账单付款、实际收入或政策现行有效性的证明；须对照原图核对。</p><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="confirmRunOcr">确认尝试 OCR</button></div></template>
       <template v-else-if="sheet==='editText'"><h2>人工核对日文原文</h2><p class="fine-print">请对照原图确认。修改文字将重新生成全部候选字段，先前审核的字段会被重置，不会自动记账或创建任务。</p><textarea v-model="editTextDraft" rows="10" placeholder="请输入或粘贴日文内容"></textarea><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!editTextDraft.trim()" @click="saveSourceText">保存并重新分析</button></div></template>
       <template v-else-if="sheet==='backup'"><h2>备份与恢复</h2><p class="fine-print">一次最多 5 份、ZIP 不超过 32 MB。请保存到你选择的 iCloud Drive/电脑，不在本 App 长期保存。仅 JSON 无法恢复永久删除后的原件。</p>
         <label class="form-label">备份范围<select v-model="backupScope" @change="backupOffset=0"><option value="all">我的全部文书（分包）</option><option value="month">某个月份</option><option value="year">某个年份</option></select></label>
