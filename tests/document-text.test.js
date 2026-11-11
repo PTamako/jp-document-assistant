@@ -1,14 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createZip} from '../web/src/zip.js';
+import {fileOf as make} from './helpers/office-fixture.js';
 import {extractOfficeFile,extractDocumentText} from '../web/src/document-text.js';
-const ct='<?xml version="1.0"?><Types/>';
-async function make(name,entries) {
- const archive=createZip([{name:'[Content_Types].xml',bytes:ct},...entries.map(([n,bytes])=>({name:n,bytes}))]);
- return new File([await archive.arrayBuffer()],name,{type:name.endsWith('.docx')?
- 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
- 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-}
 test('DOCX extracts Japanese dates, prices and XML entities without R2 or AI',async()=>{
  const word=await make('invoice.docx',[['word/document.xml',
  '<w:document><w:p><w:t>納付期限：2026年11月30日</w:t></w:p><w:tr><w:tc><w:t>請求金額</w:t></w:tc><w:tc><w:t>1,200円 &amp; 税</w:t></w:tc></w:tr></w:document>']]);
