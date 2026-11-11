@@ -498,3 +498,28 @@ test('Office original with corrupt compressed XML is denied before any R2 put',a
  assert.equal(env._blobs.size,0);
  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM storage_objects').get().n),0);
 });
+
+test('policy source date stays distinct from official verification through encrypted-free metadata backup',async()=>{
+ const source=makeEnv(),owner=await boot(source);
+ const text='発行日：令和8年11月11日（水）\n改正条例は令和8年12月1日（火）施行。\n対象外の条件に注意。';
+ const imported=await req(source,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+  text,title:'条例確認',retention:'summary',source_type:'text'
+ }});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const detail=(await req(source,'/api/documents/'+imported.data.document_id,auth(owner))).data.document;
+ assert.equal(detail.source_document_date,'2026-11-11');
+ assert.match(detail.source_date_quote,/発行日/);
+ assert.equal(detail.official_current_verified_at,null);
+ assert.match(detail.explanation_zh,/官方现行有效性：尚未核验/);
+ const exported=(await req(source,'/api/backups/export?scope=all',auth(owner))).data;
+ assert.equal(exported.documents[0].document.source_document_date,'2026-11-11');
+ exported.documents[0].document.official_current_verified_at='2099-01-01T00:00:00Z'; // Forged backup claim must be ignored.
+ const target=makeEnv(),recipient=await boot(target);
+ const restore=await req(target,'/api/backups/import-confirm',{method:'POST',...auth(recipient),
+  data:{...exported,confirm:'RESTORE_METADATA'}});
+ assert.equal(restore.response.status,200,JSON.stringify(restore.data));
+ const restoredId=restore.data.restored[0];
+ const verified=(await req(target,'/api/documents/'+restoredId,auth(recipient))).data.document;
+ assert.equal(verified.source_document_date,'2026-11-11');
+ assert.equal(verified.official_current_verified_at,null);
+});
