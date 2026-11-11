@@ -8,6 +8,17 @@ const dbRun=(db,s,...a)=>db.prepare(s).bind(...a).run();
 export const OCR_MODEL='@cf/moondream/moondream3.1-9B-A2B';
 export const OCR_PROMPT_VERSION='verbatim-20261111-v2';
 const todayJst=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+const todayUtc=()=>new Date().toISOString().slice(0,10);
+const stalePending=at=>Number.isFinite(Date.parse(at))&&Date.now()-Date.parse(at)>=86400000;
+async function finishBudget(env,p,localDay,utcDay,invoked){
+ const n=invoked?1:0;
+ await env.DB.batch([
+  env.DB.prepare(`UPDATE usage_daily SET ai_calls=ai_calls+?,ai_reserved=MAX(0,ai_reserved-1)
+    WHERE user_id=? AND local_day=?`).bind(n,p.user_id,localDay),
+  env.DB.prepare(`UPDATE ocr_app_utc_daily SET calls=calls+?,reserved=MAX(0,reserved-1)
+    WHERE day_utc=?`).bind(n,utcDay)
+ ]);
+}
 const encoded=bytes=>{
  let out='';for(let i=0;i<bytes.length;i+=8192)out+=String.fromCharCode(...bytes.subarray(i,i+8192));
  return btoa(out);
@@ -56,33 +67,53 @@ export async function ocrAttachment(request,env,p,id){
     neurons_estimated:existing.neurons_estimated,source:'cached_estimate'},
    warning:'已复用私有 OCR 候选；没有再次请求 AI 或原图。请对照原件确认。'});
  if(existing?.state==='empty')return failure('OCR_EMPTY_CACHED',badReply,422);
- if(existing?.state==='pending')return failure('OCR_IN_PROGRESS','该文件已有识别任务处理中；未发送重复请求',409);
+ const isStale=existing?.state==='pending'&&stalePending(existing.updated_at);
+ if(existing?.state==='pending'&&!isStale)
+   return failure('OCR_IN_PROGRESS','该文件已有识别任务处理中；未发送重复请求',409);
+ if(isStale&&options.retry_stale!==true)
+   return failure('OCR_PENDING_STALE','上次请求已卡住超过24小时。可能已经消耗额度，勾选明确重试后才会再次调用模型',409);
  if(existing?.state==='failed'&&Date.now()-Date.parse(existing.updated_at)<60*60000)
    return failure('OCR_RETRY_PAUSED','模型上次调用失败，为保护免费额度一小时内不重复尝试',429);
  if(env.ENABLE_EXPERIMENTAL_OCR!=='true'||!env.AI)
    return failure('OCR_NOT_VERIFIED','免费日文 OCR 尚未通过真实脱敏样本验收，请人工输入/修改文字',503);
- const day=todayJst(),limit=Math.min(3,Math.max(0,Number(env.OCR_CALLS_PER_USER_DAY||1)));
- if(limit===0)return failure('OCR_BUDGET_DISABLED','OCR 免费调用预算已设为零',503);
+ const day=todayJst(),utcDay=todayUtc(),limit=Math.min(3,Math.max(0,Number(env.OCR_CALLS_PER_USER_DAY??1)));
+ const appLimitRaw=Number(env.OCR_APP_UTC_DAILY_LIMIT??1);
+ const appLimit=Number.isSafeInteger(appLimitRaw)?Math.min(4,Math.max(0,appLimitRaw)):0;
+ if(limit===0||appLimit===0)return failure('OCR_BUDGET_DISABLED','OCR 单人或本应用 UTC 调用预算已关闭',503);
  await dbRun(env.DB,'INSERT OR IGNORE INTO usage_daily(user_id,local_day) VALUES(?,?)',p.user_id,day);
  const quota=await dbRun(env.DB,`UPDATE usage_daily SET ai_reserved=ai_reserved+1 WHERE user_id=? AND local_day=?
    AND ai_calls+ai_reserved<?`,p.user_id,day,limit);
  if(quota.meta?.changes!==1)
-   return failure('OCR_BUDGET_EXHAUSTED','今天此 App 的 OCR 尝试预算已用完；Cloudflare 整个账号剩余额度未知',429);
+   return failure('OCR_BUDGET_EXHAUSTED','本用户今日 OCR 调用预算已用完；整个 Cloudflare 账号余量未知',429);
+ let appClaim;
+ try{
+  await dbRun(env.DB,'INSERT OR IGNORE INTO ocr_app_utc_daily(day_utc) VALUES(?)',utcDay);
+  appClaim=await dbRun(env.DB,`UPDATE ocr_app_utc_daily SET reserved=reserved+1
+    WHERE day_utc=? AND calls+reserved<?`,utcDay,appLimit);
+ }catch{
+  await dbRun(env.DB,'UPDATE usage_daily SET ai_reserved=MAX(0,ai_reserved-1) WHERE user_id=? AND local_day=?',p.user_id,day);
+  return failure('OCR_APP_BUDGET_UNAVAILABLE','无法保证全家 UTC 日预算，未调用模型',503);
+ }
+ if(appClaim.meta?.changes!==1){
+  await dbRun(env.DB,'UPDATE usage_daily SET ai_reserved=MAX(0,ai_reserved-1) WHERE user_id=? AND local_day=?',p.user_id,day);
+  return failure('OCR_APP_UTC_LIMIT','本应用 UTC 日调用预算已用完；不代表整个 Cloudflare 账户的剩余额度',429);
+ }
  const now=isoNow();
  try{
    const claimed=existing?
     await dbRun(env.DB,`UPDATE ocr_attempts SET state='pending',candidate_text_ja=NULL,
-      attempt_count=attempt_count+1,updated_at=? WHERE id=? AND state='failed' AND updated_at=?`,
-      now,existing.id,existing.updated_at):
+      attempt_count=attempt_count+1,updated_at=? WHERE id=? AND updated_at=?
+      AND (state='failed' OR (state='pending' AND ?=1))`,
+      now,existing.id,existing.updated_at,isStale&&options.retry_stale===true?1:0):
     await dbRun(env.DB,`INSERT OR IGNORE INTO ocr_attempts
       (id,owner_id,object_id,model_id,prompt_version,state,created_at,updated_at)
       VALUES(?,?,?,?,?,'pending',?,?)`,randomToken(16),p.user_id,row.object_id,OCR_MODEL,OCR_PROMPT_VERSION,now,now);
    if(claimed.meta?.changes!==1){
-     await dbRun(env.DB,'UPDATE usage_daily SET ai_reserved=MAX(0,ai_reserved-1) WHERE user_id=? AND local_day=?',p.user_id,day);
+     await finishBudget(env,p,day,utcDay,false);
      return failure('OCR_IN_PROGRESS','该图片已有识别记录；未发起重复模型请求',409);
    }
  }catch{
-   await dbRun(env.DB,'UPDATE usage_daily SET ai_reserved=MAX(0,ai_reserved-1) WHERE user_id=? AND local_day=?',p.user_id,day);
+   await finishBudget(env,p,day,utcDay,false);
    return failure('OCR_CACHE_FAILED','无法保证 AI 去重，因此没有发起模型请求',503);
  }
  let invoked=false,response=null;
@@ -99,8 +130,7 @@ export async function ocrAttachment(request,env,p,id){
    });
  }catch{
    await updateState(env.DB,p,row,'failed',null,null);
-   await dbRun(env.DB,`UPDATE usage_daily SET ai_calls=ai_calls+?,ai_reserved=MAX(0,ai_reserved-1)
-     WHERE user_id=? AND local_day=?`,invoked?1:0,p.user_id,day);
+   await finishBudget(env,p,day,utcDay,invoked);
    return failure(invoked?'OCR_PROVIDER_FAILED':'OCR_ORIGINAL_INVALID',
      invoked?'模型没有返回结果；未修改文书，已保存失败状态防止重复耗费。':'原图缺失或哈希校验失败，未调用模型。',503);
  }
@@ -108,8 +138,7 @@ export async function ocrAttachment(request,env,p,id){
  const valid=parsed.text.length>=6&&parsed.text.length<=12000&&/[ぁ-んァ-ヶ一-龯々]/.test(parsed.text);
  // This cache holds an unverified suggestion, never a confirmed field.
  await updateState(env.DB,p,row,valid?'success':'empty',valid?parsed.text:null,parsed);
- await dbRun(env.DB,`UPDATE usage_daily SET ai_calls=ai_calls+1,ai_reserved=MAX(0,ai_reserved-1)
-   WHERE user_id=? AND local_day=?`,p.user_id,day);
+ await finishBudget(env,p,day,utcDay,true);
  if(!valid)return failure('OCR_EMPTY',badReply,422);
  return json({ok:true,verified:false,needs_human_review:true,cached:false,
    text:parsed.text,model:OCR_MODEL,

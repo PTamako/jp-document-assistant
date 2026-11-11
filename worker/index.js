@@ -532,7 +532,14 @@ async function route(request,env){
   if(method==='GET'&&path==='/api/usage'){
     const day=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
     const usage=await dbFirst(env.DB,'SELECT ai_calls,imported_files FROM usage_daily WHERE user_id=? AND local_day=?',p.user_id,day);
-    return json({local_today:usage||{ai_calls:0,imported_files:0},cloudflare_account_remaining:null,cloudflare_account_remaining_status:'unknown',note:'跨项目账户级配额未接入，不可假定剩余为免费额度'});
+    const dayUtc=new Date().toISOString().slice(0,10);
+    const summary=await dbFirst(env.DB,'SELECT calls,reserved FROM ocr_app_utc_daily WHERE day_utc=?',dayUtc);
+    const rawLimit=Number(env.OCR_APP_UTC_DAILY_LIMIT??1);
+    const appLimit=Number.isSafeInteger(rawLimit)?Math.min(4,Math.max(0,rawLimit)):0;
+    return json({local_today:usage||{ai_calls:0,imported_files:0},
+      app_utc_day:{day_utc:dayUtc,calls:summary?.calls||0,reserved:summary?.reserved||0,limit:appLimit},
+      cloudflare_account_remaining:null,cloudflare_account_remaining_status:'unknown',
+      note:'本应用 UTC 调用预算不等于全账号剩余 Neurons；其他 Apps 的 AI 用量未确认'});
   }
   const exportOriginal=path.match(/^\/api\/backups\/original\/([a-f0-9]{32})\/([a-f0-9]{32})$/i);
   if(method==='GET'&&exportOriginal)return backupOriginal(env,p,exportOriginal[1],exportOriginal[2]);

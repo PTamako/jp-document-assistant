@@ -11,6 +11,7 @@ VERSIONS = (ROOT / 'migrations' / '0006_document_version.sql').read_text()
 OCR_ATTEMPTS = (ROOT / 'migrations' / '0007_ocr_attempts.sql').read_text()
 BRIDGE_FINGERPRINT = (ROOT / 'migrations' / '0008_bridge_fingerprint.sql').read_text()
 CALENDAR_SUBSCRIPTIONS = (ROOT / 'migrations' / '0009_calendar_subscriptions.sql').read_text()
+OCR_UTC_BUDGET = (ROOT / 'migrations' / '0010_ocr_utc_budget.sql').read_text()
 NOW = '2026-11-11T00:00:00Z'
 
 
@@ -24,6 +25,7 @@ def conn():
     db.executescript(OCR_ATTEMPTS)
     db.executescript(BRIDGE_FINGERPRINT)
     db.executescript(CALENDAR_SUBSCRIPTIONS)
+    db.executescript(OCR_UTC_BUDGET)
     return db
 
 

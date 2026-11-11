@@ -76,3 +76,9 @@
 - 新增前端 Google Drive Picker：仅在用户明确点击时加载官方组件并申请 `drive.file`，只读取选中文件。Google Docs→TXT、Sheets→XLSX、Slides→PPTX；其他 PDF/Office/图片/EML/TXT 下载到临时内存，继续沿用原有文字层优先与人工确认流程。
 - 未配置三项构建公开凭据前入口隐藏；无服务器同步、无自动 R2 上传、不读取全盘或 Gmail。详见 `docs/google_drive_picker_setup.md`。
 - 纠正“仅保存文字”时错误提示已上传 R2 的 UI 文案；新增无授权、逐文件下载、8MB 限额和缺失格式的单元测试。独立 Google OAuth 许可及 iPhone 实机验证尚未完成。
+
+## OCR 成本与意外中断保护（新增，待最新 CI 验收）
+
+- 新增同一个文书助手 D1 内的 `0010_ocr_utc_budget.sql`，按 UTC 日限制两名用户合计 OCR 调用，默认一天 1 次；原先个人用量按东京日期统计保持兼容。不能用本应用计数推算 Cloudflare 账号整体免费剩余额度。
+- 图片 OCR 在意外中断后如果 `pending` 超过 24 小时，只能由用户主动勾选 `retry_stale` 再次尝试；不自动重试模型，不添加 Cron、KV 或额外服务。
+- 同时运行新的 SQLite/Node 测试后更新验收结果。生产数据与正式 Worker/R2/D1 均未修改。
