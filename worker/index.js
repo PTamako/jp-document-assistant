@@ -330,7 +330,10 @@ async function permanentlyDelete(env,p,id){
     if(elsewhere.count>0)continue;
     requireBinding(env,'DOCUMENTS');
     const now=isoNow();
-    await dbRun(env.DB,"UPDATE storage_objects SET state='deletion_pending',updated_at=? WHERE id=?",now,oid);
+    const claim=await dbRun(env.DB,`UPDATE storage_objects SET state='deletion_pending',updated_at=?
+      WHERE id=? AND owner_id=? AND state IN ('ready','deletion_pending','delete_failed')
+        AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.object_id=? AND a.document_id!=?)`,now,oid,p.user_id,oid,id);
+    if(claim.meta?.changes!==1)continue; // another reference won the race
     await dbRun(env.DB,`INSERT INTO deletion_jobs(id,object_id,requested_by,state,created_at,updated_at) VALUES(?,?,?,'pending',?,?)
       ON CONFLICT(object_id) DO UPDATE SET state='pending',updated_at=excluded.updated_at`,randomToken(16),oid,p.user_id,now,now);
     try{await env.DOCUMENTS.delete(obj.object_key);}
@@ -360,7 +363,21 @@ async function permanentlyDelete(env,p,id){
   try{await batch(env.DB,statements);}catch{
     return failure('METADATA_CLEANUP_FAILED','原件已清理，但数据库清理尚未完成，请重试',503);
   }
-  return json({ok:true,document_id:id,r2_deleted_objects:clearObjects.length});
+  // Two simultaneous deletions may both have observed the other's reference.
+  // After this document's D1 references are gone, perform a narrowly scoped
+  // conditional orphan claim; no R2 LIST/HEAD or duplicate object copy.
+  let compensated=0,pending=false;
+  const survivors=ids.filter(oid=>!clearObjects.includes(oid));
+  for(let i=0;i<survivors.length;i+=5){
+    try{
+      const result=await cleanupOrphans(env,p,{onlyIds:survivors.slice(i,i+5)});
+      const outcome=await result.json();
+      compensated+=Number(outcome.removed||0);
+      if(!outcome.ok)pending=true;
+    }catch{pending=true;}
+  }
+  return json({ok:true,document_id:id,r2_deleted_objects:clearObjects.length+compensated,
+    r2_cleanup_pending:pending,warning:pending?'文书已删除，但原件清理存在待补偿项，请从设置中重试文件清理':null});
 }
 async function contentForAttachment(env,p,id,aid){
   const doc=await visibleDocument(env.DB,id,p);if(!doc)bad('文书不存在','NOT_FOUND',404);

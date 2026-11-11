@@ -50,16 +50,51 @@ export async function attachPage(request,env,p,id){
   ]);}catch{return failure('METADATA_FAILED','文件可能已存到 R2，附件索引保存失败；请重试',503);}
   return json({ok:true,attachment_id:aid,reused:false,ocr_status:'not_verified'},201);
 }
-export async function cleanupOrphans(env,p){
+// Explicit small-batch compensation. Never R2 LIST/HEAD, never a new Cron or Worker.
+// Handles abandoned uploads and genuinely unreferenced ready objects from two
+// simultaneous deletions. Each claim is one conditional SQLite UPDATE, blocking
+// newly attached references through the existing D1 owner/state trigger.
+export async function cleanupOrphans(env,p,{onlyIds=null}={}){
   if(!env.DOCUMENTS)bad('私有 R2 未配置','NOT_CONFIGURED',503);
-  const rows=(await env.DB.prepare(`SELECT o.id,o.object_key FROM storage_objects o WHERE o.owner_id=?
-    AND o.state IN ('uploading','delete_failed') AND o.updated_at<?
-    AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.object_id=o.id)
-    ORDER BY o.updated_at LIMIT 5`).bind(p.user_id,new Date(Date.now()-10*60000).toISOString()).all()).results||[];
+  const ids=Array.isArray(onlyIds)?[...new Set(onlyIds.filter(x=>/^[a-f0-9]{32}$/i.test(x)))].slice(0,5):null;
+  const staleAt=new Date(Date.now()-10*60000).toISOString();
+  let rows=[];
+  if(ids){
+    if(ids.length)rows=(await env.DB.prepare(`SELECT o.id,o.object_key FROM storage_objects o WHERE o.owner_id=?
+      AND o.id IN (${ids.map(()=>'?').join(',')}) AND o.state IN ('ready','uploading','delete_failed','deletion_pending')
+      AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.object_id=o.id) LIMIT 5`).bind(p.user_id,...ids).all()).results||[];
+  }else{
+    rows=(await env.DB.prepare(`SELECT o.id,o.object_key FROM storage_objects o WHERE o.owner_id=?
+      AND o.state IN ('ready','uploading','delete_failed','deletion_pending') AND o.updated_at<?
+      AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.object_id=o.id)
+      ORDER BY o.updated_at LIMIT 5`).bind(p.user_id,staleAt).all()).results||[];
+  }
   const failures=[];let removed=0;
   for(const o of rows){
-    try{await env.DOCUMENTS.delete(o.object_key);await run(env.DB,'DELETE FROM storage_objects WHERE id=? AND owner_id=?',o.id,p.user_id);removed++;}
-    catch{failures.push(o.id);}
+    const now=isoNow();
+    try{
+      const claim=await run(env.DB,`UPDATE storage_objects SET state='deletion_pending',updated_at=?
+        WHERE id=? AND owner_id=? AND (state IN ('ready','uploading','delete_failed')
+          OR (state='deletion_pending' AND updated_at<?))
+        AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.object_id=storage_objects.id)`,now,o.id,p.user_id,staleAt);
+      if(claim.meta?.changes!==1)continue;
+      await run(env.DB,`INSERT INTO deletion_jobs(id,object_id,requested_by,state,created_at,updated_at)
+        VALUES(?,?,?,'pending',?,?) ON CONFLICT(object_id)
+        DO UPDATE SET state='pending',updated_at=excluded.updated_at`,randomToken(16),o.id,p.user_id,now,now);
+      await env.DOCUMENTS.delete(o.object_key);
+      await batch(env.DB,[
+        ['DELETE FROM deletion_jobs WHERE object_id=?',o.id],
+        ['DELETE FROM storage_objects WHERE id=? AND owner_id=? AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.object_id=storage_objects.id)',o.id,p.user_id]
+      ]);
+      removed++;
+    }catch{
+      try{await batch(env.DB,[
+        ["UPDATE storage_objects SET state='delete_failed',updated_at=? WHERE id=? AND owner_id=?",isoNow(),o.id,p.user_id],
+        ["UPDATE deletion_jobs SET state='failed',attempt_count=attempt_count+1,last_error_code='COMPENSATION_FAILED',updated_at=? WHERE object_id=?",isoNow(),o.id]
+      ]);}catch{}
+      failures.push(o.id);
+    }
   }
-  return json({ok:failures.length===0,removed,failures,note:'仅清理无附件引用且超过10分钟的异常上传对象，不扫描 R2 全桶'});
+  return json({ok:failures.length===0,removed,failures,pending:failures.length>0,
+    note:'仅对 D1 已确认没有附件引用的对象执行精确 R2.delete；不会扫描 R2 全桶'});
 }

@@ -1,5 +1,6 @@
 import { randomToken, isoNow } from './security.js';
 import { json, failure, bad } from './http.js';
+import { cleanupOrphans } from './upload.js';
 const first=(db,sql,...params)=>db.prepare(sql).bind(...params).first();
 const run=(db,sql,...params)=>db.prepare(sql).bind(...params).run();
 const all=async(db,sql,...params)=>(await db.prepare(sql).bind(...params).all()).results||[];
@@ -49,26 +50,45 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
   }
   if(shouldDelete&&a.object_key){
     if(!env.DOCUMENTS)bad('R2 尚未绑定','NOT_CONFIGURED',503);
-    await batch(env.DB,[
-      ["UPDATE storage_objects SET state='deletion_pending',updated_at=? WHERE id=?",now,a.object_id],
-      [`INSERT INTO deletion_jobs(id,object_id,requested_by,state,created_at,updated_at)
-        VALUES(?,?,?,'pending',?,?) ON CONFLICT(object_id) DO UPDATE SET state='pending',updated_at=excluded.updated_at`,randomToken(16),a.object_id,p.user_id,now,now]
-    ]);
-    try{await env.DOCUMENTS.delete(a.object_key);}
-    catch{
-      await batch(env.DB,[
-        ["UPDATE storage_objects SET state='delete_failed',updated_at=? WHERE id=?",isoNow(),a.object_id],
-        ["UPDATE deletion_jobs SET state='failed',attempt_count=attempt_count+1,last_error_code='R2_DELETE_FAILED',updated_at=? WHERE object_id=?",isoNow(),a.object_id]
-      ]);
-      return failure('DELETE_RETRY_NEEDED','R2 删除失败，已记录待清理；可以再次点击永久删除',503);
+    // A concurrent attachment/document delete may have changed the reference set.
+    // Claim only if D1 still confirms we own the last remaining attachment.
+    const claim=await run(env.DB,`UPDATE storage_objects SET state='deletion_pending',updated_at=?
+      WHERE id=? AND owner_id=? AND state IN ('ready','delete_failed','deletion_pending')
+        AND NOT EXISTS(SELECT 1 FROM attachments WHERE object_id=? AND id!=?)`,
+        now,a.object_id,p.user_id,a.object_id,a.id);
+    if(claim.meta?.changes!==1)shouldDelete=false;
+    else{
+      await run(env.DB,`INSERT INTO deletion_jobs(id,object_id,requested_by,state,created_at,updated_at)
+        VALUES(?,?,?,'pending',?,?) ON CONFLICT(object_id) DO UPDATE SET state='pending',updated_at=excluded.updated_at`,
+        randomToken(16),a.object_id,p.user_id,now,now);
+      try{await env.DOCUMENTS.delete(a.object_key);}
+      catch{
+        await batch(env.DB,[
+          ["UPDATE storage_objects SET state='delete_failed',updated_at=? WHERE id=?",isoNow(),a.object_id],
+          ["UPDATE deletion_jobs SET state='failed',attempt_count=attempt_count+1,last_error_code='R2_DELETE_FAILED',updated_at=? WHERE object_id=?",isoNow(),a.object_id]
+        ]);
+        return failure('DELETE_RETRY_NEEDED','R2 删除失败，已记录待清理；可以再次点击永久删除',503);
+      }
     }
   }
+
   const cleanup=[['DELETE FROM attachments WHERE id=? AND document_id=?',a.id,documentId]];
   if(shouldDelete&&a.object_id) cleanup.push(['DELETE FROM deletion_jobs WHERE object_id=?',a.object_id],['DELETE FROM storage_objects WHERE id=?',a.object_id]);
   cleanup.push(['INSERT OR IGNORE INTO deletion_tombstones(id,owner_id,request_key,target_type,target_id,deleted_at) VALUES(?,?,?,?,?,?)',randomToken(16),p.user_id,`att:${a.id}`,'attachment',a.id,now]);
   try{await batch(env.DB,cleanup);}
   catch{return failure('METADATA_CLEANUP_FAILED','R2 删除可能已完成，D1 清理失败，可重试',503);}
-  return json({ok:true,r2_deleted:shouldDelete});
+  // If two references were deleted concurrently, the last one to commit
+  // claims the orphaned object and deletes the actual R2 key.
+  let compensated=0,pending=false;
+  if(!shouldDelete&&a.object_id){
+    try{
+      const outcome=await (await cleanupOrphans(env,p,{onlyIds:[a.object_id]})).json();
+      compensated=Number(outcome.removed||0);
+      pending=!!outcome.pending;
+    }catch{pending=true;}
+  }
+  return json({ok:true,r2_deleted:shouldDelete||compensated>0,
+    r2_cleanup_pending:pending,warning:pending?'原件清理仍有待补偿项，请在设置中重试文件清理':null});
 }
 export async function attachmentList(env,p,documentId){
   const d=await first(env.DB,`SELECT id FROM documents WHERE id=? AND owner_id=? AND lifecycle='active'`,documentId,p.user_id);

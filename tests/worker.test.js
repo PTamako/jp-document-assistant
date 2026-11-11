@@ -362,3 +362,44 @@ test('HomeFlow delegated assignee explicitly carries bonus and synced status sur
   assert.equal(repeat.data.already_synced,true);
   assert.equal(calls,1);
 });
+
+test('simultaneous permanent document deletions cannot abandon a shared R2 object',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const form=()=>{const f=new FormData();f.append('file',new File([new Uint8Array([255,216,255,224,24,50,76])],'same.jpg',{type:'image/jpeg'}));f.append('retention','original');return f;};
+  const one=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:form()});
+  assert.equal(one.response.status,201);
+  assert.equal((await req(env,`/api/documents/${one.data.document_id}/trash`,{method:'POST',...auth(owner),data:{}})).response.status,200);
+  const two=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:form()});
+  assert.equal(two.response.status,201);
+  assert.equal(env._blobs.size,1);
+  assert.equal((await req(env,`/api/documents/${two.data.document_id}/trash`,{method:'POST',...auth(owner),data:{}})).response.status,200);
+  const [a,b]=await Promise.all([one,two].map(x=>req(env,`/api/documents/${x.data.document_id}/permanent-delete`,{method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}})));
+  assert.deepEqual([a.response.status,b.response.status],[200,200],JSON.stringify([a.data,b.data]));
+  assert.equal(env._blobs.size,0,'the final shared object must be physically deleted');
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,0);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM deletion_jobs').get().n,0);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM attachments').get().n,0);
+});
+
+test('simultaneous attachment deletions converge on one physical R2 cleanup',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const form=()=>{const f=new FormData();f.append('file',new File([new Uint8Array([255,216,255,224,12,34,56])],'same.jpg',{type:'image/jpeg'}));f.append('retention','original');return f;};
+  const first=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:form()});
+  const docId=first.data.document_id;
+  const second=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text:'別の文書'} });
+  assert.equal(second.response.status,201);
+  const doc2=second.data.document_id;
+  const added=await req(env,`/api/documents/${doc2}/attachments`,{method:'POST',...auth(owner),form:form()});
+  assert.equal(added.response.status,201,JSON.stringify(added.data));
+  const firstDoc=(await req(env,`/api/documents/${docId}`,auth(owner))).data.document;
+  const id1=firstDoc.attachments[0].id,id2=added.data.attachment_id;
+  for(const [doc,aid] of [[docId,id1],[doc2,id2]]){
+    assert.equal((await req(env,`/api/documents/${doc}/attachments/${aid}/trash`,{method:'POST',...auth(owner),data:{}})).response.status,200);
+  }
+  const [a,b]=await Promise.all([[docId,id1],[doc2,id2]].map(([doc,aid])=>
+    req(env,`/api/documents/${doc}/attachments/${aid}/permanent-delete`,{method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}})));
+  assert.deepEqual([a.response.status,b.response.status],[200,200],JSON.stringify([a.data,b.data]));
+  assert.equal(env._blobs.size,0);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,0);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM deletion_jobs').get().n,0);
+});
