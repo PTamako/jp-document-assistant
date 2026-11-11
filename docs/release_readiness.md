@@ -6,18 +6,25 @@
 
 | 模块 | 已提交 | CI | 真实环境 |
 | --- | --- | --- | --- |
-| 双人登录、邀请、私人/共享文书 | 是 | 通过 | 双机/iPhone 待验 |
-| 私有 R2、附件与文书回收站、永久删除、补偿 | 是 | Mock 通过（R2 已删除但 D1 失败可重试） | 真实 R2/D1 待验 |
+| 双人登录、邀请、私人/共享文书 | 是；含个人会话查看/撤销和敏感文书自动恢复私密 | 72 项 Node 与 11 项 SQLite/API 总体 CI 通过 | 双机/iPhone 待验 |
+| 私有 R2、附件与文书回收站、永久删除、补偿 | 是；覆盖 D1 ready 但 R2 缺失、重复上传补传与回收站原件下载拒绝 | Mock 回归通过 | 真实 R2/D1 待验 |
 | JSON/ZIP 备份/加密/恢复 | 是 | 本地往返通过 | iPhone 大文件/灾难恢复待验 |
 | PDF、DOCX、XLSX、PPTX、.eml、.txt | 是 | 解析及 Worker 测试通过 | 各种真文书和系统版本待验 |
 | Google Drive Picker | 是 | Mock 逐文件授权/下载通过 | 真实 Google OAuth 与 iPhone 待验 |
 | Google Gmail 自动同步 | 否 | 无 | 需独立 OAuth 权限、审核及增量同步 |
 | 苹果 Mail | 手动导入/复制已实现 | 通过 | PWA 不可能直接读整个苹果邮箱 |
-| 日文 OCR | 默认关闭的实验模式、去重/预算/人工修正 | Mock 通过 | **真实脱敏样本准确率与单位 Neurons 阻塞** |
+| 日文 OCR | 默认关闭的实验模式、双人预算、空结果冷却至少24小时且用户确认重试 | Mock 通过，模型官方 Schema 只读核验通过 | **真实脱敏样本准确率与单位 Neurons 阻塞** |
 | 家計簿、HomeFlow、知学生词 | 三份默认关闭的签名桥 Draft PR | CI 通过 | 服务绑定/密钥/身份映射/真实联调待验 |
 | 知学私人句卡 | 主项目明确 fail-closed | 通过 | 知学个人账户隔离及句卡接收端尚未实现 |
 | ICS 私人订阅 | 可撤销随机订阅链接 | 通过 | iPhone 日历订阅/撤销待验 |
-| OpenAPI 3.1 | 50 路径 / 51 操作 | YAML 严格解析通过 | 真实客户端契约待验 |
+| OpenAPI 3.1 | 53 路径 / 54 操作 | YAML 严格解析及 Node/Python 契约检查通过 | 真实客户端契约待验 |
+
+## 1A. 最新 CI 与实际 Cloudflare 核验
+
+- 主 PR #1 最新保存点 `ed79213870c8402be6f2eb1e14cdf19a0c17d53b`；[GitHub Actions #43036305622](https://github.com/PTamako/jp-document-assistant/actions/runs/43036305622)：72/72 Node、11/11 SQLite/API 及 Vue Build 全部通过（2026-11-11）。属于开发环境自动化验收，**并未通过真实 Cloudflare D1/R2 或 iPhone 双人验收**。
+- 连接 Cloudflare 只读检查：全账号 6 Worker、6 D1、2 R2 Bucket，两个现有 R2 Bucket 的 r2.dev 均关闭且无自定义公开域名；文书助手专用 Worker/D1 均不存在。
+- Cloudflare Billing/Usage API 未获 Billing Read 权限（403）。实际计费、剩余月度容量、D1 日读写、R2 Class A/B、Workers AI Neurons 都是 **未知**，不代表零费用。
+- 三份接收端 PR 均仍为 Draft；知学单用户结构未实现双人私密句卡，必须保持该写入路径 fail-closed。
 
 ## 2. Cloudflare 生产资源原则（严格执行）
 

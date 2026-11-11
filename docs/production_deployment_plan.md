@@ -10,6 +10,11 @@
 - **真实环境验证**：Cloudflare 已只读核查账号资源清单及两个 R2 Bucket 的公共域名状态；没有新应用的生产端到端测试。
 - **未完成或阻塞**：真实脱敏日文 OCR 基准、Google 正式 OAuth、Gmail 只读增量、知学双人私人句卡、三端安全映射/联调、密码恢复及成员退出完整流程、双 iPhone 验收与最终独立安全审查。
 
+## 1A. 最新开发与验证状态
+
+- GitHub 主仓库 Draft PR #1 最新已验证提交 `ed79213870c8402be6f2eb1e14cdf19a0c17d53b`；[CI #43036305622](https://github.com/PTamako/jp-document-assistant/actions/runs/43036305622) 通过 72/72 Node、11/11 SQLite/API、Vue build。已有新增安全补偿、权限、个人会话、OCR 冷却与 CSP 回归，但没有真实生产写入或设备验收。
+- 设计契约当前 53 路径 / 54 操作；OpenAPI 严格 YAML 与 Python/Node 契约测试通过。知学双人私密句卡与独立身份尚未完成，Gmail 最小权限 OAuth 与实际日语 OCR 质量仍未验收；这些不是生产审批之外可忽略的事项。
+
 ## 2. Cloudflare 账号只读盘点（截至 2026-11-11）
 
 - 现有 Worker 六个：homeflow、homeflow-preview、it-study-platform、kakeibo-homeflow-bridge、kakeibo-nav-sync、milkssales-jp；无 jp-document-assistant Worker。
