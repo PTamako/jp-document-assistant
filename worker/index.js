@@ -139,7 +139,7 @@ async function analyzeStored(env,doc,force=false){
     ['DELETE FROM integration_links WHERE candidate_id IN (SELECT id FROM action_candidates WHERE document_id=?)',doc.id],
     ['DELETE FROM action_candidates WHERE document_id=?',doc.id],
     ['DELETE FROM document_fields WHERE document_id=?',doc.id],
-    ['UPDATE documents SET category=?,summary_zh=?,explanation_zh=?,analysis_status=?,extraction_version=?,updated_at=?,version=version+1 WHERE id=?',result.category,result.summary_zh,result.explanation_zh,result.analysis_status,'rules-v1',now,doc.id]
+    ['UPDATE documents SET category=?,summary_zh=?,explanation_zh=?,analysis_status=?,extraction_version=?,source_document_date=?,source_date_quote=?,updated_at=?,version=version+1 WHERE id=?',result.category,result.summary_zh,result.explanation_zh,result.analysis_status,'rules-v2',result.policyVersion.source_document_date,result.policyVersion.source_date_quote,now,doc.id]
   ];
   for(const f of result.fields){stmts.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',randomToken(16),doc.id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);}
   const amount=result.fields.find(f=>f.field_key==='net_salary'||f.field_key==='amount_jpy');
@@ -234,7 +234,10 @@ async function hashStringBytes(bytes){const digest=await crypto.subtle.digest('S
 async function getDocDetail(db,doc){
   const fields=await dbAll(db,`SELECT id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,review_state,source_page FROM document_fields WHERE document_id=? ORDER BY field_key`,doc.id);
   const attachments=await dbAll(db,`SELECT id,file_label,page_no,state FROM attachments WHERE document_id=? AND state='active' ORDER BY sort_order`,doc.id);
-  return {...listShape(doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,fields,attachments,confirmed_at:doc.confirmed_at};
+  return {...listShape(doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
+    source_document_date:doc.source_document_date||null,source_date_quote:doc.source_date_quote||null,
+    official_current_verified_at:doc.official_current_verified_at||null,
+    fields,attachments,confirmed_at:doc.confirmed_at};
 }
 async function handleList(env,p,url){
   const limit=Math.min(MAX_LIST,Math.max(1,Number(url.searchParams.get('limit')||5)||5));

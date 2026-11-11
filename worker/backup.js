@@ -39,8 +39,10 @@ export async function planBackup(request,env,p){
   return json({backup_id:id,scope,document_count:count,document_count_known:count!==null,include_originals:!!d.includes_originals,original_bytes_estimate:originalBytes,originals_note:'原件不包含在 JSON 中；可通过备份清单逐个授权下载。大文件请分批保存。',max_documents_per_export:maxDocs});
 }
 function stripSecrets(doc){
-  const {id,visibility,category,subtype,title,summary_zh,explanation_zh,extracted_text_ja,import_mode,analysis_status,lifecycle,archived_at,content_sha256,created_at,updated_at,version}=doc;
-  return {id,visibility,category,subtype,title,summary_zh,explanation_zh,extracted_text_ja,import_mode,analysis_status,lifecycle,archived_at,content_sha256,created_at,updated_at,version};
+  const {id,visibility,category,subtype,title,summary_zh,explanation_zh,extracted_text_ja,
+    source_document_date,source_date_quote,official_current_verified_at,import_mode,analysis_status,lifecycle,archived_at,content_sha256,created_at,updated_at,version}=doc;
+  return {id,visibility,category,subtype,title,summary_zh,explanation_zh,extracted_text_ja,
+    source_document_date,source_date_quote,official_current_verified_at,import_mode,analysis_status,lifecycle,archived_at,content_sha256,created_at,updated_at,version};
 }
 export async function exportBackup(env,p,url){
   const scope=url.searchParams.get('scope')||'all';
@@ -65,6 +67,10 @@ function validateDocumentBackup(entry){
   const d=entry.document;
   if(typeof d.title!=='string'||d.title.length>200||typeof d.category!=='string'||d.category.length>40)bad('备份文书字段无效');
   if(d.extracted_text_ja!==null&&d.extracted_text_ja!==undefined&&(typeof d.extracted_text_ja!=='string'||d.extracted_text_ja.length>100000))bad('备份原文超出限制');
+  if(d.source_document_date!=null&&!(typeof d.source_document_date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d.source_document_date)))
+    bad('备份文书发布日期格式无效');
+  if(d.source_date_quote!=null&&(typeof d.source_date_quote!=='string'||d.source_date_quote.length>220))
+    bad('备份发布日期证据过长');
   if(!Array.isArray(entry.fields)||entry.fields.length>200||!Array.isArray(entry.candidates)||entry.candidates.length>100)bad('备份字段或候选数过多');
   for(const f of entry.fields){
     if(typeof f.field_key!=='string'||f.field_key.length>100||!['text','money','date','datetime','boolean','json'].includes(f.value_type))bad('字段类型无效');
@@ -97,7 +103,7 @@ export async function confirmImport(request,env,p){
     const old=item.document,sha=old.content_sha256;
     if(sha){const dup=await first(env.DB,"SELECT id FROM documents WHERE owner_id=? AND content_sha256=? AND lifecycle!='deletion_pending'",p.user_id,sha);if(dup){skipped.push(dup.id);index_map.push({index:position,id:dup.id,skipped:true});continue;}}
     const id=randomToken(16),visibility='private';
-    const statements=[['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,summary_zh,explanation_zh,extracted_text_ja,import_mode,analysis_status,created_at,updated_at,content_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,visibility,old.category,old.title,old.summary_zh||null,old.explanation_zh||null,old.extracted_text_ja||null,'summary','needs_review',now,now,sha||null]];
+    const statements=[['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,summary_zh,explanation_zh,extracted_text_ja,source_document_date,source_date_quote,official_current_verified_at,import_mode,analysis_status,created_at,updated_at,content_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,visibility,old.category,old.title,old.summary_zh||null,old.explanation_zh||null,old.extracted_text_ja||null,old.source_document_date||null,old.source_date_quote||null,null,'summary','needs_review',now,now,sha||null]];
     for(const f of item.fields){
       statements.push(['INSERT INTO document_fields(id,document_id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,source_page,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',randomToken(16),id,f.field_key,String(f.raw_value||'').slice(0,500),String(f.normalized_value||'').slice(0,500),f.value_type,String(f.original_currency||'').slice(0,20)||null,String(f.source_quote||'').slice(0,500),Number.isInteger(f.source_page)?f.source_page:null,'unreviewed',now]);
     }

@@ -7,6 +7,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 INIT = (ROOT / 'migrations' / '0001_init.sql').read_text()
 INDEXES = (ROOT / 'migrations' / '0002_indexes.sql').read_text()
 GUARDS = (ROOT / 'migrations' / '0005_single_household.sql').read_text()
+VERSIONS = (ROOT / 'migrations' / '0006_document_version.sql').read_text()
 NOW = '2026-11-11T00:00:00Z'
 
 
@@ -16,6 +17,7 @@ def conn():
     db.executescript(INIT)
     db.executescript(INDEXES)
     db.executescript(GUARDS)
+    db.executescript(VERSIONS)
     return db
 
 
