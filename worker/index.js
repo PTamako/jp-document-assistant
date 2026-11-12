@@ -136,7 +136,7 @@ async function ownedDocument(db,id,p,lifecycle=null){
   if(!doc)bad('文书不存在或没有操作权限','NOT_FOUND',404);
   return doc;
 }
-function listShape(d){return {id:d.id,category:d.category,title:d.title,visibility:d.visibility,analysis_status:d.analysis_status,lifecycle:d.lifecycle,created_at:d.created_at,updated_at:d.updated_at,version:d.version,favorite:!!d.favorite,archived_at:d.archived_at||null,tags:JSON.parse(d.tags_json||'[]')};}
+function listShape(d){return {id:d.id,category:d.category,title:d.title,visibility:d.visibility,analysis_status:d.analysis_status,review_status:d.review_status,lifecycle:d.lifecycle,created_at:d.created_at,updated_at:d.updated_at,version:d.version,favorite:!!d.favorite,archived_at:d.archived_at||null,tags:JSON.parse(d.tags_json||'[]')};}
 async function analyzeStored(env,doc,force=false){
   if(doc.analysis_status==='needs_review' && !force)return {cached:true};
   if(doc.import_mode==='analyze_only')bad('仅分析内容不长期保存');
@@ -291,17 +291,22 @@ async function handleList(env,p,url){
   const archived=url.searchParams.get('archived')||'active';
   const favorite=url.searchParams.get('favorite')||'all';
   const month=url.searchParams.get('month')||'';
-  let sql=`SELECT id,category,title,visibility,analysis_status,lifecycle,created_at,updated_at,version,favorite,archived_at,tags_json FROM documents WHERE lifecycle='active' AND (owner_id=? OR (household_id=? AND visibility='shared'))`;
+  let sql=`SELECT d.id,d.category,d.title,d.visibility,d.analysis_status, CASE WHEN NOT EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id) THEN 'none'
+WHEN NOT EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.review_state='unreviewed') THEN 'reviewed'
+WHEN EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.review_state!='unreviewed') THEN 'partial'
+ELSE 'unreviewed' END review_status,
+d.lifecycle,d.created_at,d.updated_at,d.version,d.favorite,d.archived_at,d.tags_json
+FROM documents d WHERE d.lifecycle='active' AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`;
   const args=[p.user_id,p.household_id];
-  if(filter){sql+=' AND category=?';args.push(filter);}
-  if(visibility==='mine')sql+=' AND owner_id=?',args.push(p.user_id);
-  if(visibility==='shared')sql+=" AND visibility='shared'";
-  if(archived==='active')sql+=' AND archived_at IS NULL';
-  if(archived==='archived')sql+=' AND archived_at IS NOT NULL';
-  if(favorite==='yes')sql+=' AND favorite=1';
-  if(/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))sql+=' AND substr(created_at,1,7)=?',args.push(month);
-  if(q){sql+=` AND (title LIKE ? ESCAPE '\\' OR summary_zh LIKE ? ESCAPE '\\')`;const escaped=q.replace(/[\\%_]/g,'\\$&');args.push(`%${escaped}%`,`%${escaped}%`);}
-  sql+=' ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?';args.push(limit+1,offset);
+  if(filter){sql+=' AND d.category=?';args.push(filter);}
+  if(visibility==='mine')sql+=' AND d.owner_id=?',args.push(p.user_id);
+  if(visibility==='shared')sql+=" AND d.visibility='shared'";
+  if(archived==='active')sql+=' AND d.archived_at IS NULL';
+  if(archived==='archived')sql+=' AND d.archived_at IS NOT NULL';
+  if(favorite==='yes')sql+=' AND d.favorite=1';
+  if(/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))sql+=' AND substr(d.created_at,1,7)=?',args.push(month);
+  if(q){sql+=` AND (d.title LIKE ? ESCAPE '\\' OR d.summary_zh LIKE ? ESCAPE '\\')`;const escaped=q.replace(/[\\%_]/g,'\\$&');args.push(`%${escaped}%`,`%${escaped}%`);}
+  sql+=' ORDER BY d.created_at DESC,d.id DESC LIMIT ? OFFSET ?';args.push(limit+1,offset);
   const rows=await dbAll(env.DB,sql,...args);
   return json({items:rows.slice(0,limit).map(listShape),next_offset:rows.length>limit?offset+limit:null});
 }
@@ -565,6 +570,10 @@ async function route(request,env){
     const limit=Math.min(10,Math.max(1,Number(url.searchParams.get('limit')||5)||5));
     const offset=Math.max(0,Math.min(10000,Number(url.searchParams.get('offset')||0)||0));
     const rows=await dbAll(env.DB,`SELECT d.id,d.title,d.category,d.analysis_status,d.visibility,d.created_at,
+      CASE WHEN NOT EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id) THEN 'none'
+WHEN NOT EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.review_state='unreviewed') THEN 'reviewed'
+WHEN EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.review_state!='unreviewed') THEN 'partial'
+ELSE 'unreviewed' END review_status,
       (SELECT f.normalized_value FROM document_fields f WHERE f.document_id=d.id AND f.field_key='due_date' LIMIT 1) due_date
       FROM documents d WHERE d.lifecycle='active' AND d.archived_at IS NULL AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))
       AND (d.analysis_status='needs_review' OR EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.field_key='due_date'))
