@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick } from 'vue';
 import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
-import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady } from './google-drive-picker.js';
+import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
 import { isIosStandalonePwa } from './google-auth-context.js';
 import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke} from './gmail-import.js';
 import { extractDocumentText } from './document-text.js';
@@ -193,7 +193,6 @@ function clearPrivateWorkspace(){
   if(extraFileInput.value)extraFileInput.value.value='';
 }
 async function openGmailSheet(){
-  if(iosStandalonePwa){sheet.value='safariGoogleGuide';return;}
   gmailBusy.value=false;gmailAuthorizedUi.value=gmailConnected();
   gmailItems.value=[];gmailNext.value=null;sheet.value='gmail';
   gmailIdentityReadyUi.value=gmailIdentityReady();
@@ -208,7 +207,7 @@ async function openGmailSheet(){
 async function connectGmail(){
   if(!gmailIdentityReadyUi.value)return problem(new Error('Google 登录组件尚未准备好，请等待加载完成'));
   gmailBusy.value=true;
-  try{await gmailAuthorize();gmailAuthorizedUi.value=gmailConnected();flash('Gmail 已连接，只读授权保存在本次页面内存中');}
+  try{await gmailAuthorize();gmailAuthorizedUi.value=gmailConnected();flash('Gmail 已连接。权限无需每次同意，但访问令牌只在本次应用运行期间有效。');}
   catch(e){problem(e);}finally{gmailBusy.value=false;}
 }
 async function loadGmailMessages(append=false){
@@ -244,7 +243,7 @@ async function disconnectGmail(){
   catch(e){problem(e);}finally{gmailAuthorizedUi.value=false;gmailBusy.value=false;}
 }
 function clearGmailSession(){
-  gmailGeneration++;gmailBusy.value=false;gmailForget();gmailAuthorizedUi.value=false;
+  gmailGeneration++;gmailBusy.value=false;gmailForget();forgetDriveAuthorization();gmailAuthorizedUi.value=false;
   gmailItems.value=[];gmailNext.value=null;
 }
 async function boot(){
@@ -381,7 +380,7 @@ async function openDoc(id){
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
 function closeSheet(){choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function primeGooglePicker(){
-  if(!drivePickerAvailable||iosStandalonePwa||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
+  if(!drivePickerAvailable||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
   drivePickerLoadingUi.value=true;
   void prepareGoogleDrivePicker().then(()=>{
     drivePickerReadyUi.value=googlePickerReady();
@@ -419,7 +418,6 @@ async function selectFile(event){
 }
 
 async function importFromGoogleDrive(){
-  if(iosStandalonePwa){sheet.value='safariGoogleGuide';return;}
   if(!drivePickerReadyUi.value){
     primeGooglePicker();
     return problem(new Error('Google Drive 授权组件正在加载，请稍后再次点击'));
@@ -816,23 +814,23 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
-  <p class="fine-print">仅在你选取文件或邮件时读取；不会自动同步整个账号。Google Docs 原生格式需先导出 PDF 等再选取。</p>
+  <p class="fine-print">只读取你主动选择的文件或邮件。iPhone PWA 可直接尝试 Gmail／Google Drive；若 Google 弹窗受限，可在「文件」App 的 Google Drive 位置选择文件。Google Docs 原生格式通过下方在线选择器导出。</p>
   <label class="choice-picker-file">
-    <UiIcon name="file" :size="20"/><span>iPhone「文件」/ 本地 PDF、Office、图片</span><UiIcon name="chevron-right" :size="18"/>
+    <UiIcon name="file" :size="20"/><span>iPhone「文件」（含已启用的 Google Drive）／本地 PDF、Office、图片</span><UiIcon name="chevron-right" :size="18"/>
     <input type="file" class="visually-hidden" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="selectFile" />
   </label>
   <label class="choice-picker-file">
     <UiIcon name="file-text" :size="20"/><span>本地 .eml 邮件 / .txt 文本</span><UiIcon name="chevron-right" :size="18"/>
     <input type="file" class="visually-hidden" accept=".eml,.txt,message/rfc822,text/plain" @change="importLocalText" />
   </label>
-  <button v-if="gmailAvailable" class="choice-picker-file" type="button" @click="openGmailSheet"><UiIcon name="mail" :size="20"/><span>{{iosStandalonePwa?'Gmail（在 Safari 授权）':'从 Gmail 选择邮件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
-  <button v-if="drivePickerAvailable" class="choice-picker-file" type="button" :disabled="!iosStandalonePwa&&!drivePickerReadyUi" @click="importFromGoogleDrive"><UiIcon name="file" :size="20"/><span>{{iosStandalonePwa?'Google Drive（在 Safari 授权）':drivePickerLoadingUi?'Google Drive 准备中…':'从 Google Drive 选择文件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
+  <button v-if="gmailAvailable" class="choice-picker-file" type="button" @click="openGmailSheet"><UiIcon name="mail" :size="20"/><span>{{iosStandalonePwa?'从 Gmail 选择邮件（PWA 尝试授权）':'从 Gmail 选择邮件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
+  <button v-if="drivePickerAvailable" class="choice-picker-file" type="button" :disabled="!drivePickerReadyUi" @click="importFromGoogleDrive"><UiIcon name="file" :size="20"/><span>{{drivePickerLoadingUi?'Google Drive 准备中…':driveAuthorizationReady()?'从 Google Drive 选文件（已授权）':'从 Google Drive 在线选择文件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
   <div class="sheet-actions"><button class="secondary full" type="button" @click="sheet='import'">返回导入表单</button></div>
 </template>
 <template v-else-if="sheet==='safariGoogleGuide'">
         <h2>请在 Safari 中完成 Google 授权</h2>
-        <p class="info-note">iPhone 主屏幕 PWA 可能拦截 Google 授权弹窗。</p>
-        <p>请复制下方网址，在 <strong>Safari 地址栏</strong>打开文书助手并登录，点击右上角「＋」，再选择 Gmail 或 Google Drive。</p>
+        <p class="info-note">iPhone PWA 已允许尝试直接授权，但系统仍可能阻止 Google 弹窗。你可以在 PWA 里从 iPhone「文件」选取已启用的 Google Drive，或复制苹果邮件正文；不要求 Safari 登录。</p>
+        <p>若确实需要在线 Gmail／Google Drive 授权而 PWA 弹窗失败，可以在 Safari 打开文书助手完成导入；同一账号保存的文书会在 PWA 刷新后出现。</p>
         <button class="primary full" type="button" @click="copySafariSite">复制文书助手网址</button>
         <a class="secondary full safari-link" :href="mainSiteUrl" target="_blank" rel="noopener noreferrer">尝试在浏览器中打开</a>
         <p class="fine-print safari-url">{{mainSiteUrl}}</p>
@@ -841,7 +839,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">返回</button></div>
       </template>
       <template v-else-if="sheet==='gmail'"><h2>Gmail · 只读选取</h2>
-        <p class="fine-print">一次最多浏览五封邮件；选择后只读取正文，保存前需确认。</p>
+        <p class="fine-print">每次最多浏览五封；只在选择邮件后读取正文。授权令牌仅在应用运行期间保留，Google 已授予的权限不再强制重复同意。</p>
         <button v-if="!gmailAuthorizedUi" class="primary full" :disabled="gmailBusy||gmailIdentityLoadingUi||!gmailIdentityReadyUi" @click="connectGmail">{{gmailIdentityLoadingUi?'正在准备 Google 登录…':'授权 Gmail 只读访问'}}</button><button v-if="!gmailAuthorizedUi&&!gmailIdentityLoadingUi&&!gmailIdentityReadyUi" class="text-button full" type="button" @click="openGmailSheet">重试加载 Google 登录组件</button>
         <template v-else>
           <label class="form-label">Gmail 搜索条件<input v-model.trim="gmailQuery" maxlength="180" placeholder="newer_than:30d" /></label>
@@ -854,7 +852,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
           <button v-if="gmailNext" class="text-button full" :disabled="gmailBusy" @click="loadGmailMessages(true)">继续查看五封</button>
           <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">撤销 Gmail 授权</button>
         </template>
-        <p class="fine-print">Gmail 只读授权受 Google 限制；Apple Mail 聚合邮箱无法直接读取。</p>
+        <p class="fine-print">如果主屏幕 PWA 的 Google 弹窗失败，可直接从苹果邮件复制正文，或使用「文件」导入；Apple Mail 聚合邮箱无法通过 Gmail API 直接读取。</p><button v-if="iosStandalonePwa" class="text-button full" type="button" @click="sheet='safariGoogleGuide'">Google 弹窗无法使用？查看替代导入方式</button>
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
       </template>
       <template v-else-if="sheet==='filter'">
