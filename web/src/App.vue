@@ -787,7 +787,7 @@ async function loadMoreTrash(){if(recycleNext.value===null)return;recycleOffset.
 async function restoreAttachment(d,a){busy.value=true;try{await api(`/api/documents/${d}/attachments/${a}/restore`,{method:'POST',body:{}});await refreshTrash();flash('附件已恢复，没有重复上传 R2');}catch(e){problem(e);}finally{busy.value=false;}}
 async function trashAttachment(a){if(!current.value)return;busy.value=true;try{
   await api(`/api/documents/${current.value.id}/attachments/${a.id}/trash`,{method:'POST',body:{}});
-  const id=current.value.id;await openDoc(id);flash('附件已移入回收站，文字结果保留');
+  const id=current.value.id;await openDoc(id,{preserveTab:true,preserveScroll:true});flash('附件已移入回收站，文字结果保留');
 }catch(e){problem(e);}finally{busy.value=false;}}
 
 function openAttachmentActions(a){
@@ -1022,7 +1022,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
       <section v-else-if="activeTab==='docs'" class="page-surface" key="docs">
         <div class="search-row"><input v-model="search" type="search" placeholder="搜索标题或中文摘要" @keyup.enter="searchDocs" /><button class="filter-button icon-label" aria-label="文书筛选" @click="sheet='filter'"><UiIcon name="filter" :size="17"/>筛选</button><button class="filter-button icon-label" @click="searchDocs"><UiIcon name="search" :size="17"/>查找</button></div>
         <div class="section-head"><h3>文书库</h3><span>{{category?cats[category]:'全部类型'}}</span></div>
-        <p v-if="pageData.items.length" class="fine-print swipe-hint">左滑或点击右侧按钮，可移入回收站。</p>
+        
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">没有匹配的文书。</div>
         <DocumentSwipeRow v-for="d in pageData.items" :key="d.id" :id="d.id"
           :revealed="swipeOpenId===d.id" :disabled="busy"
@@ -1229,11 +1229,11 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
       <template v-else-if="sheet==='attachmentActions'">
         <h2>附件操作</h2>
         <p class="attachment-menu-filename" :title="selectedAttachment?.file_label">{{selectedAttachment?.file_label}}</p>
-        <button class="settings-line" type="button" :disabled="busy||(current?.attachments?.[0]?.id===selectedAttachment?.id)" @click="moveAttachmentFromMenu(-1)"><UiIcon name="arrow-up" :size="18"/>上移</button>
-        <button class="settings-line" type="button" :disabled="busy||(current?.attachments?.[(current?.attachments?.length||1)-1]?.id===selectedAttachment?.id)" @click="moveAttachmentFromMenu(1)"><UiIcon name="arrow-down" :size="18"/>下移</button>
-        <button v-if="['image/jpeg','image/png','image/webp'].includes(selectedAttachment?.mime)" class="settings-line" type="button" :disabled="busy" @click="runOcr(selectedAttachment)"><UiIcon name="scan" :size="18"/>Workers AI 识别</button>
-        <button class="settings-line" type="button" :disabled="busy" @click="openOcrSpace(selectedAttachment)"><UiIcon name="scan" :size="18"/>OCR.space 识别</button>
-        <button class="settings-line danger-text" type="button" :disabled="busy" @click="sheet='attachmentTrashConfirm'"><UiIcon name="trash" :size="18"/>移入回收站</button>
+        <button class="settings-line attachment-action-line" type="button" :disabled="busy||(current?.attachments?.[0]?.id===selectedAttachment?.id)" @click="moveAttachmentFromMenu(-1)"><UiIcon name="arrow-up" :size="18"/>上移</button>
+        <button class="settings-line attachment-action-line" type="button" :disabled="busy||(current?.attachments?.[(current?.attachments?.length||1)-1]?.id===selectedAttachment?.id)" @click="moveAttachmentFromMenu(1)"><UiIcon name="arrow-down" :size="18"/>下移</button>
+        <button v-if="['image/jpeg','image/png','image/webp'].includes(selectedAttachment?.mime)" class="settings-line attachment-action-line" type="button" :disabled="busy" @click="runOcr(selectedAttachment)"><UiIcon name="scan" :size="18"/>Workers AI 识别</button>
+        <button class="settings-line attachment-action-line" type="button" :disabled="busy" @click="openOcrSpace(selectedAttachment)"><UiIcon name="scan" :size="18"/>OCR.space 识别</button>
+        <button class="settings-line attachment-action-line danger-text" type="button" :disabled="busy" @click="sheet='attachmentTrashConfirm'"><UiIcon name="trash" :size="18"/>移入回收站</button>
         <div class="sheet-actions"><button class="secondary full" type="button" @click="closeSheet">关闭</button></div>
       </template>
       <template v-else-if="sheet==='attachmentTrashConfirm'">
