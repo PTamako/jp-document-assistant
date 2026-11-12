@@ -104,7 +104,7 @@ const sessions=ref([]),sessionsNext=ref(null);
 
 const missingYearDateDraft=ref(''),missingYearConfirmed=ref(false);
 const fieldLabel={due_date_partial:'原文截止日（月日）',required_action:'必须办理的事项',review_action:'需要确认的内容',merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
-const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
+const candidateLabel={finance:'家計簿 · 待确认记账',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
 const canManualSalary=computed(()=>current.value?.category==='salary'&&!current.value?.fields?.some(f=>f.field_key==='net_salary')&&/(?:入金内容|振込(?:による)?ご入金|振込入金)/.test(String(current.value?.extracted_text_ja||'').normalize('NFKC')));
 const topupAdvice=computed(()=>{
   if(current.value?.category!=='topup')return null;
@@ -964,7 +964,7 @@ async function toggleDocument(key,value){if(!current.value)return;busy.value=tru
 async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
  candidateDraft.date=d.confirmed_fields?.[item.payload?.date_field_key||'due_date']||item.payload?.transaction_date||new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});
- candidateDraft.category='';candidateDraft.payment_source='';candidateDraft.note=item.payload?.note||'';candidateDraft.title=item.payload?.title||current.value.title;
+ candidateDraft.category='';candidateDraft.payment_source=item.payload?.payment_source_hint||'';candidateDraft.note=item.payload?.note||'';candidateDraft.title=item.payload?.title||current.value.title;
  candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;
  candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||item.payload?.sentence||'';
  sheet.value='candidate';integrationConfigured.value=d.available;
@@ -1159,7 +1159,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
           <p>扣款来源：<strong>待本人选择</strong>（不能从充值服务名称推断）</p>
           <p class="fine-print">当前家計簿安全接口只支持收入／支出，还不能接收资金转移。请先在家計簿手动选择「资产转移／充值」并核对是否已记账；此建议不会自动写入、不会重复记账。</p>
         </div>
-        <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p><p v-if="item.payload.task_type==='delivery'" class="fine-print">{{item.payload.note}}；请先核验「字段」中的配送日期，再手动确认同步到 HomeFlow。</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div>
+        <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted" v-if="item.candidate_kind==='finance'">{{item.payload.kind==='expense'?'支出':'收入'}} ¥{{Number(item.payload.amount_jpy).toLocaleString('ja-JP')}} · {{item.payload.merchant||'商户待确认'}} · {{item.payload.transaction_at||item.payload.transaction_date||'日期待确认'}}</p><p class="muted" v-else>{{(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p><p v-if="item.candidate_kind==='finance'" class="fine-print">核对金额、支付卡片及是否已经记账；信用卡授权通知不代表最终结算。</p><p v-if="item.payload.task_type==='delivery'" class="fine-print">{{item.payload.note}}；请先核验「字段」中的配送日期，再手动确认同步到 HomeFlow。</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div>
         <p v-if="!topupAdvice&&!detailCandidates.some(c=>['finance','homeflow_task'].includes(c.candidate_kind))&&!aiAnalysis?.homeflow_suggestions?.length&&!current.campaign_hints?.length&&!campaignPendingDate" class="muted">暂无待办或财务建议。这不代表邮件识别失败；可在「字段」中核对已提取的信息。</p>
         <div v-if="aiAnalysis?.homeflow_suggestions?.length" class="content-card"><h3>AI · HomeFlow 待办建议</h3><p v-for="(item,i) in aiAnalysis.homeflow_suggestions" :key="i">{{item.description_zh}}（{{item.date||'日期待确认'}}）</p><p class="fine-print">这只是 AI 建议，尚未生成可同步任务。请以人工核验日期为准。</p></div>
         <div v-if="aiAnalysis?.finance_suggestions?.length" class="content-card"><h3>AI · 家計簿建议</h3><p v-for="(item,i) in aiAnalysis.finance_suggestions" :key="i">{{item.description_zh}}</p><p class="fine-print">此处没有新增账目；实际到账或消费必须经你确认。</p></div>

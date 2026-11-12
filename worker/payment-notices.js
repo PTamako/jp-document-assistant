@@ -50,18 +50,35 @@ const cardPurchaseLine=raw=>{
    if(!merchant||/^(?:日時|ご利用内容|利用明細)/.test(merchant))continue;
    return {merchant,amount:value,source};
  }
- return null;
+ return labeledCardPurchase(raw);
 };
+// SMBC/Olive single-purchase notifications can place transaction fields on
+// separate labeled lines. Reject multi-entry statements and refunds.
+function labeledCardPurchase(raw){
+ const lines=String(raw||'').split(/\r?\n/);
+ const matches=re=>lines.filter(line=>re.test(norm(line).trim()));
+ const merchantLines=matches(/^[◇◆■□\s]*(?:ご)?利用先\s*[:：]/);
+ const amountLines=matches(/^[◇◆■□\s]*(?:ご)?利用金額\s*[:：]/);
+ const typeLines=matches(/^[◇◆■□\s]*(?:ご)?利用取引\s*[:：]/);
+ if(merchantLines.length!==1||amountLines.length!==1||typeLines.length>1)return null;
+ if(typeLines.length&&!/[:：]\s*(?:買物|購入|ショッピング)\s*$/.test(norm(typeLines[0]).trim()))return null;
+ const merchant=norm(merchantLines[0]).replace(/^[◇◆■□\s]*(?:ご)?利用先\s*[:：]\s*/,'').trim();
+ const amountText=norm(amountLines[0]).replace(/^[◇◆■□\s]*(?:ご)?利用金額\s*[:：]\s*/,'').trim();
+ const match=/^([0-9][0-9,]{0,13})\s*円\s*$/.exec(amountText);
+ const amount=match&&money(match[1]);
+ if(!merchant||merchant.length>100||!amount||/(?:取消|キャンセル|返金|返品|チャージ|引落|請求)/.test(merchant))return null;
+ return {merchant,amount,source:amountLines[0],merchantSource:merchantLines[0]};
+}
 export const isCardPurchaseNotice=raw=>{
  const t=norm(raw);
- return /(?:クレジット|カード|Olive)/i.test(t)&&/(?:ご利用日時|利用日時)/.test(t)&&
+ return /(?:クレジット|カード|Olive)/i.test(t)&&/(?:ご利用日時|利用日時|利用日)/.test(t)&&
   /(?:カードの利用内容|カードご利用|カードのご利用|利用内容をお知らせ|ご利用内容)/.test(t)&&!!cardPurchaseLine(raw);
 };
 export function extractCardPurchaseFields(raw){
  const purchase=cardPurchaseLine(raw);
  if(!purchase)return [];
  const fields=[fld('amount_jpy','money',purchase.amount,purchase.source),
-   fld('merchant','text',purchase.merchant,purchase.source)];
+   fld('merchant','text',purchase.merchant,purchase.merchantSource||purchase.source)];
  const stamp=extractStamp(raw,'card');
  if(stamp)fields.push(stamp);
  return fields;
