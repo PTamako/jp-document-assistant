@@ -1,7 +1,7 @@
 // Optional browser-only Japanese OCR. Never uploads document pixels.
 // Pin the SDK version; deployment must audit third-party runtime script and
 // first-load model downloads before approving this path for private documents.
-export const PADDLE_SDK_URL='https://cdn.jsdelivr.net/npm/@paddleocr/paddleocr-js@0.4.2/+esm';
+export const PADDLE_SDK_VERSION='0.4.2';
 let enginePromise;
 export function normalizeOcrItems(results){
   const items=Array.isArray(results?.[0]?.items)?results[0].items:[];
@@ -15,7 +15,7 @@ export async function recognizeJapaneseImage(file,{loadSdk}={}){
   if(!/^image\/(?:jpeg|png|webp)$/.test(file.type))throw Error('本地 OCR 仅接受 JPEG、PNG、WebP');
   if(!enginePromise){
     enginePromise=(async()=>{
-      const loader=loadSdk||(()=>import(/* @vite-ignore */ PADDLE_SDK_URL));
+      const loader=loadSdk||(()=>import('@paddleocr/paddleocr-js'));
       const {PaddleOCR}=await loader();
       if(!PaddleOCR||typeof PaddleOCR.create!=='function')throw Error('PaddleOCR SDK 不可用');
       return PaddleOCR.create({lang:'japan',ocrVersion:'PP-OCRv6',
