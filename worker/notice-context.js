@@ -26,6 +26,15 @@ export function explainNotice({text,category,fields}){
    const service=evidenceLine(text,/サービス名|サービス提供/);
    if(service)lines.push('服务线索（日文原文）：'+service);
    lines.push('建议：核对 Suica 的充值记录；如果从银行卡或其他余额转入交通卡，记账时通常应先考虑“账户间转移”，避免把充值与后续乘车消费重复计算。');
+ }else if(category==='card_spend'){
+   summary='信用卡消费通知';
+   const merchant=field(fields,'merchant'),when=field(fields,'transaction_at')||field(fields,'transaction_date');
+   lines.push('这是什么：信用卡单笔消费使用通知，和月度信用卡账单、银行账户自动扣款不是一回事。');
+   if(merchant)lines.push('消费商户：'+merchant.normalized_value+'（日文原文：'+merchant.source_quote+'）。');
+   if(amount)lines.push('通知中的本次消费金额：'+amount+'（实际记账前需核对银行卡明细）。');
+   if(when)lines.push('通知列出的使用时间：'+when.normalized_value+'。这不是信用卡扣款日期。');
+   if(/Olive|Ｏｌｉｖｅ/i.test(text))lines.push('卡片线索：原文出现 Olive／クレジット；记账时仍须本人选择正确的信用卡账户。');
+   lines.push('建议：可以作为家計簿支出候选，确认金额、交易日、支付卡片和是否已经记录后再入账；通知不一定代表最终入账，退款、取消和金额更正可能发生。');
  }else if(directDebit){
    summary='银行账户扣款通知';
    lines.push('这是什么：这是一份银行账户自动扣款相关通知。“口座引き落とし／口座振替”指从银行账户扣款，并不等于信用卡当天新增一笔消费。');
@@ -42,13 +51,26 @@ export function explainNotice({text,category,fields}){
    if(slot)lines.push('配送时间线索（日文原文）：'+slot);
    lines.push('建议：如果需要改时间或查询进度，请通过快递公司官方 App／官网核对；“预计送达”不代表“已签收”。');
  }else if(category==='salary'){
-   summary='工资／奖金明细';
-   lines.push('这是什么：工资或奖金明细，应分别看总支给、扣除及实发，不能把应发金额直接视为到账金额。');
+   if(/(?:入金内容|振込(?:による)?ご入金|振込入金|お振込によるご入金)/.test(text.normalize('NFKC'))){
+     summary='银行工资入账通知';
+     lines.push('这是什么：银行通知收到一笔标记为「給与／キユウヨ」的振込入金，属于工资到账线索，不是信用卡消费。');
+     const stamp=field(fields,'transaction_at')||field(fields,'transaction_date');
+     if(stamp)lines.push('银行记载的入账时间：'+stamp.normalized_value+'。');
+     const payer=field(fields,'deposit_from');
+     if(payer)lines.push('入金内容／付款方：'+payer.normalized_value+'（原文记载，未核验实际付款主体）。');
+     const net=field(fields,'net_salary');
+     if(net)lines.push('工资入账金额：'+Number(net.normalized_value).toLocaleString('ja-JP')+' 日元（请核对银行明细；如是手填，原文并未提供这一数额）。');
+     else lines.push('这封邮件没有注明收入金额：可根据银行入出金明细手动填写并确认。系统不会推测工资金额。');
+     lines.push('建议：核对实际银行入账金额、对应日期以及家計簿中是否已经记录；确认后可作为收入候选，避免重复入账。');
+   }else{
+     summary='工资／奖金明细';
+     lines.push('这是什么：工资或奖金明细，应分别看总支给、扣除及实发，不能把应发金额直接视为到账金额。');
    const net=field(fields,'net_salary'),gross=field(fields,'gross_salary'),deduct=field(fields,'total_deductions');
    if(gross)lines.push('应发合计：'+Number(gross.normalized_value).toLocaleString('ja-JP')+' 日元（待核对）。');
    if(deduct)lines.push('扣除合计：'+Number(deduct.normalized_value).toLocaleString('ja-JP')+' 日元（待核对）。');
    if(net)lines.push('实发金额：'+Number(net.normalized_value).toLocaleString('ja-JP')+' 日元（待核对）。');
    lines.push('建议：核对期间、公司名称、实际入账及税社保扣除；工资单不等于银行已到账。');
+   }
  }else if(category==='tax'){
    summary='税金／缴费通知';
    lines.push('这是什么：涉及税金、保险费或其他缴费的文书。先确认是哪一种费用、金额和正式期限。');
