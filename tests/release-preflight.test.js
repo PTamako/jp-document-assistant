@@ -89,3 +89,10 @@ test('historical financial sync requires a visible reconciliation checkbox befor
  assert.match(ui,/confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value/);
  assert.match(ui,/current\?\.category==='card_spend'\?'交易日期'/);
 });
+
+test('store-based prefill and transaction clock are surfaced in the document UI',()=>{
+ const app=read('web/src/App.vue');
+ assert.match(app,/candidateDraft\.category=ledgerOptions\.value\.suggested\?\.category/);
+ assert.match(app,/candidateDraft\.payment_source=ledgerOptions\.value\.suggested\?\.payment_source/);
+ assert.match(app,/\['card_spend','shopping'\]\.includes\(current\.category\)/);
+});
