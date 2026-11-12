@@ -59,6 +59,73 @@ function documentReviewLabel(d){
  if(state==='partial')return '部分核验';
  return d?.analysis_status==='needs_review'?'待核验':'已保存';
 }
+
+const choiceField=ref(''),choiceReturnSheet=ref(''),choiceSearch=ref('');
+const choices={
+ category:{title:'文书类型',items:[{value:'',label:'全部类型'},...categoryOptions.map(([value,label])=>({value,label}))]},
+ visibility:{title:'可见范围',items:[{value:'all',label:'全部'},{value:'mine',label:'我拥有的'},{value:'shared',label:'家庭共享'}]},
+ archived:{title:'归档状态',items:[{value:'active',label:'未归档'},{value:'archived',label:'已归档'},{value:'all',label:'全部'}]},
+ favorite:{title:'收藏',items:[{value:'all',label:'全部'},{value:'yes',label:'仅收藏'}]},
+ textSource:{title:'文书来源',items:[{value:'text',label:'粘贴文本'},{value:'mail_forward',label:'苹果邮件复制 / 转发'},{value:'gmail',label:'Gmail 逐封选择'},{value:'google_drive',label:'Google Drive 复制'},{value:'local_file',label:'本地文档文本'}]},
+ textRetention:{title:'保存方式',items:[{value:'summary',label:'保存文字和分析结果'},{value:'analyze_only',label:'仅分析，不保存'}]},
+ fileRetention:{title:'保存方式',items:[{value:'analyze_only',label:'仅分析，不保存'},{value:'summary',label:'仅保存文字，不上传 R2'},{value:'original',label:'保存私有原件到 R2'}]},
+ reviewState:{title:'审核操作',items:[{value:'confirmed',label:'确认无误'},{value:'corrected',label:'修正为此值'},{value:'rejected',label:'无法确认 / 废弃候选'}]},
+ taskVisibility:{title:'任务可见范围',items:[{value:'private',label:'仅自己'},{value:'household',label:'家庭共享'}]}
+};
+const fileHasTextLayer=computed(()=>/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft.value?.name||''));
+function choiceValue(field){
+ switch(field){
+  case 'category':return category.value;
+  case 'visibility':return visibilityFilter.value;
+  case 'archived':return archivedFilter.value;
+  case 'favorite':return favoriteFilter.value;
+  case 'textSource':return textDraft.source_type;
+  case 'textRetention':return textDraft.retention;
+  case 'fileRetention':return fileRetention.value;
+  case 'reviewState':return fieldDraft.state;
+  case 'taskVisibility':return candidateDraft.visibility;
+  default:return '';
+ }
+}
+function choiceItems(field){
+ const items=choices[field]?.items||[];
+ if(field==='fileRetention'&&!fileHasTextLayer.value)return items.filter(o=>o.value==='original');
+ if(field==='taskVisibility'&&current.value?.visibility!=='shared')return items.filter(o=>o.value==='private');
+ return items;
+}
+const pickerItems=computed(()=>choiceItems(choiceField.value));
+const visiblePickerItems=computed(()=>{
+ const q=choiceSearch.value.trim().toLocaleLowerCase();
+ return q?pickerItems.value.filter(o=>o.label.toLocaleLowerCase().includes(q)):pickerItems.value;
+});
+function choiceLabel(field){return choiceItems(field).find(o=>o.value===choiceValue(field))?.label||'请选择';}
+function openChoice(field){
+ if(!choices[field]||busy.value)return;
+ choiceField.value=field;choiceReturnSheet.value=sheet.value;choiceSearch.value='';sheet.value='choicePicker';
+}
+function backChoice(){
+ sheet.value=choiceReturnSheet.value||'filter';choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';
+}
+function selectChoice(value){
+ switch(choiceField.value){
+  case 'category':category.value=value;break;
+  case 'visibility':visibilityFilter.value=value;break;
+  case 'archived':archivedFilter.value=value;break;
+  case 'favorite':favoriteFilter.value=value;break;
+  case 'textSource':textDraft.source_type=value;break;
+  case 'textRetention':textDraft.retention=value;break;
+  case 'fileRetention':fileRetention.value=value;break;
+  case 'reviewState':fieldDraft.state=value;break;
+  case 'taskVisibility':candidateDraft.visibility=value;break;
+ }
+ backChoice();
+}
+function closeNestedSheet(){
+ if(sheet.value==='choicePicker')backChoice();
+ else if(sheet.value==='importSources')sheet.value='import';
+ else closeSheet();
+}
+
 const showDue=(v)=>v?String(v):'日期待确认';
 const pageData=computed(()=>pages[activeTab.value]||{items:[],next:null,loaded:true});
 function flash(message){notice.value=message;error.value='';}
@@ -291,7 +358,7 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function primeGooglePicker(){
   if(!drivePickerAvailable||iosStandalonePwa||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
   drivePickerLoadingUi.value=true;
@@ -680,7 +747,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
     </div>
   </div>
 
-  <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeSheet()">
+  <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeNestedSheet()">
     <section class="bottom-sheet" role="dialog" aria-modal="true" :aria-label="sheet">
       <div class="grabber"></div>
       <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><p v-if="iosStandalonePwa && (gmailAvailable||drivePickerAvailable)" class="info-note">iPhone PWA 可直接导入本地文件；Google 授权请使用 Safari。</p>
@@ -724,8 +791,31 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <p class="fine-print">Gmail 只读授权受 Google 限制；Apple Mail 聚合邮箱无法直接读取。</p>
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
       </template>
-      <template v-else-if="sheet==='filter'"><h2>筛选文书</h2><label class="form-label">可见范围<select v-model="visibilityFilter"><option value="all">全部</option><option value="mine">我拥有的</option><option value="shared">家庭共享</option></select></label><label class="form-label">归档状态<select v-model="archivedFilter"><option value="active">未归档</option><option value="archived">已归档</option><option value="all">全部</option></select></label><label class="form-label">收藏<select v-model="favoriteFilter"><option value="all">全部</option><option value="yes">仅收藏</option></select></label><label class="form-label">创建月份<input type="month" v-model="monthFilter" /></label><button class="primary full" @click="searchDocs">应用筛选</button><h3>文书类型</h3><div class="option-list"><button :class="{chosen:category===''}" @click="category='';searchDocs()">全部类型</button><button v-for="[key,label] in categoryOptions" :key="key" :class="{chosen:category===key}" @click="category=key;searchDocs()">{{label}}</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div></template>
-      <template v-else-if="sheet==='field'"><h2>核对原文中的字段</h2><label class="form-label">确认值<input v-model="fieldDraft.value" /></label><label class="form-label">审核操作<select v-model="fieldDraft.state"><option value="confirmed">确认无误</option><option value="corrected">修正为此值</option><option value="rejected">无法确认 / 废弃此候选</option></select></label><label class="check-row"><input type="checkbox" v-model="fieldDraft.confirmRemote" /> 若该字段已经联动，我了解修改仅影响本 App；需要去目标 App 核对远端记录</label><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="saveField">保存</button></div></template>
+      <template v-else-if="sheet==='filter'">
+  <h2>筛选文书</h2>
+  <p class="fine-print picker-helper">点击字段选择，返回后统一应用筛选。</p>
+  <div class="choice-form-field"><span class="choice-field-label">文书类型</span><button type="button" class="choice-field-control" @click="openChoice('category')"><span>{{choiceLabel('category')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+  <div class="choice-form-field"><span class="choice-field-label">可见范围</span><button type="button" class="choice-field-control" @click="openChoice('visibility')"><span>{{choiceLabel('visibility')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+  <div class="choice-form-field"><span class="choice-field-label">归档状态</span><button type="button" class="choice-field-control" @click="openChoice('archived')"><span>{{choiceLabel('archived')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+  <div class="choice-form-field"><span class="choice-field-label">收藏</span><button type="button" class="choice-field-control" @click="openChoice('favorite')"><span>{{choiceLabel('favorite')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+  <label class="form-label compact-month">创建月份（可留空）<input type="month" v-model="monthFilter"/></label>
+  <div class="sheet-actions"><button class="secondary" type="button" @click="closeSheet">取消</button><button class="primary" type="button" :disabled="loadingPage" @click="searchDocs">{{loadingPage?'筛选中…':'应用筛选'}}</button></div>
+</template>
+<template v-else-if="sheet==='choicePicker'">
+  <h2>选择{{choices[choiceField]?.title||'选项'}}</h2>
+  <label v-if="pickerItems.length>5" class="form-label picker-search-label">搜索选项
+    <input type="search" v-model="choiceSearch" maxlength="60" placeholder="搜索名称" autocomplete="off"/>
+  </label>
+  <div class="choice-picker-list" role="listbox" :aria-label="choices[choiceField]?.title||'选项'">
+    <button v-for="option in visiblePickerItems" :key="option.value||'all'" type="button" role="option"
+      class="choice-picker-item" :aria-selected="choiceValue(choiceField)===option.value" :class="{chosen:choiceValue(choiceField)===option.value}" @click="selectChoice(option.value)">
+      <span>{{option.label}}</span><UiIcon v-if="choiceValue(choiceField)===option.value" name="check" :size="19"/>
+    </button>
+    <p v-if="!visiblePickerItems.length" class="empty">没有匹配的选项。</p>
+  </div>
+  <div class="sheet-actions"><button class="secondary full" type="button" @click="backChoice">返回上一层</button></div>
+</template>
+<template v-else-if="sheet==='field'"><h2>核对原文中的字段</h2><label class="form-label">确认值<input v-model="fieldDraft.value" /></label><label class="form-label">审核操作<select v-model="fieldDraft.state"><option value="confirmed">确认无误</option><option value="corrected">修正为此值</option><option value="rejected">无法确认 / 废弃此候选</option></select></label><label class="check-row"><input type="checkbox" v-model="fieldDraft.confirmRemote" /> 若该字段已经联动，我了解修改仅影响本 App；需要去目标 App 核对远端记录</label><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="saveField">保存</button></div></template>
       <template v-else-if="sheet==='detailsMenu'"><h2>文书操作</h2><button class="settings-line" @click="sheet='shareConfirm'">{{current.visibility==='private'?'主动分享给家人':'改为仅自己'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line" @click="toggleDocument('favorite',!current.favorite)">{{current.favorite?'取消收藏':'收藏文书'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line" @click="toggleDocument('archived',!current.archived_at)">{{current.archived_at?'取消归档':'归档（停止首页提示）'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line danger-text" @click="askTrash">移入回收站 <UiIcon name="chevron-right" :size="18"/></button><div class="sheet-actions"><button class="secondary full" @click="sheet=''">取消</button></div></template>
       <template v-else-if="sheet==='shareConfirm'"><h2>确认家庭可见范围</h2><p>共享后第二位家庭成员可以读取标题、原文、字段和附件。工资、银行、税务资料可能含敏感信息。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="changeShare">{{current.visibility==='private'?'确认共享':'确认设为私人'}}</button></div></template>
       <template v-else-if="sheet==='trashListConfirm'">
