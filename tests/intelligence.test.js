@@ -54,7 +54,7 @@ test('Gemini status codes are categorized safely without exposing provider respo
  assert.equal(classifyGeminiHttpError(403),'gemini_access_denied');
  assert.equal(classifyGeminiHttpError(400),'gemini_invalid_request');
  assert.equal(classifyGeminiHttpError(404),'gemini_model_unavailable');
- assert.equal(classifyGeminiHttpError(503),'gemini_service_unavailable');
+ assert.equal(classifyGeminiHttpError(503),'gemini_service_overloaded');
 });
 test('Gemini distinguishes truncated, blocked, missing and good JSON text',()=>{
  assert.throws(()=>extractGeminiResponseText({candidates:[{finishReason:'MAX_TOKENS',content:{parts:[]}}]}),/gemini_output_truncated/);
