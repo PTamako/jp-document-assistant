@@ -35,6 +35,9 @@ export default defineConfig({
   plugins: [vue(),externalizeOversizedOrtWasm()],
   root: 'web',
   publicDir: 'public',
+  // Keep the dedicated OCR module Worker at a stable scoped URL pattern.
+  // Only this entry is served with the OCR-specific CSP by the edge Worker.
+  worker: {format:'es',rollupOptions:{output:{entryFileNames:'assets/worker-entry-[hash].js'}}},
   build: {outDir: '../dist',emptyOutDir:true, target:'es2022'},
   server: {proxy:{'/api':'http://127.0.0.1:8787'}}
 });
