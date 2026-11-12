@@ -14,7 +14,7 @@ import { validateOfficeBytes } from '../web/src/document-text.js';
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_LIST = 10;
 const fieldsOf = ['due_date','amount_jpy','net_salary'];
-const sensitiveCategories=new Set(['salary','tax','bank','insurance','medical','government','housing','travel','hotel']);
+const sensitiveCategories=new Set(['salary','tax','bank','topup','insurance','medical','government','housing','travel','hotel']);
 const sensitiveSource=/(?:マイナンバー|個人番号|在留カード|旅券|パスポート|運転免許証|保険証|口座番号|銀行口座|診療明細|給与明細)/;
 function requiresPrivateDefault(category,sourceText=''){
   return sensitiveCategories.has(category)||sensitiveSource.test(String(sourceText));
@@ -160,7 +160,7 @@ async function analyzeStored(env,doc,force=false){
   ];
   for(const f of result.fields){stmts.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',randomToken(16),doc.id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);}
   const amount=result.fields.find(f=>f.field_key==='net_salary'||f.field_key==='amount_jpy');
-  if(amount && !['bank','travel','hotel','shopping','delivery','medical','policy','terms','manual','campaign'].includes(result.category)){
+  if(amount && !['bank','topup','travel','hotel','shopping','delivery','medical','policy','terms','manual','campaign'].includes(result.category)){
     const kind=result.category==='salary'?'income':'expense';
     stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'finance',JSON.stringify({kind,amount_jpy:Number(amount.normalized_value),currency:'JPY',payment_confirmed:false,category:result.category,note:'必须人工确认实际到账/付款并防重'}),now,now]);
   }
