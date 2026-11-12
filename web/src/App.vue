@@ -279,6 +279,12 @@ function openImport(mode='text'){
   // clicking the Google button does not await before the OAuth popup.
   primeGooglePicker();
 }
+async function refreshDocumentsAfterSafari(){
+  closeSheet();
+  activeTab.value='docs';
+  pages.docs.loaded=false;
+  await loadTab('docs');
+}
 async function copySafariSite(){
   try{await navigator.clipboard.writeText(mainSiteUrl);flash('网址已复制，请打开 Safari 地址栏粘贴访问');}
   catch{problem(new Error('无法自动复制，请长按页面显示的网址，在 Safari 地址栏打开'));}
@@ -607,7 +613,14 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
   <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeSheet()">
     <section class="bottom-sheet" role="dialog" aria-modal="true" :aria-label="sheet">
       <div class="grabber"></div>
-      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><p v-if="iosStandalonePwa && (gmailAvailable||drivePickerAvailable)" class="info-note">当前是 iPhone 主屏幕 PWA：Google 弹窗授权可能被系统拦截。请改用 Safari 打开正式网站进行 Google 导入；保存后返回 PWA 即可查看文书。</p>
+      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><p v-if="iosStandalonePwa && (gmailAvailable||drivePickerAvailable)" class="info-note">这是 iPhone 主屏幕 PWA。Google 网页授权请在 Safari 完成；如果文件已在 iPhone「文件」App 中，也可以直接选取，无须 Google 弹窗。</p>
+        <div v-if="iosStandalonePwa" class="upload-box">
+          <label class="pwa-native-file-button">
+            从 iPhone「文件」选择 PDF / Word / 图片
+            <input type="file" class="visually-hidden" accept=".pdf,.docx,.xlsx,.pptx,.jpg,.jpeg,.png,.webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" @change="selectFile" />
+          </label>
+          <p class="fine-print">如果 Google Drive 已作为「文件」App 的位置提供者，可从那里选取已下载的 PDF / Office / 图片。Google Docs 原生文件需先在 Google Drive 中导出为支持的格式；不会读取整个云端硬盘。</p>
+        </div>
         <div v-if="gmailAvailable" class="upload-box"><button class="secondary full" :disabled="busy" @click="openGmailSheet">{{iosStandalonePwa?'Gmail 授权：在 Safari 打开':'从 Gmail 选择邮件（只读 / 逐封）'}}</button><p class="fine-print">只有主动授权和选取后才读取文字，无后台同步、自动上传或附件下载。</p></div>
         <div v-if="drivePickerAvailable" class="upload-box"><button class="secondary full" :disabled="busy||(!iosStandalonePwa&&!drivePickerReadyUi)" @click="importFromGoogleDrive">{{iosStandalonePwa?'Google Drive：在 Safari 打开':drivePickerLoadingUi?'正在准备 Google Drive 授权组件…':'从 Google Drive 选择文件（逐份授权）'}}</button><p class="fine-print">只读取你主动选择的文件。读取后需要再次确认保存。</p><button v-if="!iosStandalonePwa&&!drivePickerLoadingUi&&!drivePickerReadyUi" class="text-button full" type="button" @click="primeGooglePicker">重新加载 Google Drive 组件</button></div>
         <template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><div class="upload-box"><button class="secondary" :disabled="busy" @click="localTextInput?.click()">读取本地 .eml 邮件 / .txt 文字文件</button><input ref="localTextInput" type="file" accept=".eml,.txt,message/rfc822,text/plain" class="visually-hidden" @change="importLocalText" /><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><p class="fine-print">仅在本次页面会话中提取文字；不执行邮件 HTML，不抓取远程图片或附件。</p></div><label class="form-label">来源<select v-model="textDraft.source_type"><option value="text">粘贴文本</option><option value="mail_forward">苹果邮件复制 / 转发</option><option value="gmail">Gmail 逐封选择</option><option value="google_drive">Google Drive 复制</option><option value="local_file">本地文档文本</option></select></label><div class="radio-stack"><label><input v-model="textDraft.retention" type="radio" value="summary" />保存文书文字和分析结果</label><label><input v-model="textDraft.retention" type="radio" value="analyze_only" />仅规则分析，不存储内容</label></div></template>
@@ -620,7 +633,8 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <button class="primary full" type="button" @click="copySafariSite">复制文书助手网址</button>
         <a class="secondary full safari-link" :href="mainSiteUrl" target="_blank" rel="noopener noreferrer">尝试在浏览器中打开</a>
         <p class="fine-print safari-url">{{mainSiteUrl}}</p>
-        <p class="fine-print">在 Safari 里确认保存后，主屏幕 PWA 重新打开「文书」页面即可看到资料。两者共用正式 D1 数据库，无需额外同步。</p>
+        <p class="fine-print">在 Safari 保存后，回到 PWA 点击下面的「刷新文书库」即可看到资料。两个入口使用同一个正式 D1，不会再次导入或创建重复文件。</p>
+        <button class="secondary full" type="button" :disabled="loadingPage" @click="refreshDocumentsAfterSafari">{{loadingPage?'正在刷新文书库…':'刷新文书库'}}</button>
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">返回</button></div>
       </template>
       <template v-else-if="sheet==='gmail'"><h2>Gmail · 只读选取</h2>
