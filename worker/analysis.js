@@ -130,13 +130,71 @@ function extractTopupFields(text) {
   return fields;
 }
 
+// Utility invoices often quote a metered-period charge and a DIFFERENT amount
+// currently billed. Extract only explicitly labelled evidence, never turn card
+// advance dates into bill deadlines or assume a discount reason.
+function extractElectricityFields(text) {
+  if (!/(?:電気|電力|検針|kWh)/i.test(text)) return [];
+  const fields=[];
+  const add=(key,value_type,normalized_value,source_quote)=>fields.push({
+    field_key:key,value_type,normalized_value,
+    ...(value_type==='money'?{original_currency:'JPY'}:{}),
+    source_quote:source_quote.trim().slice(0,190),review_state:'unreviewed'
+  });
+  const parseMoney=raw=>{
+    const n=Number(normDigits(raw).replace(/[,，]/g,''));
+    return Number.isSafeInteger(n)&&n>0?String(n):null;
+  };
+  const dateText='(?:19|20)[0-9０-９]{2}[\/.-][0-9０-９]{1,2}[\/.-][0-9０-９]{1,2}';
+  const parsedDate=raw=>{
+    const x=/^([0-9０-９]{4})[\/.-]([0-9０-９]{1,2})[\/.-]([0-9０-９]{1,2})$/.exec(raw);
+    if(!x)return null;
+    return validDate(Number(normDigits(x[1])),Number(normDigits(x[2])),Number(normDigits(x[3])))?.date||null;
+  };
+  // Invoice totals take priority over the amount displayed beside meter dates.
+  const total=/(?:今回の[ \t　]*ご請求金額[ \t　]*合計|今回の[ \t　]*ご請求金額|ご請求金額[ \t　]*合計|ご請求金額|今回の[ \t　]*請求額)[ \t　:：]*(?:\r?\n[ \t　]*)?(?:[¥￥][ \t]*)?([0-9０-９][0-9０-９,，]{0,14})[ \t]*円?/.exec(text);
+  if(total){
+    const v=parseMoney(total[1]);
+    if(v)add('amount_jpy','money',v,total[0]);
+  }
+  const periodRe=new RegExp('(?:電気料金の[ \t　]*)?(?:検針期間|ご使用期間|使用期間)[ \t　:：]*(?:\\r?\\n[ \t　]*)?('+dateText+')[ \t]*(?:~|〜|～|–|—|から|至)[ \t]*('+dateText+')[^\\r\\n]{0,80}');
+  const period=periodRe.exec(text);
+  if(period){
+    const start=parsedDate(period[1]),end=parsedDate(period[2]);
+    if(start&&end&&start<=end){
+      const quote=period[0];
+      add('meter_period_start','date',start,quote);
+      add('meter_period_end','date',end,quote);
+      const trailing=quote.slice(quote.lastIndexOf(period[2])+period[2].length);
+      const charge=/(?:[¥￥][ \t]*)?([0-9０-９][0-9０-９,，]{0,14})[ \t]*円/.exec(trailing);
+      if(charge){
+        const v=parseMoney(charge[1]);
+        if(v)add('period_charge_jpy','money',v,quote);
+      }
+    }
+  }
+  const usage=/([0-9０-９]+(?:\.[0-9０-９]{1,3})?)[ \t　]*kWh\b/i.exec(text);
+  if(usage){
+    const value=normDigits(usage[1]);
+    if(Number.isFinite(Number(value))&&Number(value)>=0&&Number(value)<=100000000)
+      add('usage_kwh','text',value,usage[0]);
+  }
+  const cardRe=new RegExp('(?:カード立替日|クレジットカード立替日)[ \t　:：]*(?:\\r?\\n[ \t　]*)?('+dateText+')');
+  const card=cardRe.exec(text);
+  if(card){
+    const d=parsedDate(card[1]);
+    if(d)add('card_advance_date','date',d,card[0]);
+  }
+  return fields;
+}
+
 export function parseJapaneseText(raw) {
   const text = String(raw || '').slice(0,100000);
   const category = classifyText(text);
   const clauses=interpretCriticalClauses(text);
   const issues=[];
   const dates=extractDates(text);
-  const fields=category==='topup'?extractTopupFields(text):[];
+  const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):[];
   const due=dates.find(d=>d.due_hint && !/(?:お届け予定|配達予定|配送予定|口座引落|引き落とし予定|受取完了)/.test(d.source_quote));
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
   // Scheduled debit and delivery dates are events, NOT actionable deadlines.
@@ -148,6 +206,7 @@ export function parseJapaneseText(raw) {
   if (dates.some(x=>x.weekday_mismatch)) issues.push('日期与原文星期不一致，请核对原件');
   if(!due && dates.length===0 && /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2})/.test(text)) issues.push('存在未注明年份的日期，无法直接确认截止日');
   for(const {key,re} of priority){
+    if(fields.some(f=>f.field_key===key))continue; // Prioritize explicitly labelled amounts and prevent duplicates.
     if(category==='topup' && key==='amount_jpy')continue; // No payment or income inference from a top-up.
     re.lastIndex=0;
     const m=re.exec(text);
@@ -185,6 +244,7 @@ export function parseJapaneseText(raw) {
       '原文版本／发布日期线索：'+policyVersion.source_document_date+'（'+policyVersion.source_date_quote+'）':
       '原文版本／发布日期：无法确定，请手动核对',
     '官方现行有效性：尚未核验（official_current_verified_at = null）；不得据此判定个人权益或现行法律。']: [];
-  const explanation_zh=[`文书类别建议：${labels[category]}`,...notice.lines,...fields.map(f=>`${f.field_key==='due_date'?'待核对截止日':f.field_key==='event_date'?'事件／预计日期':f.field_key==='transaction_at'?'交易完成时间':f.field_key==='service_name'?'服务名称':f.field_key==='net_salary'?'实发金额':f.field_key==='gross_salary'?'应发金额':f.field_key==='total_deductions'?'扣款合计':category==='topup'?'充值金额':'金额线索'}：${f.normalized_value}${f.value_type==='money'?' 日元':''}｜原文：${f.source_quote}`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`)].join('\n');
+  const descriptions={due_date:'待核对截止日',event_date:'事件／预计日期',transaction_at:'交易完成时间',service_name:'服务名称',net_salary:'实发金额',gross_salary:'应发金额',total_deductions:'扣款合计',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'检针期间显示电费',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
+  const explanation_zh=[`文书类别建议：${labels[category]}`,...notice.lines,...fields.map(f=>`${descriptions[f.field_key]||(category==='utility'&&f.field_key==='amount_jpy'?'本次请款金额':category==='topup'?'充值金额':'金额线索')}：${f.normalized_value}${f.value_type==='money'?' 日元':''}｜原文：${f.source_quote}`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`)].join('\n');
   return {category,summary_zh,explanation_zh,fields,issues,vocabulary,clauses,policyVersion,analysis_status:'needs_review'};
 }
