@@ -1,6 +1,6 @@
 # D1 migrations (initial schema for a NEW standalone application)
 
-Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`, `0006_document_version.sql`, `0007_ocr_attempts.sql`, `0008_bridge_fingerprint.sql`, `0009_calendar_subscriptions.sql`, `0010_ocr_utc_budget.sql`, `0011_document_ai_provider.sql`, `0012_document_ai_analysis.sql`, `0013_google_oauth_grants.sql`, `0014_google_browser_redirect.sql`, `0015_ocr_space_utc_budget.sql`, `0016_gemini_daily_budget.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
+Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`, `0006_document_version.sql`, `0007_ocr_attempts.sql`, `0008_bridge_fingerprint.sql`, `0009_calendar_subscriptions.sql`, `0010_ocr_utc_budget.sql`, `0011_document_ai_provider.sql`, `0012_document_ai_analysis.sql`, `0013_google_oauth_grants.sql`, `0014_google_browser_redirect.sql`, `0015_ocr_space_utc_budget.sql`, `0016_gemini_daily_budget.sql`, `0017_google_oauth_callback_error.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
 
 **Production safety:** The SQL is tested against local `sqlite3`, **not yet against real D1**. Do not auto-run on production; confirm a backup, current schema, and a production migration plan, and get approval. App-level logic must enforce exactly two users, permissions, imports, 2-phase R2 cleanup, idempotency, and transactional CAS updates. The SQLite trigger additionally blocks a third non-left account in the same household.
 
@@ -40,3 +40,10 @@ The initial schema deliberately has **no FTS virtual table** because D1 support 
 - Reserve before calling Google, and fail closed when the migration or D1 service is missing. Successful document analysis remains cached. There is no automatic retry.
 - The Pacific-day key handles daylight-saving time. New-model usage starts at zero and is distinct from prior Gemini 3.5 calls; the previous model's cache is not treated as a 3.6 result.
 - Rollout order: review CI, back up or snapshot D1 as practical, apply this additive production migration, then deploy the existing production Worker only. Never create a preview resource.
+
+
+## 2026-11-12 production migration ledger reconciliation
+
+The live production database was previously patched manually for Google OAuth and OCR.space. Its actual schema contains `google_oauth_grants` (Gmail/Drive), `google_oauth_pending` with `error_code`, `ocr_space_utc_daily` and `gemini_api_daily`. Some corresponding `d1_migrations` entries were missing despite those tables/columns already existing. Do **not** blindly replay them: 0014 recreates the grants table and 0017 adds an already-present column.
+
+After taking a D1 Time Travel bookmark and verifying all four schemas, record only the missing migration filenames in `d1_migrations`. Do not touch user documents, OAuth token values or other apps. The callback migration has been renamed from duplicate `0016_google_oauth_callback_error.sql` to `0017_google_oauth_callback_error.sql`; the Gemini 0016 remains unchanged. Every future release must compare live D1 schema and ledger before applying new migrations, and must never run test fixtures on production.

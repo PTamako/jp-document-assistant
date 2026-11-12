@@ -842,6 +842,22 @@ ELSE 'unreviewed' END review_status,
       if(proposed)statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
         SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task')`,
         randomToken(16),id,'homeflow_task',JSON.stringify(proposed),now,now,id]);
+      else {
+        // Backfill an older document's full, reviewable deadline exactly once.
+        // An inferred year, rejected field or existing candidate stays untouched.
+        const storedDue=existing.find(x=>x.field_key==='due_date');
+        const due=storedDue||parsed.fields.find(x=>x.field_key==='due_date');
+        if(due&&due.review_state!=='rejected'&&validCivilDate(String(due.normalized_value||''))&&
+            !String(due.source_quote||'').startsWith('年份自动补全')){
+          statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
+            SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task')`,
+            randomToken(16),id,'homeflow_task',JSON.stringify({
+              title:(nextCategory==='campaign'?'活动截止提醒：':'确认：')+doc.title.slice(0,40),
+              due_on:due.normalized_value,visibility:nextVisibility,requires_confirmation:true,
+              date_field_key:'due_date'
+            }),now,now,id]);
+        }
+      }
       await batch(env.DB,statements);
       return json({ok:true,added_fields:added.length,preserved_fields:existing.length,
         privacy_auto_private:doc.visibility==='shared'&&nextVisibility==='private',
