@@ -196,7 +196,7 @@ function verifyDocumentAiChoice(provider,geminiConsent){
   // Backwards-compatible API: legacy clients without AI field remain rules-only.
   const selected=provider===null||provider===undefined?'none':provider;
   if(!['none','cloudflare','gemini'].includes(selected))bad('请为本份文书选择 AI 引擎或仅规则分析','INVALID_AI_PROVIDER',400);
-  if(selected==='gemini'&&geminiConsent!==true)bad('Gemini 免费 API 需针对本份文书明确授权','AI_PRIVACY_CONFIRM_REQUIRED',400);
+  if(selected==='gemini'&&geminiConsent!==true)bad('请确认本份文书允许发送至 Gemini','AI_PRIVACY_CONFIRM_REQUIRED',400);
   return selected;
 }
 async function handleImportText(request,env,p){
@@ -205,7 +205,6 @@ async function handleImportText(request,env,p){
   if(!validString(data?.text,100000)||!['text','mail_forward','gmail','google_drive','local_file'].includes(data.source_type)||!['analyze_only','summary'].includes(data.retention))bad('文字、来源或保存方式无效');
   if(data.visibility && !['private','shared'].includes(data.visibility))bad('可见范围无效');
   const raw=data.text.trim(),parsed=parseJapaneseText(raw);
-  if(provider==='gemini'&&requiresPrivateDefault(parsed.category,raw))bad('私人或敏感文书不能使用 Gemini 免费 API，请为此文件选择 Cloudflare 或仅规则分析','SENSITIVE_GEMINI_BLOCKED',422);
   if(data.retention==='analyze_only')return json({ok:true,saved:false,analysis:parsed});
   const sha=await hashString(raw), now=isoNow();
   const previous=await dbFirst(env.DB,`SELECT id FROM documents WHERE owner_id=? AND content_sha256=? AND lifecycle='active'`,p.user_id,sha);
@@ -730,8 +729,6 @@ ELSE 'unreviewed' END review_status,
     if(method==='PATCH'&&rest==='ai-provider'){
       const doc=await ownedDocument(env.DB,id,p,'active'),body=await readJson(request,1200);
       const provider=verifyDocumentAiChoice(body.ai_provider,body.gemini_consent);
-      if(provider==='gemini'&&doc.extracted_text_ja&&requiresPrivateDefault(doc.category,doc.extracted_text_ja))
-        bad('私人或敏感文书不能使用 Gemini 免费 API','SENSITIVE_GEMINI_BLOCKED',422);
       const now=isoNow();
       await dbRun(env.DB,'UPDATE documents SET ai_provider=?,ai_consent_at=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=?',provider,provider==='gemini'?now:null,now,id,p.user_id);
       return json({ok:true,document_id:id,ai_provider:provider,ai_invoked:false});
