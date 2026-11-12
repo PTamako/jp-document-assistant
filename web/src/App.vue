@@ -813,7 +813,7 @@ function todayReviewBadge(d){
 const labelFor=(key)=>key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 onMounted(async()=>{await boot();if(!user.value)await refreshInitStatus();});
-onBeforeUnmount(()=>{if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);clearPrivateWorkspace();fileDraft.value=null;});
+onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
 
 <template>
