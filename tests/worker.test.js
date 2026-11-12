@@ -67,12 +67,12 @@ test('top-up email is private, exposes reviewed candidates, never generates a fi
  ].join('\n');
  const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(p),data:{title:'Suicaチャージ完了',source_type:'mail_forward',retention:'summary',text:email,visibility:'shared'}});
  assert.equal(imp.response.status,201,JSON.stringify(imp.data));
- const doc=await req(env,`${'/api/documents/${imp.data.document_id}'}`,auth(p));
+ const doc=await req(env,'/api/documents/'+imp.data.document_id,auth(p));
  assert.equal(doc.data.document.category,'topup');
  assert.equal(doc.data.document.visibility,'private');
  assert.equal(doc.data.document.fields.find(f=>f.field_key==='amount_jpy').normalized_value,'1000');
  assert.equal(doc.data.document.fields.find(f=>f.field_key==='transaction_at').normalized_value,'2026-11-08 13:04');
- const candidates=await req(env,`${'/api/documents/${imp.data.document_id}/candidates'}`,auth(p));
+ const candidates=await req(env,'/api/documents/'+imp.data.document_id+'/candidates',auth(p));
  assert.equal(candidates.response.status,200);
  assert.equal(candidates.data.items.some(c=>c.candidate_kind==='finance'),false);
  assert.equal(candidates.data.items.some(c=>c.candidate_kind==='homeflow_task'),false);
