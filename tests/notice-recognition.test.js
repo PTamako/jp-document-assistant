@@ -55,7 +55,7 @@ test('delivery date means scheduled arrival, not a payment deadline',()=>{
  assert.equal(get(p,'event_date')?.normalized_value,'2026-10-12');
  assert.equal(get(p,'due_date'),undefined);
  assert.match(p.explanation_zh,/预计配送／送达日期/);
- assert.match(p.explanation_zh,/AM8:00/);
+ assert.match(p.explanation_zh,/预计配送时段：08:00～12:00/);
  assert.doesNotMatch(p.explanation_zh,/存在未注明年份的日期/);
 });
 test('real submission deadlines remain deadlines, not delivery events',()=>{

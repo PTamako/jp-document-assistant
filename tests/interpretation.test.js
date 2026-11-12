@@ -53,7 +53,8 @@ test('policy interpretation cites actual Japanese evidence and keeps current-law
  assert.equal(parsed.policyVersion.official_current_verified_at,null);
  assert.ok(parsed.clauses.some(c=>c.term==='必着'&&c.source_quote.includes('11月30日')));
  assert.ok(parsed.clauses.some(c=>c.term==='例外'));
- assert.match(parsed.explanation_zh,/日文证据：「申請書は令和8年11月30日（月）必着です。/);
+ assert.match(parsed.explanation_zh,/资料必须在截止日前送达/);
+ assert.doesNotMatch(parsed.explanation_zh,/日文证据|申請書|必着/);
  assert.match(parsed.explanation_zh,/官方现行有效性：尚未核验/);
  assert.match(parsed.explanation_zh,/2026-11-11/);
 });
@@ -65,7 +66,8 @@ test('campaign exceptions and enrollment are attributed to source, not represent
  assert.ok(p.clauses.every(c=>c.verified===false&&c.source_quote.length>0));
  assert.equal(p.policyVersion.official_current_verified_at,null);
  assert.equal(p.policyVersion.source_document_date,null);
- assert.match(p.explanation_zh,/原文版本／发布日期：无法确定/);
+ assert.match(p.explanation_zh,/文件发布日期：无法确定/);
+ assert.doesNotMatch(p.explanation_zh,/日文证据|エントリー|併用不可/);
  assert.doesNotMatch(p.explanation_zh,/您一定符合|已确认有效/);
 });
 test('manual risk notes use exact original lines and never invent amounts or due dates',()=>{
@@ -74,7 +76,8 @@ test('manual risk notes use exact original lines and never invent amounts or due
  assert.ok(p.clauses.find(c=>c.term==='禁止').source_quote.includes('水濡れ禁止'));
  assert.ok(p.clauses.find(c=>c.term==='別途料金'));
  assert.equal(p.fields.length,0);
- assert.match(p.explanation_zh,/取扱説明書|文书类别建议：使用说明/);
+ assert.match(p.explanation_zh,/文书类别：使用说明/);
+ assert.doesNotMatch(p.explanation_zh,/取扱説明書|使用上の注意|水濡れ禁止/);
 });
 test('interpretation is limited and cannot claim that a quoted condition was verified',()=>{
  const lines=Array.from({length:40},(_,i)=>i%2?'併用不可':'対象外').join('\n');
