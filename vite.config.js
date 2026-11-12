@@ -14,7 +14,7 @@ function externalizeOversizedOrtWasm() {
       const names=readdirSync(dir);
       for(const name of names){
         const path=resolve(dir,name);
-        if(!/^ort-wasm-.*\\.wasm$/.test(name))continue;
+        if(!/^ort-wasm-.*\.wasm$/.test(name))continue;
         if(statSync(path).size>25*1024*1024)unlinkSync(path);
       }
       for(const name of readdirSync(dir)){
