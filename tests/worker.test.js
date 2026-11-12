@@ -127,6 +127,58 @@ test('AI engine is chosen and consented per document, never globally or invoked 
  assert.equal(sensitive.response.status,422,JSON.stringify(sensitive.data));
 });
 
+test('Japanese yearless deadline and action are real review fields, never a guessed HomeFlow due date',async()=>{
+ const env=makeEnv(),user=await boot(env);
+ const raw='11月30日までに申請書を提出してください。お手数ですが、内容をご確認ください。';
+ const result=await req(env,'/api/documents/import/text',{method:'POST',...auth(user),data:{
+  source_type:'text',retention:'summary',text:raw,ai_provider:'none'
+ }});
+ assert.equal(result.response.status,201,JSON.stringify(result.data));
+ const id=result.data.document_id;
+ const detail=(await req(env,'/api/documents/'+id,auth(user))).data.document;
+ const field=k=>detail.fields.find(x=>x.field_key===k);
+ assert.equal(field('due_date'),undefined);
+ assert.equal(field('due_date_partial')?.normalized_value,'11月30日');
+ assert.match(field('required_action')?.normalized_value||'',/申請書を提出/);
+ assert.match(field('review_action')?.normalized_value||'',/内容をご確認/);
+ assert.equal(field('due_date_partial')?.review_state,'unreviewed');
+ const candidates=(await req(env,'/api/documents/'+id+'/candidates',auth(user))).data.items;
+ assert.equal(candidates.some(x=>x.candidate_kind==='homeflow_task'),false);
+ // Updating the previously created record via its legacy parser must not
+ // spend Gemini/Cloudflare quota or overwrite an earlier manual review.
+ env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=? AND field_key IN ('due_date_partial','required_action','review_action')").run(id);
+ const reinterpret=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(user),data:{}});
+ assert.equal(reinterpret.response.status,200,JSON.stringify(reinterpret.data));
+ assert.equal(reinterpret.data.added_fields,3);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM ai_analysis_daily').get().n,0);
+});
+
+test('yearless deadline becomes a dated HomeFlow proposal only after explicit and matching year confirmation',async()=>{
+ const env=makeEnv(),user=await boot(env);
+ const source='11月30日までに申請書を提出してください。';
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(user),data:{
+  source_type:'text',retention:'summary',text:source
+ }});
+ const id=imported.data.document_id;
+ const url='/api/documents/'+id+'/complete-deadline';
+ const submit=(date,confirm_year)=>req(env,url,{method:'POST',...auth(user),data:{due_date:date,confirm_year}});
+ assert.equal((await submit('2026-11-30',false)).response.status,409);
+ assert.equal((await submit('2026-12-01',true)).response.status,422);
+ assert.equal((await submit('2026-02-30',true)).response.status,409);
+ const accepted=await submit('2026-11-30',true);
+ assert.equal(accepted.response.status,200,JSON.stringify(accepted.data));
+ assert.equal(accepted.data.remote_sync,false);
+ assert.equal((await submit('2026-11-30',true)).response.status,409);
+ const doc=(await req(env,'/api/documents/'+id,auth(user))).data.document;
+ const due=doc.fields.find(f=>f.field_key==='due_date');
+ assert.equal(due.normalized_value,'2026-11-30');
+ assert.equal(due.review_state,'corrected');
+ assert.match(due.source_quote,/人工核实年份/);
+ const items=(await req(env,'/api/documents/'+id+'/candidates',auth(user))).data.items;
+ assert.equal(items.filter(i=>i.candidate_kind==='homeflow_task').length,1);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+});
+
 test('top-up email is private, exposes reviewed candidates, never generates a finance write candidate',async()=>{
  const env=makeEnv(),p=await boot(env);
  const email=[

@@ -675,6 +675,33 @@ ELSE 'unreviewed' END review_status,
     }
     if(method==='POST'&&rest==='ocr')return ocrAttachment(request,env,p,id);
     if(method==='POST'&&rest==='ocr-space')return ocrSpaceAttachment(request,env,p,id);
+    if(method==='POST'&&rest==='complete-deadline'){
+      const doc=await ownedDocument(env.DB,id,p,'active');
+      const body=await readJson(request,500);
+      if(body.confirm_year!==true||!validCivilDate(String(body.due_date||'')))
+        bad('必须亲自核对年份并填写真实日期','DATE_REVIEW_REQUIRED',409);
+      const partial=await dbFirst(env.DB,"SELECT normalized_value,source_quote,review_state FROM document_fields WHERE document_id=? AND field_key='due_date_partial'",id);
+      if(!partial||partial.review_state==='rejected')
+        bad('没有有效的缺少年份截止日线索','NO_PARTIAL_DEADLINE',409);
+      const partialMatch=/([0-9０-９]{1,2})\s*月\s*([0-9０-９]{1,2})\s*日/.exec(partial.normalized_value);
+      const digits=x=>String(x).replace(/[０-９]/g,c=>String(c.charCodeAt(0)-65296));
+      if(!partialMatch||Number(digits(partialMatch[1]))!==Number(body.due_date.slice(5,7))||
+        Number(digits(partialMatch[2]))!==Number(body.due_date.slice(8,10)))
+        bad('所选日期的月日必须与原文一致，年份必须人工确认','DATE_SOURCE_MISMATCH',422);
+      const already=await dbFirst(env.DB,"SELECT id FROM document_fields WHERE document_id=? AND field_key='due_date'",id);
+      if(already)bad('完整截止日期已存在，请直接核对该字段','DATE_ALREADY_EXISTS',409);
+      const now=isoNow(),fieldId=randomToken(16),candidateId=randomToken(16);
+      const source='人工核实年份（原文只写月日）：'+String(partial.source_quote||partial.normalized_value).slice(0,160);
+      // Never regenerate or replace any prior integration key. Remote tasks
+      // are created only after a second, separate explicit confirmation.
+      await batch(env.DB,[
+       ['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,source_quote,review_state,reviewed_by,updated_at) SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM document_fields WHERE document_id=? AND field_key=?)',
+        fieldId,id,'due_date',body.due_date,'date',source,'corrected',p.user_id,now,id,'due_date'],
+       ['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind=?)',
+        candidateId,id,'homeflow_task',JSON.stringify({title:'确认：'+doc.title.slice(0,40),due_on:body.due_date,visibility:doc.visibility,requires_confirmation:true,date_field_key:'due_date'}),now,now,id,'homeflow_task']
+      ]);
+      return json({ok:true,deadline_year_user_confirmed:true,remote_sync:false});
+    }
     if(method==='POST'&&rest==='ai/analyze'){
       const doc=await ownedDocument(env.DB,id,p,'active');
       const body=await readJson(request,900);

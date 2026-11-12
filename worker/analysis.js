@@ -192,6 +192,41 @@ function extractElectricityFields(text) {
   return fields;
 }
 
+// Relative dates and requested actions are useful review fields, but must
+// never be promoted to a schedulable YYYY-MM-DD deadline without a year.
+// This also works when an AI summary exists but is not part of document_fields.
+export function extractActionableTextFields(text,hasFullDueDate=false) {
+  const result=[];
+  const add=(field_key,normalized_value,source_quote)=>{
+    if(result.some(f=>f.field_key===field_key)||!normalized_value||!source_quote.includes(normalized_value))return;
+    result.push({field_key,value_type:'text',normalized_value,
+      source_quote:source_quote.slice(0,180),review_state:'unreviewed'});
+  };
+  const lineFor=index=>{
+    const start=text.lastIndexOf('\n',Math.max(0,index-1))+1;
+    const end=text.indexOf('\n',index);
+    return text.slice(start,end<0?text.length:end).trim().slice(0,180);
+  };
+  if(!hasFullDueDate){
+    const partial=/(?<![0-9０-９年])([0-9０-９]{1,2})\s*月\s*([0-9０-９]{1,2})\s*日(?![0-9０-９])/g;
+    for(const m of text.matchAll(partial)){
+      const month=Number(normDigits(m[1])),day=Number(normDigits(m[2]));
+      if(!validDate(2000,month,day))continue; // leap-year allows Feb 29 without assuming a year
+      const line=lineFor(m.index);
+      const local=text.slice(Math.max(0,m.index-30),Math.min(text.length,m.index+100));
+      if(!/(?:期限|締切|必着|までに|まで|提出|申請)/.test(local)
+        ||/(?:配達予定|配送予定|口座引落|お届け予定)/.test(local))continue;
+      add('due_date_partial',m[0],line||m[0]);
+      break;
+    }
+  }
+  const task=/((?:申請書|届出書|必要書類|申込書|書類|資料|証明書)[ \t　]*(?:を|は)?[ \t　]*(?:提出|送付|郵送|持参|アップロード)(?:してください|願います|すること)?)/g;
+  for(const m of text.matchAll(task)){add('required_action',m[0],lineFor(m.index)||m[0]);break;}
+  const review=/((?:内容|記載事項|申請内容|入力内容)[ \t　]*(?:を|は)?[ \t　]*ご?確認(?:ください|願います|すること)?)/g;
+  for(const m of text.matchAll(review)){add('review_action',m[0],lineFor(m.index)||m[0]);break;}
+  return result;
+}
+
 export function parseJapaneseText(raw) {
   const text = String(raw || '').slice(0,100000);
   const category = classifyText(text);
@@ -201,6 +236,7 @@ export function parseJapaneseText(raw) {
   const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):category==='card_spend'?extractCardPurchaseFields(text):category==='salary'&&isSalaryDepositNotice(text)?extractSalaryDepositFields(text):[];
   const due=dates.find(d=>d.due_hint && !/(?:お届け予定|配達予定|配送予定|口座引落|引き落とし予定|受取完了)/.test(d.source_quote));
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
+  for(const item of extractActionableTextFields(text,!!due))fields.push(item);
   // Scheduled debit and delivery dates are events, NOT actionable deadlines.
   // Restrict event extraction to those notice categories so receipts cannot make tasks.
   if (category==='bank'||category==='delivery'){

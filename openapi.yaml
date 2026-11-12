@@ -873,6 +873,35 @@ paths:
         required: true
         schema:
           type: string
+  /api/documents/{documentId}/complete-deadline:
+    post:
+      tags: [Documents]
+      operationId: confirmYearForYearlessDeadline
+      summary: 用户核实原文缺少年份的截止日期后补全年份；仅创建待确认的 HomeFlow 候选
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: {type: string}
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                due_date: {type: string, format: date}
+                confirm_year: {type: boolean, const: true}
+              required: [due_date, confirm_year]
+      responses:
+        '200': {description: 用户确认的截止日期已记录；没有自动同步 HomeFlow}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
   /api/documents/{documentId}/ai/analyze:
     post:
       tags: [Documents]
