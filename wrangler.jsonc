@@ -6,6 +6,10 @@
   "name": "jp-document-assistant",
   "main": "worker/index.js",
   "compatibility_date": "2026-11-11",
+  // Our kakebo target is an existing Pages Function reached via signed HTTPS.
+  // Route global fetch to Cloudflare's public front door instead of the
+  // private-origin shortcut. Existing service bindings remain unchanged.
+  "compatibility_flags": ["global_fetch_strictly_public"],
   // Dynamic API requests must reach worker/index.js, including POST /api/auth/login;
   // OCR module-worker assets also need the Worker to attach their isolated CSP.
   // Everything else remains asset-first to minimize Cloudflare Worker requests.
