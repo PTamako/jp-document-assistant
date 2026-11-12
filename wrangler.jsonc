@@ -6,7 +6,9 @@
   "name": "jp-document-assistant",
   "main": "worker/index.js",
   "compatibility_date": "2026-11-11",
-  "assets": {"directory":"./dist", "binding":"ASSETS", "not_found_handling":"single-page-application"},
+  // Only OCR module-worker assets must invoke the Worker before Static Assets
+  // so their isolated CSP header is actually applied in production.
+  "assets": {"directory":"./dist", "binding":"ASSETS", "not_found_handling":"single-page-application", "run_worker_first":["/assets/worker-entry-*.js"]},
   "d1_databases": [{"binding":"DB", "database_name":"jp-document-assistant", "database_id":"22a671c0-3f6c-4707-adf1-b24ac95330c6", "migrations_dir":"migrations"}],
   "r2_buckets": [{"binding":"DOCUMENTS", "bucket_name":"jp-document-assistant-private"}],
   // Calls to the two existing Workers use same-account Service Bindings (zero extra Workers).

@@ -29,7 +29,8 @@ export async function recognizeJapaneseImage(file,{loadSdk}={}){
       const {PaddleOCR}=sdk;
       if(!PaddleOCR||typeof PaddleOCR.create!=='function')throw Error('PaddleOCR SDK 不可用');
       try{
-        return await PaddleOCR.create({lang:'japan',ocrVersion:'PP-OCRv6',
+        // Run Embind/OpenCV outside the main PWA CSP, on its own module worker.
+        return await PaddleOCR.create({lang:'japan',ocrVersion:'PP-OCRv6',worker:true,
           ortOptions:{backend:'wasm',numThreads:1,wasmPaths}});
       }catch(e){throw Error('加载日文模型或 ONNX WASM 失败（请检查网络、Safari 内存）：'+String(e?.message||e).slice(0,140));}
     })().catch(error=>{enginePromise=null;throw error;});
