@@ -2,6 +2,9 @@ import {hashString,randomToken,isoNow} from './security.js';
 
 const CF_MODEL='@cf/qwen/qwen3.8-27b';
 const GEMINI_MODEL='gemini-3.5-flash';
+// Thinking tokens count toward maxOutputTokens; MEDIUM balances quality and cost.
+export const GEMINI_THINKING_LEVEL='MEDIUM';
+export const GEMINI_MAX_OUTPUT_TOKENS=8192;
 const PROMPT='document-v2-20261112-fields';
 const first=(db,q,...a)=>db.prepare(q).bind(...a).first();
 const run=(db,q,...a)=>db.prepare(q).bind(...a).run();
@@ -94,6 +97,31 @@ function config(env,provider){
  if(provider==='cloudflare')return env.AI?.run?'ready':'not_configured';
  return 'rules_only';
 }
+// Keep only short diagnostic categories, not Google's error bodies or private text.
+export function classifyGeminiHttpError(status) {
+ if(status===429)return 'gemini_quota_or_rate_limited';
+ if(status===401||status===403)return 'gemini_access_denied';
+ if(status===404)return 'gemini_model_unavailable';
+ if(status===400)return 'gemini_invalid_request';
+ if(status>=500)return 'gemini_service_unavailable';
+ return 'gemini_request_failed';
+}
+export function geminiGenerationConfig() {
+ // Gemini 3 does not need deprecated temperature or thinkingBudget parameters.
+ return {responseMimeType:'application/json',
+  thinkingConfig:{thinkingLevel:GEMINI_THINKING_LEVEL},
+  maxOutputTokens:GEMINI_MAX_OUTPUT_TOKENS};
+}
+export function extractGeminiResponseText(body) {
+ const candidate=body?.candidates?.[0];
+ if(!candidate)throw Error(body?.promptFeedback?.blockReason?'gemini_content_blocked':'gemini_empty_response');
+ if(candidate.finishReason==='MAX_TOKENS')throw Error('gemini_output_truncated');
+ if(['SAFETY','BLOCKLIST','PROHIBITED_CONTENT','RECITATION','SPII'].includes(candidate.finishReason))
+  throw Error('gemini_content_blocked');
+ const answer=candidate.content?.parts?.filter(p=>!p?.thought&&typeof p?.text==='string').map(p=>p.text).join('')||'';
+ if(!answer.trim())throw Error('gemini_empty_response');
+ return answer;
+}
 async function generate(env,provider,source){
  const content=prompt(source);
  if(provider==='cloudflare'){
@@ -101,14 +129,20 @@ async function generate(env,provider,source){
    max_completion_tokens:1800,temperature:0.15,reasoning_effort:'low',stream:false});
   return r?.response||r?.choices?.[0]?.message?.content||'';
  }
- const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent',{
-  method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':env.GEMINI_API_KEY},
-  body:JSON.stringify({contents:[{role:'user',parts:[{text:content}]}],
-   generationConfig:{responseMimeType:'application/json',temperature:0.15,maxOutputTokens:1800}})
- });
- if(!response.ok)throw Error('AI_PROVIDER_UNAVAILABLE');
- const body=await response.json();
- return body?.candidates?.[0]?.content?.parts?.map(x=>x.text||'').join('')||'';
+ let response;
+ try{
+  response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent',{
+   method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':env.GEMINI_API_KEY},
+   body:JSON.stringify({contents:[{role:'user',parts:[{text:content}]}],
+    generationConfig:geminiGenerationConfig()})
+  });
+ }catch{
+  throw Error('gemini_network_error');
+ }
+ if(!response.ok)throw Error(classifyGeminiHttpError(response.status));
+ let body;
+ try{body=await response.json();}catch{throw Error('gemini_invalid_response');}
+ return extractGeminiResponseText(body);
 }
 async function addStudyCandidates(env,doc,result){
  const rows=(await env.DB.prepare(
@@ -186,22 +220,28 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  }
  try{
   const result=normalizeAiAnalysis(await generate(env,provider,source),source);
-  if(!result)throw Error('INVALID_AI_OUTPUT');
+  if(!result)throw Error(provider==='gemini'?'gemini_invalid_json':'INVALID_AI_OUTPUT');
   await run(env.DB,"UPDATE document_ai_analyses SET state='success',result_json=?,updated_at=? WHERE document_id=? AND provider=? AND source_sha=?",
    JSON.stringify(result),isoNow(),doc.id,provider,sourceHash);
   await addStudyCandidates(env,doc,result);
   const added_fields=await addGroundedFieldSuggestions(env,doc,result);
   return {ai_status:'success',result,added_fields};
- }catch{
-  await run(env.DB,"UPDATE document_ai_analyses SET state='failed',result_json=NULL,updated_at=? WHERE document_id=? AND source_sha=?",
-   isoNow(),doc.id,sourceHash);
-  return {ai_status:'provider_failed'};
+ }catch(error){
+  const message=String(error?.message||'');
+  const failureCode=provider==='gemini'&&/^gemini_[a-z_]+$/.test(message)?message:'provider_failed';
+  // Persist only the safe error category, so a PWA reopen can show what failed.
+  await run(env.DB,"UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=? WHERE document_id=? AND source_sha=?",
+   JSON.stringify({failure_code:failureCode}),isoNow(),doc.id,sourceHash);
+  return {ai_status:failureCode};
  }
 }
 export async function getDocumentAiCache(db,doc){
  if(!doc.extracted_text_ja)return null;
  const row=await first(db,'SELECT provider,source_sha,model_id,prompt_version,state,result_json FROM document_ai_analyses WHERE document_id=?',doc.id);
  if(!row||row.provider!==(doc.ai_provider||'none')||row.source_sha!==await hashString(doc.extracted_text_ja)||!([PROMPT,'document-v1-20261112'].includes(row.prompt_version))||row.model_id!==modelFor(row.provider))return null;
+ let stored=null;
+ try{stored=row.result_json?JSON.parse(row.result_json):null;}catch{}
  return {status:row.state,provider:row.provider,model:row.model_id,analysis_version:row.prompt_version,
-  result:row.state==='success'?JSON.parse(row.result_json):null};
+  result:row.state==='success'?stored:null,
+  failure_code:row.state==='failed'?String(stored?.failure_code||'provider_failed'):null};
 }
