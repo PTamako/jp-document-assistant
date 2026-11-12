@@ -38,11 +38,27 @@ test('recycle confirmations are brief and action buttons never split into two li
 test('Chinese explanation and OCR originals stay available through explicit expand controls',()=>{
  assert.match(app,/explanationExpanded=!explanationExpanded/);
  assert.match(app,/ocrTextExpanded=!ocrTextExpanded/);
- assert.match(app,/\{\{explanationText\|\|/);
+ assert.match(app,/explanationExpanded\?explanationText:explanationPreview/);
  assert.match(app,/\{\{current\.extracted_text_ja\}\}/);
  assert.match(app,/explain-actions/);
  assert.match(app,/explain-provider/);
  assert.match(css,/\.explanation-text:not\(\.expanded\)/);
  assert.match(css,/\.ocr-text-preview:not\(\.expanded\)/);
  assert.match(css,/\.explanation-text\.expanded,\.ocr-text-preview\.expanded/);
+});
+
+test('document tabs remain sticky below the in-sheet header and AI uses an actual sparkle SVG',()=>{
+ assert.match(app,/class="detail-tabs-sticky"/);
+ assert.match(css,/\.detail-tabs-sticky\{[^}]*position:sticky;top:0/);
+ const icons=readFileSync(new URL('../web/src/UiIcon.vue',import.meta.url),'utf8');
+ assert.match(icons,/name==='sparkles'/);
+ assert.match(app,/<UiIcon name="sparkles"/);
+ assert.match(app,/explanationExpanded\?explanationText:explanationPreview/);
+});
+test('campaign offer and date are shown as review-only suggestions without a contradictory empty message',()=>{
+ assert.match(app,/campaignPendingDate/);
+ assert.match(app,/current\.campaign_hints/);
+ assert.match(app,/确认活动年份/);
+ assert.match(app,/只是邮件中的优惠说明，不会自动领取或创建正式待办/);
+ assert.match(app,/!aiAnalysis\?\.homeflow_suggestions\?\.length/);
 });

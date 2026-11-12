@@ -33,6 +33,14 @@ const explanationExpanded=ref(false),ocrTextExpanded=ref(false);
 const attachmentActionsTarget=ref(null);
 const selectedAttachment=computed(()=>current.value?.attachments?.find(a=>a.id===attachmentActionsTarget.value?.id)||null);
 const explanationText=computed(()=>chineseExplanation(aiAnalysis.value?.explanation_zh||current.value?.explanation_zh||''));
+const explanationPreview=computed(()=>{
+ const summary=String(aiAnalysis.value?.summary_zh||'').trim();
+ // The full explanation stays accessible; use a concise overview when key points exist.
+ return summary&&aiAnalysis.value?.important_points_zh?.length?chineseExplanation(summary):explanationText.value;
+});
+const campaignPendingDate=computed(()=>current.value?.category==='campaign'&&
+ current.value?.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&
+ !detailCandidates.value.some(c=>c.candidate_kind==='homeflow_task'));
 const aiStatusLabel={success:'AI 已分析',pending:'AI 处理中',failed:'AI 上次分析失败'};
 const aiFailureLabels={
  gemini_quota_or_rate_limited:'Gemini 配额或请求频率受限',
@@ -882,8 +890,8 @@ async function refreshInterpretation(){
  try{
    const result=await api(`/api/documents/${id}/reinterpret`,{method:'POST',body:{}});
    refreshDocumentViews();
-   await openDoc(id);
-   flash(`中文讲解已更新；补充 ${result.added_fields} 个待核验字段，原有核验及跨应用联动保持不变`+
+   await openDoc(id,{preserveTab:true,preserveScroll:true});
+   flash(`规则解析已更新；补充 ${result.added_fields} 个待核验字段，原有核验及跨应用联动保持不变`+
      (result.privacy_auto_private?'；敏感文书已自动设为仅自己':''));
  }catch(e){problem(e);}finally{busy.value=false;}
 }
@@ -1007,7 +1015,7 @@ function todayReviewBadge(d){
   const reviewed=documentReviewLabel(d);
   return reviewed==='已核验'||reviewed==='部分核验'||reviewed==='待核验'?reviewed:due;
 }
-const labelFor=(key)=>key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
+const labelFor=(key)=>current.value?.category==='campaign'&&key==='due_date'?'活动截止日期':current.value?.category==='campaign'&&key==='due_date_partial'?'原文活动期限（月日）':key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 onMounted(async()=>{
   document.addEventListener('visibilitychange',onGoogleVisibility);
@@ -1100,10 +1108,10 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
       <p class="eyebrow">{{cats[current.category]||current.category}} · {{current.visibility==='shared'?'家庭共享':'仅自己'}}</p>
       <h2 class="document-detail-title" :title="current.title">{{current.title}}</h2>
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
-      <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
+      <div class="detail-tabs-sticky"><div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div></div>
       <section v-if="detailTab==='explain'">
         <div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card policy-check-card">
-          <h3>文件时效</h3><p class="detail-note">{{current.source_document_date||'日期待核对'}} · {{current.official_current_verified_at?'已查验':'官方状态未核验'}}</p>
+          <h3>{{current.category==='campaign'?'活动期限':'文件时效'}}</h3><p class="detail-note" v-if="current.category==='campaign'">{{current.fields?.find(f=>f.field_key==='due_date'&&f.review_state!=='rejected')?.normalized_value||'截止日期待核对'}} · {{current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed')?'年份待确认 · ':''}}优惠状态未验证</p><p v-else class="detail-note">{{current.source_document_date||'日期待核对'}} · {{current.official_current_verified_at?'已查验':'官方状态未核验'}}</p>
         </div>
         <div class="content-card explain-panel">
           <div class="explain-heading">
@@ -1115,13 +1123,23 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
             <button class="secondary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="16"/>重新解析</button>
           </div>
           <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}} · 下方为规则讲解</p>
-          <p class="multiline explanation-text" :class="{expanded:explanationExpanded}">{{explanationText||'还没有可讲解的文字，可在原文页补充。'}}</p>
+          <p class="multiline explanation-text" :class="{expanded:explanationExpanded}">{{(explanationExpanded?explanationText:explanationPreview)||'还没有可讲解的文字，可在原文页补充。'}}</p>
           <button v-if="explanationText.length>150" class="text-button expand-copy" type="button" :aria-expanded="explanationExpanded" @click="explanationExpanded=!explanationExpanded">{{explanationExpanded?'收起讲解':'查看完整讲解'}}</button>
           <details v-if="aiAnalysis?.important_points_zh?.length" class="explain-points"><summary>重要事项（{{aiAnalysis.important_points_zh.length}}）</summary><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">{{line}}</p></details>
         </div>
       </section>
       <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可点击「重新讲解」提取原文中的日期及办理事项。</div><button v-if="current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&(!current.fields?.some(f=>f.field_key==='due_date')||current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全')))" class="secondary full" @click="openCompleteDeadline">确认／修改默认年份（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{field.field_key==='due_date'&&field.source_quote?.startsWith('年份自动补全')?'截止日期（按今年自动补全·待确认）':labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">付款与到账请核对。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div v-if="canManualSalary" class="content-card"><p>已识别工资入账通知，但邮件没有金额。</p><button class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写到账金额，生成家計簿收入建议</button></div>
+        <div v-if="campaignPendingDate" class="content-card campaign-review-card">
+          <h3>活动截止日期 · 待核对</h3>
+          <p>原文：{{current.fields?.find(f=>f.field_key==='due_date_partial')?.normalized_value}}。确认年份后才会生成本地 HomeFlow 待办候选。</p>
+          <button class="secondary small icon-label" type="button" @click="openCompleteDeadline"><UiIcon name="calendar" :size="16"/>确认活动年份</button>
+        </div>
+        <div v-if="current.category==='campaign'&&current.campaign_hints?.length" class="content-card campaign-review-card">
+          <h3>可选优惠操作</h3>
+          <p v-for="(hint,i) in current.campaign_hints" :key="i">{{hint.description_zh}}</p>
+          <p class="detail-note">只是邮件中的优惠说明，不会自动领取或创建正式待办。</p>
+        </div>
         <div v-if="topupAdvice" class="content-card">
           <h3>家計簿 · 资金转移建议</h3>
           <p class="muted">这是一笔电子钱包充值，不是消费或新增收入。</p>
@@ -1133,7 +1151,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
           <p class="fine-print">当前家計簿安全接口只支持收入／支出，还不能接收资金转移。请先在家計簿手动选择「资产转移／充值」并核对是否已记账；此建议不会自动写入、不会重复记账。</p>
         </div>
         <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p><p v-if="item.payload.task_type==='delivery'" class="fine-print">{{item.payload.note}}；请先核验「字段」中的配送日期，再手动确认同步到 HomeFlow。</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div>
-        <p v-if="!topupAdvice&&!detailCandidates.some(c=>['finance','homeflow_task'].includes(c.candidate_kind))" class="muted">暂无待办或财务建议。这不代表邮件识别失败；可在「字段」中核对已提取的信息。</p>
+        <p v-if="!topupAdvice&&!detailCandidates.some(c=>['finance','homeflow_task'].includes(c.candidate_kind))&&!aiAnalysis?.homeflow_suggestions?.length&&!current.campaign_hints?.length&&!campaignPendingDate" class="muted">暂无待办或财务建议。这不代表邮件识别失败；可在「字段」中核对已提取的信息。</p>
         <div v-if="aiAnalysis?.homeflow_suggestions?.length" class="content-card"><h3>AI · HomeFlow 待办建议</h3><p v-for="(item,i) in aiAnalysis.homeflow_suggestions" :key="i">{{item.description_zh}}（{{item.date||'日期待确认'}}）</p><p class="fine-print">这只是 AI 建议，尚未生成可同步任务。请以人工核验日期为准。</p></div>
         <div v-if="aiAnalysis?.finance_suggestions?.length" class="content-card"><h3>AI · 家計簿建议</h3><p v-for="(item,i) in aiAnalysis.finance_suggestions" :key="i">{{item.description_zh}}</p><p class="fine-print">此处没有新增账目；实际到账或消费必须经你确认。</p></div>
         <p v-else-if="!topupAdvice" class="fine-print">确认后才写入目标 App。</p>
@@ -1178,7 +1196,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <p class="fine-print">每份文书单独选择，不保存全局偏好。首次导入在服务已启用时尝试 AI 分析，同版本命中缓存不会重复调用。</p>
         <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>同意将本份文书发送至 Gemini（可能产生费用）</label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
-      <template v-else-if="sheet==='confirmDeadline'"><h2>补全截止日期的年份</h2><p class="fine-print">原文只有月日，系统默认使用日本当前年份作为候选；这不代表文书实际年份。请核对正式文件或办理机构，可修改年份；月日必须与原文一致。确认前不会创建 HomeFlow 待办。</p><label class="form-label">完整截止日期<input type="date" v-model="missingYearDateDraft"/></label><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template>
+      <template v-else-if="sheet==='confirmDeadline'"><h2>{{current?.category==='campaign'?'确认活动截止年份':'补全截止日期的年份'}}</h2><p class="fine-print">原文只有月日，系统暂按日本当年补全。请核对原文日期和星期；确认前不会创建 HomeFlow 待办。</p><label class="form-label">完整截止日期<input type="date" v-model="missingYearDateDraft"/></label><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template>
       <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">仅影响本份文书。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>同意将本份文书发送至 Gemini（可能产生费用）</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>

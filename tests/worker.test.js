@@ -2224,3 +2224,56 @@ test('Gemini 503 only retries after a new user action and cooldown, without cons
   assert.equal(after.data.gemini_daily.calls,2);
  }finally{globalThis.fetch=previousFetch;}
 });
+
+test('campaign email rule re-analysis backfills missing deadline without using Gemini, and only explicit year confirmation creates a HomeFlow proposal',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const source=[
+  '件名：【よりどり2点5%OFF】セブンプレミアムゴールドのお肉加工品がお得！',
+  'セブンプレミアムゴールド肉類加工品。今なら対象商品がよりどり2点で5%OFF！11/15(日)までの期間限定！',
+  '▼LINE ID連携で500円OFFクーポンプレゼント▼',
+  'キャンペーン・お得情報メール'
+ ].join('\n');
+ const created=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+  title:'测试促销',text:source,source_type:'text',retention:'summary',ai_provider:'none'
+ }});
+ assert.equal(created.response.status,201,JSON.stringify(created.data));
+ const id=created.data.document_id;
+ // Simulate an existing saved email from the old importer with no campaign fields.
+ env.DB.sql.prepare('DELETE FROM document_fields WHERE document_id=?').run(id);
+ const originalFetch=globalThis.fetch;
+ let googleCalls=0;
+ globalThis.fetch=async()=>{googleCalls++;throw Error('Google must never be used for rule re-analysis');};
+ try{
+  const detailBefore=await req(env,'/api/documents/'+id,auth(owner));
+  assert.equal(detailBefore.data.document.fields.length,0);
+  assert.match(detailBefore.data.document.campaign_hints[0].description_zh,/500 日元优惠券/);
+  const backfill=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+  assert.equal(backfill.response.status,200,JSON.stringify(backfill.data));
+  assert.equal(backfill.data.added_fields,2);
+  assert.equal(googleCalls,0);
+  const after=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+  assert.equal(after.fields.find(f=>f.field_key==='due_date_partial')?.normalized_value,'11/15(日)');
+  assert.equal(after.fields.find(f=>f.field_key==='due_date')?.normalized_value,'2026-11-15');
+  assert.equal(after.fields.find(f=>f.field_key==='due_date')?.review_state,'unreviewed');
+  assert.equal((await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.some(c=>c.candidate_kind==='homeflow_task'),false);
+  const wrongWeek=await req(env,'/api/documents/'+id+'/complete-deadline',{method:'POST',...auth(owner),data:{due_date:'2027-11-15',confirm_year:true}});
+  assert.equal(wrongWeek.response.status,422);
+  const correct=await req(env,'/api/documents/'+id+'/complete-deadline',{method:'POST',...auth(owner),data:{due_date:'2026-11-15',confirm_year:true}});
+  assert.equal(correct.response.status,200,JSON.stringify(correct.data));
+  const afterConfirm=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+  assert.equal(afterConfirm.fields.find(f=>f.field_key==='due_date')?.review_state,'corrected');
+  const candidates=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+  const task=candidates.find(c=>c.candidate_kind==='homeflow_task');
+  assert.ok(task);
+  assert.equal(task.payload.due_on,'2026-11-15');
+  assert.equal(task.payload.requires_confirmation,true);
+  assert.match(task.payload.title,/活动截止提醒/);
+  assert.equal(candidates.some(c=>c.candidate_kind==='finance'),false);
+  const again=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+  assert.equal(again.response.status,200,JSON.stringify(again.data));
+  const againCandidates=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+  assert.equal(againCandidates.filter(c=>c.candidate_kind==='homeflow_task').length,1);
+  assert.equal(againCandidates.find(c=>c.candidate_kind==='homeflow_task').id,task.id);
+  assert.equal(googleCalls,0);
+ }finally{globalThis.fetch=originalFetch;}
+});
