@@ -47,7 +47,9 @@ test('dynamic JavaScript is permitted only inside the exact bundled PaddleOCR wo
  const csp=async path=>(await worker.fetch(new Request('https://example.com'+path),{ASSETS})).headers.get('Content-Security-Policy');
  const ocrCsp=await csp('/assets/worker-entry-Ab3_90.js');
  assert.match(ocrCsp,/script-src[^;]*'unsafe-eval'/);
- assert.match(ocrCsp,/worker-src 'none'/);
+ // Official SDK worker:true starts a second same-origin Worker. Both assets
+ // must remain OCR-only; the app document keeps its strict CSP.
+ assert.match(ocrCsp,/worker-src 'self'/);
  assert.match(ocrCsp,/connect-src[^;]*paddle-model-ecology/);
  for(const path of ['/','/assets/app-Z1.js','/assets/worker-entry.js','/assets/worker-entry-Ab3_90.js.map']){
    assert.doesNotMatch(await csp(path),/'unsafe-eval'/,'unexpected dynamic eval at '+path);

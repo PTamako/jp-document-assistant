@@ -15,7 +15,10 @@ test('Japanese OCR SDK is pinned and main PWA never evaluates PaddleOCR code',()
   assert.doesNotMatch(page,/PaddleOCR\.create/);
   assert.match(page,/new Worker\(new URL\('\.\/ocr-runtime\.worker\.js',import\.meta\.url\)/);
   assert.match(worker,/import \{PaddleOCR\} from '@paddleocr\/paddleocr-js'/);
-  assert.match(worker,/worker:false/);
+  // The SDK's worker:false image pipeline needs document.createElement,
+  // which does not exist in an isolated Worker (Safari: Can't find variable: document).
+  assert.match(worker,/worker:true/);
+  assert.doesNotMatch(worker,/PaddleOCR\.create\([^\n]*worker:false/);
   assert.match(worker,/PP-OCRv6/);
   assert.match(worker,/@1\.31\.1\/dist\//);
   assert.match(worker,/new URL\('\/ocr\/ort-wasm-simd-threaded\.jsep\.mjs'/);

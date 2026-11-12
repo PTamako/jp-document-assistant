@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {extractPdfText} from '../web/src/pdf-text.js';
+import {readFileSync} from 'node:fs';
+import {extractPdfText,isOcrEngineFailure} from '../web/src/pdf-text.js';
 
 // Synthetic non-personal PDF with a genuine selectable text layer. No production OCR.
 function tinyPdf(lines){
@@ -36,4 +37,19 @@ test('image-only PDF has no fabricated OCR result, and invalid file fails closed
  assert.equal(parsed.needs_manual,true);
  assert.deepEqual(parsed.pages_without_text,[1]);
  assert.equal(parsed.text,'');
+});
+
+// Seven scanned pages should not trigger seven failed model initialization attempts.
+test('engine errors stop repeated scanned-PDF retries without treating page errors as engine errors',()=>{
+ for(const reason of [
+   '本机日文模型推理或加载失败：Can\'t find variable: document',
+   '加载日文模型或 ONNX WASM 失败：no available backend found',
+   '隔离 OCR 工作线程加载失败',
+   'PaddleOCR 图片推理失败'
+ ]) assert.equal(isOcrEngineFailure(reason),true,reason);
+ assert.equal(isOcrEngineFailure('第2页图片过暗，无可用文字'),false);
+ const source=readFileSync(new URL('../web/src/pdf-text.js',import.meta.url),'utf8');
+ assert.match(source,/&& !ocrStoppedReason/);
+ assert.match(source,/if\(isOcrEngineFailure\(reason\)\)/);
+ assert.match(source,/后续扫描页已暂停本机 OCR/);
 });
