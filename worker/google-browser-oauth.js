@@ -9,6 +9,24 @@ const SCOPES={
  gmail:'https://www.googleapis.com/auth/gmail.readonly',
  drive:'https://www.googleapis.com/auth/drive.readonly'
 };
+const GOOGLE_ERRORS=Object.freeze({
+ GOOGLE_DENIED:'Google 没有授予权限，请重新尝试',
+ GOOGLE_CODE_MISSING:'Google 未返回授权码',
+ GOOGLE_CLIENT_INVALID:'Google 客户端密钥无效，请检查 Cloudflare 配置',
+ GOOGLE_INVALID_GRANT:'授权码已失效，请重新连接',
+ GOOGLE_TOKEN_REQUEST:'Google 授权请求参数有误',
+ GOOGLE_TOKEN_NETWORK:'无法连接 Google 授权服务',
+ GOOGLE_TOKEN_FAILED:'Google 令牌交换失败',
+ GOOGLE_SCOPE_MISSING:'Google 没有授予所需权限',
+ GOOGLE_PROFILE_DENIED:'Google 拒绝访问账号信息，请检查 API 是否启用',
+ GOOGLE_PROFILE_FAILED:'读取 Google 账号信息失败，请检查 API 是否启用',
+ GOOGLE_EMAIL_UNVERIFIED:'Google 没有返回有效账号邮箱',
+ GOOGLE_REFRESH_MISSING:'Google 未返回长期授权，请重新连接',
+ GOOGLE_STORAGE_FAILED:'保存授权失败，请检查数据库',
+ GOOGLE_NOT_CONFIGURED:'服务器 Google 密钥未配置完整',
+ GOOGLE_CALLBACK_FAILED:'Google 回调处理失败'
+});
+const failureCode=error=>Object.hasOwn(GOOGLE_ERRORS,error?.code)?error.code:null;
 const MAX_BYTES=8*1024*1024;
 const MAX_FILE_COUNT=10;
 const dbFirst=(db,sql,...p)=>db.prepare(sql).bind(...p).first();
@@ -49,12 +67,20 @@ async function googleFetch(env,url,init){
  return (env.GOOGLE_OAUTH_FETCH||fetch)(url,{...init,cache:'no-store',redirect:'error'});
 }
 async function tokenRequest(env,payload){
- const response=await googleFetch(env,TOKEN,{method:'POST',
-   headers:{'Content-Type':'application/x-www-form-urlencoded',Accept:'application/json'},
-   body:new URLSearchParams(payload).toString()});
+ let response;
+ try{
+   response=await googleFetch(env,TOKEN,{method:'POST',
+     headers:{'Content-Type':'application/x-www-form-urlencoded',Accept:'application/json'},
+     body:new URLSearchParams(payload).toString()});
+ }catch{bad('无法连接 Google 授权服务','GOOGLE_TOKEN_NETWORK',502)}
  const data=await response.json().catch(()=>null);
  if(!response.ok||!data?.access_token){
-   if(data?.error==='invalid_grant')bad('Google 授权已失效，请重新连接','GOOGLE_REAUTH_REQUIRED',401);
+   if(['invalid_client','unauthorized_client'].includes(data?.error))
+     bad('Google 客户端密钥无效','GOOGLE_CLIENT_INVALID',502);
+   if(data?.error==='invalid_grant')
+     bad('Google 授权码无效或已过期','GOOGLE_INVALID_GRANT',401);
+   if(data?.error==='invalid_request'||data?.error==='redirect_uri_mismatch')
+     bad('Google 授权参数不匹配','GOOGLE_TOKEN_REQUEST',502);
    bad('Google 授权交换失败','GOOGLE_TOKEN_FAILED',502);
  }
  return data;
@@ -75,23 +101,28 @@ async function getAccess(env,uid,service){
      bad('Google 返回的访问权限不足','GOOGLE_SCOPE_MISSING',403);
    return token.access_token;
  }catch(error){
-   if(error?.code==='GOOGLE_REAUTH_REQUIRED')
+   if(error?.code==='GOOGLE_INVALID_GRANT')
      await dbRun(env.DB,"UPDATE google_oauth_grants SET status='reauth_required',updated_at=? WHERE user_id=? AND service=?",
        utc(),uid,service);
    throw error;
  }
 }
 async function googleJSON(env,url,token){
- const res=await googleFetch(env,url,{method:'GET',
-   headers:{Authorization:'Bearer '+token,Accept:'application/json'}});
- if([401,403].includes(res.status))bad('Google 访问被拒绝，请重新连接','GOOGLE_DENIED',403);
- if(!res.ok)bad('Google 请求失败','GOOGLE_API_FAILED',502);
- return res.json().catch(()=>bad('Google 返回格式不正确','GOOGLE_INVALID_RESPONSE',502));
+ let res;
+ try{
+   res=await googleFetch(env,url,{method:'GET',
+     headers:{Authorization:'Bearer '+token,Accept:'application/json'}});
+ }catch{bad('无法访问 Google API','GOOGLE_PROFILE_FAILED',502)}
+ if([401,403].includes(res.status))
+   bad('Google API 拒绝访问，请检查是否已启用 Gmail API 和 Drive API','GOOGLE_PROFILE_DENIED',403);
+ if(!res.ok)bad('Google API 请求失败','GOOGLE_PROFILE_FAILED',502);
+ return res.json().catch(()=>bad('Google 返回格式不正确','GOOGLE_PROFILE_FAILED',502));
 }
 const callbackUri=origin=>origin+'/api/google/oauth/callback';
 function finishedPage(origin,success,reason=''){
  const title=success?'Google 授权成功':'Google 授权未完成';
- const description=success?'请返回文书助手 PWA，连接状态会自动更新。':'请返回文书助手重试。';
+ const description=success?'返回文书助手即可使用。':
+   GOOGLE_ERRORS[reason]||'请返回文书助手重试。';
  // No state, OAuth code, identity, token or secret is rendered in HTML.
  const html='<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+title+'</title></head>'+
    '<body style="font-family:system-ui;max-width:440px;margin:12vh auto;padding:24px;text-align:center">'+
@@ -116,9 +147,11 @@ export async function oauthCallback(request,env,url){
  if(taken.meta?.changes!==1)return finishedPage(origin,false);
  const code=url.searchParams.get('code');
  if(url.searchParams.has('error')||typeof code!=='string'||code.length<8||code.length>4096){
-   await dbRun(env.DB,"UPDATE google_oauth_pending SET status='failed' WHERE state_hash=?",stateHash);
-   return finishedPage(origin,false);
+   const errorCode=url.searchParams.has('error')?'GOOGLE_DENIED':'GOOGLE_CODE_MISSING';
+   await dbRun(env.DB,"UPDATE google_oauth_pending SET status='failed',error_code=? WHERE state_hash=?",errorCode,stateHash);
+   return finishedPage(origin,false,errorCode);
  }
+ let stage='token';
  try{
    if(!configured(env))bad('Google OAuth 后端未配置','GOOGLE_NOT_CONFIGURED',503);
    const tokens=await tokenRequest(env,{
@@ -126,8 +159,11 @@ export async function oauthCallback(request,env,url){
      redirect_uri:callbackUri(origin),grant_type:'authorization_code',code,
      code_verifier:row.pkce_verifier
    });
-   if(!String(tokens.scope||'').split(' ').includes(SCOPES[row.service]))
+   // Google's OAuth token response can omit scope. Check it when present;
+   // always verify actual API access using the granted bearer token.
+   if(tokens.scope&&!String(tokens.scope).split(' ').includes(SCOPES[row.service]))
      bad('Google 所授权限不完整','GOOGLE_SCOPE_MISSING',403);
+   stage='profile';
    const profile=row.service==='gmail'
      ?await googleJSON(env,'https://gmail.googleapis.com/gmail/v1/users/me/profile',tokens.access_token)
      :await googleJSON(env,'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)',tokens.access_token);
@@ -135,6 +171,7 @@ export async function oauthCallback(request,env,url){
      .toLowerCase().trim();
    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>250)
      bad('无法验证 Google 账号','GOOGLE_EMAIL_UNVERIFIED',422);
+   stage='grant';
    const old=await grantFor(env,row.user_id,row.service);
    const refresh=typeof tokens.refresh_token==='string'&&tokens.refresh_token.length>12
      ?tokens.refresh_token:null;
@@ -146,11 +183,16 @@ export async function oauthCallback(request,env,url){
    await dbRun(env.DB,
      "INSERT INTO google_oauth_grants(user_id,service,google_email,scope,refresh_cipher,refresh_iv,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,service) DO UPDATE SET google_email=excluded.google_email,scope=excluded.scope,refresh_cipher=excluded.refresh_cipher,refresh_iv=excluded.refresh_iv,status='connected',updated_at=excluded.updated_at",
      row.user_id,row.service,email,SCOPES[row.service],stored.body,stored.iv,'connected',time,time);
-   await dbRun(env.DB,"UPDATE google_oauth_pending SET status='done' WHERE state_hash=?",stateHash);
+   await dbRun(env.DB,"UPDATE google_oauth_pending SET status='done',error_code=NULL WHERE state_hash=?",stateHash);
    return finishedPage(origin,true);
- }catch{
-   await dbRun(env.DB,"UPDATE google_oauth_pending SET status='failed' WHERE state_hash=?",stateHash);
-   return finishedPage(origin,false);
+ }catch(error){
+   // Never render/log/store Google error_description, authorization code,
+   // tokens, client secrets, user email or raw exception strings.
+   const errorCode=failureCode(error)||
+     (stage==='grant'?'GOOGLE_STORAGE_FAILED':
+       stage==='profile'?'GOOGLE_PROFILE_FAILED':'GOOGLE_TOKEN_FAILED');
+   await dbRun(env.DB,"UPDATE google_oauth_pending SET status='failed',error_code=? WHERE state_hash=?",errorCode,stateHash);
+   return finishedPage(origin,false,errorCode);
  }
 }
 export async function handleBrowserGoogle(request,env,p,url){
@@ -161,16 +203,18 @@ export async function handleBrowserGoogle(request,env,p,url){
    if(!configured(env))return json({enabled:false,connected:false,service});
    const grant=await grantFor(env,p.user_id,service);
    const flow=url.searchParams.get('flow');
-   let progress=null;
+   let progress=null,progressError=null;
    if(flow&&/^[0-9a-f]{64}$/.test(flow)){
      const r=await dbFirst(env.DB,
-       "SELECT status,expires_at FROM google_oauth_pending WHERE state_hash=? AND user_id=? AND service=?",
+       "SELECT status,error_code,expires_at FROM google_oauth_pending WHERE state_hash=? AND user_id=? AND service=?",
        await digest(flow),p.user_id,service);
      progress=r?(r.status==='pending'&&r.expires_at<utc()?'expired':r.status):null;
+     progressError=r?.status==='failed'?GOOGLE_ERRORS[r.error_code]||'Google 授权未完成':null;
    }
    return json({enabled:true,connected:grant?.status==='connected',
      needs_reauthorization:grant?.status==='reauth_required',
-     google_email:grant?.status==='connected'?grant.google_email:null,service,progress});
+     google_email:grant?.status==='connected'?grant.google_email:null,
+     service,progress,progress_error:progressError});
  }
  if(!configured(env))bad('Google 长期授权尚未配置完成','GOOGLE_NOT_CONFIGURED',503);
  if(path==='/api/google/oauth/start'&&method==='POST'){
