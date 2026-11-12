@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeAiAnalysis} from '../worker/intelligence.js';
+import {normalizeAiAnalysis,geminiGenerationConfig,classifyGeminiHttpError,extractGeminiResponseText} from '../worker/intelligence.js';
 test('AI output only generates source-grounded Chinese explanations, words and sentences',()=>{
  const source='営業時間を確認してください。納付期限は明日ではありません。';
  const raw=JSON.stringify({summary_zh:'营业时间说明，需要人工确认',
@@ -41,4 +41,24 @@ test('AI field suggestions must be literal source phrases, never fabricated date
  assert.deepEqual(result.field_suggestions.map(x=>x.field_key),
    ['due_date_partial','required_action','review_action']);
  assert.ok(result.field_suggestions.every(x=>x.review_state==='unreviewed'));
+});
+
+test('Gemini uses explicit MEDIUM with enough total thinking/output tokens, without legacy sampling knobs',()=>{
+ const cfg=geminiGenerationConfig();
+ assert.deepEqual(cfg,{responseMimeType:'application/json',thinkingConfig:{thinkingLevel:'MEDIUM'},maxOutputTokens:8192});
+ assert.equal('temperature' in cfg,false);
+ assert.equal('thinkingBudget' in cfg.thinkingConfig,false);
+});
+test('Gemini status codes are categorized safely without exposing provider response bodies',()=>{
+ assert.equal(classifyGeminiHttpError(429),'gemini_quota_or_rate_limited');
+ assert.equal(classifyGeminiHttpError(403),'gemini_access_denied');
+ assert.equal(classifyGeminiHttpError(400),'gemini_invalid_request');
+ assert.equal(classifyGeminiHttpError(404),'gemini_model_unavailable');
+ assert.equal(classifyGeminiHttpError(503),'gemini_service_unavailable');
+});
+test('Gemini distinguishes truncated, blocked, missing and good JSON text',()=>{
+ assert.throws(()=>extractGeminiResponseText({candidates:[{finishReason:'MAX_TOKENS',content:{parts:[]}}]}),/gemini_output_truncated/);
+ assert.throws(()=>extractGeminiResponseText({promptFeedback:{blockReason:'SAFETY'}}),/gemini_content_blocked/);
+ assert.throws(()=>extractGeminiResponseText({candidates:[{finishReason:'STOP',content:{parts:[]}}]}),/gemini_empty_response/);
+ assert.equal(extractGeminiResponseText({candidates:[{finishReason:'STOP',content:{parts:[{thought:true,text:'private thoughts'},{text:'{"summary_zh":"已分析"}'}]}}]}),'{"summary_zh":"已分析"}');
 });
