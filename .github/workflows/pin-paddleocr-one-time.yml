@@ -1,0 +1,32 @@
+name: Pin official PaddleOCR browser dependency (one-time)
+on:
+  push:
+    branches:
+      - fix/import-source-and-ocr-ai-rework-20261112
+    paths:
+      - .github/workflows/pin-paddleocr-one-time.yml
+permissions:
+  contents: write
+jobs:
+  regenerate-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Pin official browser runtime, update lockfile
+        run: |
+          npm ci --no-audit --no-fund
+          npm install --save-exact --ignore-scripts --no-audit --no-fund @paddleocr/paddleocr-js@0.4.2
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'build(ocr): pin official PaddleOCR SDK in package lock'
+            git push origin HEAD:fix/import-source-and-ocr-ai-rework-20261112
+          fi
