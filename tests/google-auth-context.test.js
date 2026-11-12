@@ -27,3 +27,18 @@ test('PWA shows Safari fallback instead of making a stuck Google popup request',
  assert.match(picker,/deadline\(60000/);
  assert.match(picker,/deadline\(180000/);
 });
+
+test('installed iOS PWA can use the native Files provider, with Safari as fallback for Google OAuth',()=>{
+ const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
+ const css=readFileSync(new URL('../web/src/style.css',import.meta.url),'utf8');
+ assert.match(app,/从 iPhone「文件」选择 PDF \/ Word \/ 图片/);
+ assert.match(app,/Google Docs 原生文件需先在 Google Drive 中导出/);
+ assert.match(app,/class="pwa-native-file-button"/);
+ assert.match(app,/@change="selectFile"/);
+ assert.match(app,/async function refreshDocumentsAfterSafari\(\)/);
+ assert.match(app,/pages\.docs\.loaded=false;\s*await loadTab\('docs'\)/);
+ assert.match(app,/刷新文书库/);
+ assert.match(css,/\.pwa-native-file-button/);
+ // OAuth tokens are never persisted to native file providers or local storage.
+ assert.doesNotMatch(app,/localStorage\.setItem\(['"]google/i);
+});
