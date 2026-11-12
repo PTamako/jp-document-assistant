@@ -181,7 +181,10 @@ async function analyzeStored(env,doc,force=false){
     const note=result.category==='card_spend'?'信用卡单笔消费通知，需核对卡片、交易状态及是否已记账':'必须人工确认实际到账/付款并防重';
     stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'finance',
       JSON.stringify({kind,amount_jpy:Number(amount.normalized_value),currency:'JPY',payment_confirmed:false,category:result.category,
-        transaction_date:stamp?.normalized_value?.slice(0,10)||null,merchant:merchant?.normalized_value||null,note}),now,now]);
+        transaction_date:stamp?.normalized_value?.slice(0,10)||null,
+        transaction_at:stamp?.value_type==='datetime'?stamp.normalized_value:null,
+        payment_source_hint:result.category==='card_spend'&&/Olive/i.test(doc.extracted_text_ja.normalize('NFKC'))?'Olive':null,
+        merchant:merchant?.normalized_value||null,note}),now,now]);
   }
   const due=result.fields.find(f=>f.field_key==='due_date'&&!f.source_quote?.startsWith('年份自动补全'));
   const deliveryTask=deliveryTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
@@ -830,6 +833,8 @@ ELSE 'unreviewed' END review_status,
           SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='finance')`,
           randomToken(16),id,'finance',JSON.stringify({kind:'expense',amount_jpy:Number(cardAmount.normalized_value),currency:'JPY',
             category:'card_spend',payment_confirmed:false,transaction_date:date?.normalized_value?.slice(0,10)||null,
+            transaction_at:date?.value_type==='datetime'?date.normalized_value:null,
+            payment_source_hint:/Olive/i.test(doc.extracted_text_ja.normalize('NFKC'))?'Olive':null,
             merchant:merchant?.normalized_value||null,
             note:'信用卡消费通知，核对金额、卡片、是否已入账，避免与月度账单重复记账'}),now,now,id]);
       }
