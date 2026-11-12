@@ -1927,3 +1927,44 @@ test('Gmail code-model grants remain encrypted and user-bound; only selected mes
  const after=await req(env,'/api/google/gmail/messages',auth(owner));
  assert.equal(after.response.status,409);
 });
+
+test('Gemini quota failure persists an error code and explicit user retry succeeds without an automatic second call',async()=>{
+ const env=makeEnv(),u=await boot(env);
+ env.GEMINI_API_KEY='unit-test-placeholder';
+ const existingFetch=globalThis.fetch;
+ let calls=0;
+ globalThis.fetch=async(url,options)=>{
+  calls++;
+  assert.match(String(url),/generativelanguage\.googleapis\.com/);
+  const body=JSON.parse(options.body);
+  assert.equal(body.generationConfig.thinkingConfig.thinkingLevel,'MEDIUM');
+  assert.equal(body.generationConfig.maxOutputTokens,8192);
+  if(calls===1)return new Response(JSON.stringify({error:{status:'RESOURCE_EXHAUSTED',message:'secret should not be shown'}}),{status:429,headers:{'Content-Type':'application/json'}});
+  return new Response(JSON.stringify({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({
+   summary_zh:'工资文书已经识别，请核对。',
+   explanation_zh:'这是一份工资信息通知，应以实际银行入账金额为准。',
+   important_points_zh:[],vocabulary:[],sentences:[],field_suggestions:[],finance_suggestions:[],homeflow_suggestions:[]
+  })}]}}]}),{status:200,headers:{'Content-Type':'application/json'}});
+ };
+ try{
+  const created=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+   title:'测试工资',text:'給与明細 差引支給額 123456円',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+  }});
+  assert.equal(created.response.status,201,JSON.stringify(created.data));
+  assert.equal(created.data.ai_status,'gemini_quota_or_rate_limited');
+  assert.equal(calls,1,'no automatic Gemini retry spending quota');
+  const id=created.data.document_id;
+  const failed=(await req(env,'/api/documents/'+id,auth(u))).data.document.ai_analysis;
+  assert.equal(failed.status,'failed');
+  assert.equal(failed.failure_code,'gemini_quota_or_rate_limited');
+  assert.equal(failed.result,null);
+  assert.doesNotMatch(JSON.stringify(failed),/secret should not be shown/);
+  const retried=await req(env,'/api/documents/'+id+'/ai/analyze',{method:'POST',...auth(u),data:{confirm:true}});
+  assert.equal(retried.data.ai_status,'success');
+  assert.equal(calls,2,'retry only happens on explicit user request');
+  const passed=(await req(env,'/api/documents/'+id,auth(u))).data.document.ai_analysis;
+  assert.equal(passed.status,'success');
+  assert.equal(passed.failure_code,null);
+  assert.match(passed.result.explanation_zh,/实际银行入账/);
+ }finally{globalThis.fetch=existingFetch;}
+});
