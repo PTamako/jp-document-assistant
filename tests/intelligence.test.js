@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeAiAnalysis,geminiGenerationConfig,classifyGeminiHttpError,extractGeminiResponseText,geminiRetryCooldown} from '../worker/intelligence.js';
+import {normalizeAiAnalysis,geminiGenerationConfig,classifyGeminiHttpError,extractGeminiResponseText,geminiRetryCooldown,cloudflareGenerationConfig,extractCloudflareResponseText,classifyCloudflareError} from '../worker/intelligence.js';
 test('AI output only generates source-grounded Chinese explanations, words and sentences',()=>{
  const source='営業時間を確認してください。納付期限は明日ではありません。';
  const raw=JSON.stringify({summary_zh:'营业时间说明，需要人工确认',
@@ -75,4 +75,21 @@ test('503 overload is distinct from generic 5xx and manual retry has a short bou
  assert.equal(geminiRetryCooldown({...failed,result_json:JSON.stringify({failure_code:'gemini_invalid_request'})},timestamp+2000),0);
  assert.equal(geminiRetryCooldown({...failed,result_json:'not json'},timestamp+2000),0);
  assert.equal(geminiRetryCooldown({...failed,updated_at:'invalid'},timestamp+2000),0);
+});
+
+test('Cloudflare JSON-only mode keeps inference bounded and deterministic',()=>{
+ const cfg=cloudflareGenerationConfig();
+ assert.deepEqual(cfg,{response_format:{type:'json_object'},chat_template_kwargs:{enable_thinking:false},max_completion_tokens:2600,stream:false});
+ const answer=extractCloudflareResponseText({choices:[{message:{content:'{"summary_zh":"已分析"}'},finish_reason:'stop'}]});
+ assert.deepEqual(JSON.parse(answer),{summary_zh:'已分析'});
+ assert.throws(()=>extractCloudflareResponseText({choices:[{finish_reason:'length',message:{content:'{"incomplete":'}}]}),/cloudflare_output_truncated/);
+ assert.throws(()=>extractCloudflareResponseText({choices:[{finish_reason:'stop',message:{content:''}}]}),/cloudflare_empty_response/);
+ assert.equal(extractCloudflareResponseText({response:{summary_zh:'完整'}}),'{"summary_zh":"完整"}');
+});
+test('Cloudflare failures store safe reason codes instead of provider bodies',()=>{
+ assert.equal(classifyCloudflareError(new Error('3046 Request timeout')),'cloudflare_timeout');
+ assert.equal(classifyCloudflareError(new Error('429 Too Many Requests')),'cloudflare_rate_limited');
+ assert.equal(classifyCloudflareError(new Error('404 unknown model')),'cloudflare_model_unavailable');
+ assert.equal(classifyCloudflareError(new Error('cloudflare_invalid_json')),'cloudflare_invalid_json');
+ assert.equal(classifyCloudflareError(new Error('unknown private text')),'provider_failed');
 });

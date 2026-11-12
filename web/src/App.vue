@@ -52,6 +52,15 @@ const aiFailureLabels={
  gemini_content_blocked:'Gemini 内容审核未通过',
  gemini_empty_response:'Gemini 未返回可用文字',
  gemini_invalid_json:'Gemini 返回格式不完整',
+ cloudflare_invalid_json:'Workers AI 返回格式不正确',
+ cloudflare_output_truncated:'Workers AI 输出被截断',
+ cloudflare_empty_response:'Workers AI 没有返回内容',
+ cloudflare_output_blocked:'Workers AI 拒绝生成内容',
+ cloudflare_timeout:'Workers AI 响应超时',
+ cloudflare_rate_limited:'Workers AI 请求过于频繁',
+ cloudflare_model_unavailable:'Workers AI 模型暂不可用',
+ cloudflare_invalid_request:'Workers AI 请求参数出错',
+ cloudflare_service_unavailable:'Workers AI 服务暂时不可用',
  provider_failed:'AI 分析失败'
 };
 const aiFailureMessage=computed(()=>current.value?.ai_analysis?.status==='failed'
@@ -1105,7 +1114,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
             <button v-if="current.ai_provider!=='none'" class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button>
             <button class="secondary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="16"/>重新解析</button>
           </div>
-          <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}}</p>
+          <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}} · 下方为规则讲解</p>
           <p class="multiline explanation-text" :class="{expanded:explanationExpanded}">{{explanationText||'还没有可讲解的文字，可在原文页补充。'}}</p>
           <button v-if="explanationText.length>150" class="text-button expand-copy" type="button" :aria-expanded="explanationExpanded" @click="explanationExpanded=!explanationExpanded">{{explanationExpanded?'收起讲解':'查看完整讲解'}}</button>
           <details v-if="aiAnalysis?.important_points_zh?.length" class="explain-points"><summary>重要事项（{{aiAnalysis.important_points_zh.length}}）</summary><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">{{line}}</p></details>

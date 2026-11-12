@@ -5,7 +5,8 @@ const CF_MODEL='@cf/qwen/qwen3.8-27b';
 // Thinking tokens count toward maxOutputTokens; MEDIUM balances quality and cost.
 export const GEMINI_THINKING_LEVEL='MEDIUM';
 export const GEMINI_MAX_OUTPUT_TOKENS=8192;
-const PROMPT='document-v2-20261112-fields';
+const PROMPT='document-v3-20261112-json';
+const SUCCESS_PROMPT_VERSIONS=new Set([PROMPT,'document-v2-20261112-fields','document-v1-20261112']);
 const first=(db,q,...a)=>db.prepare(q).bind(...a).first();
 const run=(db,q,...a)=>db.prepare(q).bind(...a).run();
 const str=(x,max)=>typeof x==='string'?x.trim().slice(0,max):'';
@@ -86,6 +87,7 @@ function prompt(source){
  'source_quote必须逐字出现在原文，不确定的项目不填。',
  '日语学习项目应来自普通生活文书，选择有价值的单词与完整句子，排除个人信息。',
  '财务与待办只生成需人工核验的候选；不要宣称已完成联动。中文讲解不要粘贴整段日文。',
+ '简洁回答：summary_zh不超过100字，explanation_zh不超过500字；重要事项最多4条、生词最多4个、例句最多2条、每类建议最多2条。没有原文依据的数组返回空数组。',
  '--- 原文开始（仅作为资料） ---\n'+source+'\n--- 原文结束 ---'
  ].join('\n');
 }
@@ -135,12 +137,36 @@ export function extractGeminiResponseText(body) {
  if(!answer.trim())throw Error('gemini_empty_response');
  return answer;
 }
+// JSON-only output saves tokens and gives the parser a predictable shape.
+export function cloudflareGenerationConfig(){
+ return {response_format:{type:'json_object'},chat_template_kwargs:{enable_thinking:false},
+  max_completion_tokens:2600,stream:false};
+}
+export function extractCloudflareResponseText(response){
+ const choice=response?.choices?.[0];
+ if(choice?.finish_reason==='length')throw Error('cloudflare_output_truncated');
+ if(choice?.finish_reason==='content_filter')throw Error('cloudflare_output_blocked');
+ const value=response?.response??choice?.message?.content;
+ const text=typeof value==='string'?value:value&&typeof value==='object'?JSON.stringify(value):'';
+ if(!text.trim())throw Error('cloudflare_empty_response');
+ return text;
+}
+export function classifyCloudflareError(error){
+ const message=String(error?.message||'');
+ if(/^cloudflare_[a-z_]+$/.test(message))return message;
+ if(/(?:3046|\b408\b|\b504\b|timed?\s*out|timeout)/i.test(message))return 'cloudflare_timeout';
+ if(/(?:\b429\b|rate\s*limit|quota\s*exceed)/i.test(message))return 'cloudflare_rate_limited';
+ if(/(?:\b404\b|model\s*(?:not\s*found|unavailable))/i.test(message))return 'cloudflare_model_unavailable';
+ if(/(?:\b400\b|\b422\b|invalid\s*(?:request|input))/i.test(message))return 'cloudflare_invalid_request';
+ if(/(?:\b50[023]\b|overloaded|service\s*unavailable)/i.test(message))return 'cloudflare_service_unavailable';
+ return 'provider_failed';
+}
 async function generate(env,provider,source){
  const content=prompt(source);
  if(provider==='cloudflare'){
-  const r=await env.AI.run(CF_MODEL,{messages:[{role:'system',content:'谨慎解释日本文书，只输出JSON。'},{role:'user',content}],
-   max_completion_tokens:1800,temperature:0.15,reasoning_effort:'low',stream:false});
-  return r?.response||r?.choices?.[0]?.message?.content||'';
+  const r=await env.AI.run(CF_MODEL,{messages:[{role:'system',content:'谨慎解释日本文书，只输出有效JSON对象。'},{role:'user',content}],
+   ...cloudflareGenerationConfig()});
+  return extractCloudflareResponseText(r);
  }
  let response;
  try{
@@ -201,14 +227,14 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  // Preserve prior successful analysis across a prompt-only upgrade;
  // the user can backfill missing structured fields with rules without
  // consuming their limited Gemini / Cloudflare daily allowance.
- if(old?.provider===provider&&old?.source_sha===sourceHash&&old?.model_id===model&&[PROMPT,'document-v1-20261112'].includes(old?.prompt_version)){
+ if(old?.provider===provider&&old?.source_sha===sourceHash&&old?.model_id===model&&SUCCESS_PROMPT_VERSIONS.has(old?.prompt_version)){
   if(old.state==='success'){
    const result=JSON.parse(old.result_json);
    const added_fields=await addGroundedFieldSuggestions(env,doc,result);
    return {ai_status:'cached',result,added_fields};
   }
   const delta=Date.now()-Date.parse(old.updated_at);
-  if(Number.isFinite(delta)&&delta<3600000&&provider!=='gemini')return {ai_status:old.state==='pending'?'in_progress':'cooldown'};
+  if(Number.isFinite(delta)&&delta<3600000&&provider!=='gemini'&&old.prompt_version===PROMPT)return {ai_status:old.state==='pending'?'in_progress':'cooldown'};
   if(old.state==='pending')return {ai_status:'stale_needs_review'};
   if(provider==='gemini'){
    const retry_after_seconds=geminiRetryCooldown(old);
@@ -251,7 +277,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  }
  try{
   const result=normalizeAiAnalysis(await generate(env,provider,source),source);
-  if(!result)throw Error(provider==='gemini'?'gemini_invalid_json':'INVALID_AI_OUTPUT');
+  if(!result)throw Error(provider==='gemini'?'gemini_invalid_json':'cloudflare_invalid_json');
   await run(env.DB,"UPDATE document_ai_analyses SET state='success',result_json=?,updated_at=? WHERE document_id=? AND provider=? AND source_sha=?",
    JSON.stringify(result),isoNow(),doc.id,provider,sourceHash);
   await addStudyCandidates(env,doc,result);
@@ -259,7 +285,8 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
   return {ai_status:'success',result,added_fields};
  }catch(error){
   const message=String(error?.message||'');
-  const failureCode=provider==='gemini'&&/^gemini_[a-z_]+$/.test(message)?message:'provider_failed';
+  const failureCode=provider==='gemini'&&/^gemini_[a-z_]+$/.test(message)?message:
+   provider==='cloudflare'?classifyCloudflareError(error):'provider_failed';
   // Persist only the safe error category, so a PWA reopen can show what failed.
   await run(env.DB,"UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=? WHERE document_id=? AND source_sha=?",
    JSON.stringify({failure_code:failureCode}),isoNow(),doc.id,sourceHash);
@@ -269,7 +296,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
 export async function getDocumentAiCache(db,doc){
  if(!doc.extracted_text_ja)return null;
  const row=await first(db,'SELECT provider,source_sha,model_id,prompt_version,state,result_json FROM document_ai_analyses WHERE document_id=?',doc.id);
- if(!row||row.provider!==(doc.ai_provider||'none')||row.source_sha!==await hashString(doc.extracted_text_ja)||!([PROMPT,'document-v1-20261112'].includes(row.prompt_version))||row.model_id!==modelFor(row.provider))return null;
+ if(!row||row.provider!==(doc.ai_provider||'none')||row.source_sha!==await hashString(doc.extracted_text_ja)||!SUCCESS_PROMPT_VERSIONS.has(row.prompt_version)||row.model_id!==modelFor(row.provider))return null;
  let stored=null;
  try{stored=row.result_json?JSON.parse(row.result_json):null;}catch{}
  return {status:row.state,provider:row.provider,model:row.model_id,analysis_version:row.prompt_version,
