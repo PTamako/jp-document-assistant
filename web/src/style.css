@@ -193,7 +193,12 @@
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
   overflow:hidden;overflow-wrap:anywhere;letter-spacing:-.02em}
 .detail-body .detail-note{margin:6px 0 0;line-height:1.4}
-.detail-body .detail-tabs{margin:14px 0 16px}
+.detail-body .detail-tabs{margin:0}
+.detail-tabs-sticky{position:sticky;top:0;z-index:8;background:var(--bg);
+ padding:8px 0 10px;margin:6px 0 16px;isolation:isolate}
+.detail-tabs-sticky .segments{border:1px solid var(--line)}
+.campaign-review-card p{font-size:14px;line-height:1.55;margin:8px 0}
+.campaign-review-card .secondary.small{min-height:44px}
 
 /* One compact AI toolbar, with narrative collapsed by default but accessible. */
 .explain-panel{padding:14px}
