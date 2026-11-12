@@ -107,7 +107,8 @@ export function explainNotice({text,category,fields}){
      summary='水电燃气通知';
      lines.push('这是什么：生活公共费用通知。请区分账单金额、支付期限和是否已经实际扣款。');
      if(amount)lines.push('原文金额线索：'+amount+'（待核对）。');
-   }else if(category==='travel'||category==='hotel'){
+   }
+ }else if(category==='travel'||category==='hotel'){
    summary=category==='hotel'?'住宿预订通知':'出行／机票通知';
    lines.push('这是什么：预订或行程通知。预订成功与实际付款、入住或乘机不是同一状态。');
  }else{
