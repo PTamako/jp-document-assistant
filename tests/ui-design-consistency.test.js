@@ -40,7 +40,7 @@ test('critical privacy and deletion guarantees remain visible in simplified copy
  assert.match(app,/删除文书不会删除其他 App 已同步的记录/);
  assert.match(app,/删除可恢复，永久删除不可撤销/);
  assert.match(app,/已读取选中邮件正文；请核对后决定是否保存/);
- assert.match(app,/原件仍保留在私有 R2/);
+ assert.match(app,/文书和原件可恢复，已同步内容不受影响/);
  assert.match(app,/<h2>Gmail<\/h2>/);
  assert.match(app,/<h2>Google Drive<\/h2>/);
 });
