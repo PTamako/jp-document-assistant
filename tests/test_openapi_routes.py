@@ -38,7 +38,7 @@ class OpenApiContractTests(unittest.TestCase):
         operations = re.findall(r'^    (get|post|patch|put|delete):\s*$', SPEC, re.M)
         ids=re.findall(r'^      operationId:\s*(\S+)\s*$',SPEC,re.M)
         self.assertEqual(len(operations),57)
-        self.assertEqual(len(ids),56)
+        self.assertEqual(len(ids),57)
         self.assertEqual(len(ids),len(set(ids)))
         for operation in ['listOwnSessions','revokeOwnSession','revokeOtherOwnSessions','reinterpretDocumentPreservingReview','createConfirmedManualSalaryIncome']:
             self.assertIn(operation,ids)
