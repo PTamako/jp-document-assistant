@@ -8,9 +8,9 @@ const ai=read('worker/intelligence.js');
 const backend=read('worker/index.js');
 
 test('OCR and Gemini UI uses short, clear consent without long explanatory paragraphs',()=>{
- assert.match(app,/同意发送给 OCR\.space/);
+ assert.match(app,/同意发送所选/);
  assert.match(app,/同意将本份文书发送至 Gemini（可能产生费用）/);
- assert.match(app,/发送所选图片至第三方识别/);
+ assert.match(app,/@click="openChoice\('importOcrEngine'\)"/);
  assert.doesNotMatch(app,/本机 PaddleOCR 失败时可手动使用备用 OCR/);
  assert.doesNotMatch(app,/我确认这份文书不含个人或机密资料/);
  assert.doesNotMatch(app,/使用 iPhone「文件」/);
