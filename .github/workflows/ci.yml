@@ -27,5 +27,13 @@ jobs:
         run: npm test
       - name: Build Vue UI (no deploy)
         run: npm run build
-      - name: Check built asset metadata (no network API)
-        run: test -f dist/index.html && test -f dist/manifest.webmanifest
+      - name: Check built PWA icon assets (no network API)
+        run: |
+          test -f dist/index.html
+          test -f dist/manifest.webmanifest
+          test -f dist/icons/app-icon.svg
+          test -f dist/icons/app-icon-192.png
+          test -f dist/icons/app-icon-512.png
+          test -f dist/icons/app-icon-maskable-512.png
+          test -f dist/icons/apple-touch-icon-180.png
+          test -f dist/icons/favicon-32.png
