@@ -24,6 +24,8 @@
     "ENABLE_EXPERIMENTAL_OCR":"false",
     "ENABLE_DOCUMENT_AI":"true",
     "AI_ANALYSIS_DAILY_LIMIT":"2",
+    // Matches production dashboard; this gate does not change provider billing terms.
+    "GEMINI_FREE_ONLY_CONFIRMED":"true",
     "OCR_CALLS_PER_USER_DAY":"1",
     "OCR_APP_UTC_DAILY_LIMIT":"1",
     // Only the official no-charge OCR.space endpoint may be called, with per-request consent.
