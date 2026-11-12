@@ -95,3 +95,18 @@ test('Gmail popup request is synchronous, and OAuth error/timeout always settle'
  assert.match(auth,/setTimeout\(/);
  assert.match(auth,/clearTimeout\(/);
 });
+
+
+test('Gmail retries inert HTML alternative if damaged ISO-2022-JP text cannot decode',()=>{
+  const unusable=Buffer.alloc(200,0xff).toString('base64url');
+  const payload={mimeType:'multipart/alternative',headers:meta.headers,parts:[
+    {mimeType:'text/plain',headers:[{name:'Content-Type',value:'text/plain; charset=iso-2022-jp'}],
+      body:{data:unusable}},
+    {mimeType:'text/html',headers:[{name:'Content-Type',value:'text/html; charset=utf-8'}],
+      body:{data:b64('<script>evil()</script><p>請求金額：1,520円</p>')}}
+  ]};
+  const doc=gmailPayloadToDocument(payload);
+  assert.match(doc.text,/請求金額：1,520円/);
+  assert.doesNotMatch(doc.text,/evil\(\)|<script>/);
+  assert.equal(doc.source_type,'gmail');
+});
