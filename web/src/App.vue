@@ -45,6 +45,16 @@ const sessions=ref([]),sessionsNext=ref(null);
 
 const fieldLabel={due_date:'办理／缴费期限',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）'};
 const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
+function documentReviewLabel(d){
+ const state=d?.review_status || (
+  Array.isArray(d?.fields)&&d.fields.length ?
+  (d.fields.every(f=>f.review_state!=='unreviewed')?'reviewed':
+   d.fields.some(f=>f.review_state!=='unreviewed')?'partial':'unreviewed'):'none'
+ );
+ if(state==='reviewed')return '已核验';
+ if(state==='partial')return '部分核验';
+ return d?.analysis_status==='needs_review'?'待核验':'已保存';
+}
 const showDue=(v)=>v?String(v):'日期待确认';
 const pageData=computed(()=>pages[activeTab.value]||{items:[],next:null,loaded:true});
 function flash(message){notice.value=message;error.value='';}
@@ -391,7 +401,10 @@ async function importDocument(){
 function startField(field){fieldDraft.id=field.id;fieldDraft.value=field.normalized_value||'';fieldDraft.state=field.review_state==='unreviewed'?'confirmed':field.review_state;fieldDraft.confirmRemote=false;sheet.value='field';}
 async function saveField(){busy.value=true;try{
   const result=await api(`/api/fields/${fieldDraft.id}`,{method:'PATCH',body:{normalized_value:fieldDraft.value,review_state:fieldDraft.state,confirm_remote_unchanged:fieldDraft.confirmRemote}});
-  const id=current.value.id;sheet.value='';await openDoc(id);flash(result.linked_records_unchanged?'本地字段已修改；已同步的目标 App 记录不会自动改变，请前往目标 App 核对':'字段已保存');
+  const id=current.value.id;sheet.value='';await openDoc(id);
+  refreshDocumentViews();
+  if(pages[activeTab.value])await loadTab(activeTab.value);
+  flash(result.linked_records_unchanged?'本地字段已修改；已同步的目标 App 记录不会自动改变，请前往目标 App 核对':'字段已保存');
 }catch(e){problem(e);}finally{busy.value=false;}}
 function askTrash(){sheet.value='trashConfirm';}
 function askTrashFromList(document){
@@ -593,7 +606,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <div class="welcome"><div><p class="eyebrow">TODAY · あんしん</p><h2>重要的事，别漏掉。</h2><p class="muted">待确认与截止事项会集中显示。日期未经人工核验前不会自动创建提醒。</p></div><div class="welcome-mark">日</div></div>
         <div class="section-head"><h3>需要你关注</h3><span>{{pageData.items.length}} 件</span></div>
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">还没有需要处理的文书。<button class="text-button" @click="openImport()">导入第一份</button></div>
-        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon">{{d.category==='salary'?'¥':d.category==='campaign'?'%':'文'}}</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showDue(d.due_date)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{d.analysis_status==='needs_review'?'待核验':dueState(d.due_date)}}</span></button>
+        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon">{{d.category==='salary'?'¥':d.category==='campaign'?'%':'文'}}</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showDue(d.due_date)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{documentReviewLabel(d)==='已核验'?(d.due_date?dueState(d.due_date):'已核验'):documentReviewLabel(d)==='部分核验'?'部分核验':d.analysis_status==='needs_review'?'待核验':dueState(d.due_date)}}</span></button>
         <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('today',true)">{{loadingPage?'加载中…':'加载更多'}}</button>
       </section>
       <section v-else-if="activeTab==='docs'" class="page-surface" key="docs">
@@ -604,7 +617,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <DocumentSwipeRow v-for="d in pageData.items" :key="d.id" :id="d.id"
           :revealed="swipeOpenId===d.id" :disabled="busy"
           @reveal="swipeOpenId=d.id" @hide="swipeOpenId=''" @delete="askTrashFromList(d)">
-          <button class="item-card" type="button" @click="openDoc(d.id)"><div class="item-icon">▤</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{d.favorite?'★ · ':''}}{{cats[d.category]||d.category}} · {{d.visibility==='shared'?'家庭共享':'仅自己'}}{{d.archived_at?' · 已归档':''}}</p></div><span class="state-tag">{{d.analysis_status==='needs_review'?'待核验':'已保存'}}</span></button>
+          <button class="item-card" type="button" @click="openDoc(d.id)"><div class="item-icon">▤</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{d.favorite?'★ · ':''}}{{cats[d.category]||d.category}} · {{d.visibility==='shared'?'家庭共享':'仅自己'}}{{d.archived_at?' · 已归档':''}}</p></div><span class="state-tag">{{documentReviewLabel(d)}}</span></button>
         </DocumentSwipeRow>
         <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('docs',true)">加载更多</button>
       </section>
@@ -645,7 +658,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
     <div class="detail-body">
       <p class="eyebrow">{{cats[current.category]||current.category}} · {{current.visibility==='shared'?'家庭共享':'仅自己'}}</p>
       <h2>{{current.title}}</h2>
-      <p class="detail-note">{{current.analysis_status==='needs_review'?'规则抽取 · 等待人工确认':'文书已保存'}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
+      <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
       <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
       <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>原文版本与官方核验</h3><p>原文注明的日期：{{current.source_document_date||'未能确定（请核对原件）'}}</p><p v-if="current.source_date_quote" class="muted">来源：{{current.source_date_quote}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文说明</h3><p class="multiline">{{current.explanation_zh||'当前仅保存原件。图像 OCR 尚未验证，建议使用粘贴文字导入。'}}</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
       <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button" @click="amountVisible=!amountVisible">{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>原文：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
