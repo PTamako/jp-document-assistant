@@ -30,15 +30,15 @@ export async function ocrSpaceAttachment(request,env,p,documentId){
  if(cached?.state==='success')return json({ok:true,verified:false,cached:true,text:cached.candidate_text_ja,
   warning:'云端识别文字未经确认，不会自动创建记账或待办'});
  if(cached)return failure('OCR_SPACE_ALREADY_ATTEMPTED','同一附件已有识别记录；为避免重复消耗免费额度不自动重试',409);
- const utc=new Date().toISOString().slice(0,10),rawLimit=Number(env.OCR_APP_UTC_DAILY_LIMIT??1);
- const limit=Number.isSafeInteger(rawLimit)?Math.min(3,Math.max(0,rawLimit)):0;
+ const utc=new Date().toISOString().slice(0,10),rawLimit=Number(env.OCR_SPACE_APP_UTC_DAILY_LIMIT??20);
+ const limit=Number.isSafeInteger(rawLimit)?Math.min(30,Math.max(0,rawLimit)):0;
  if(!limit)return failure('OCR_BUDGET_DISABLED','本应用的云端 OCR 预算已关闭',503);
  const now=isoNow();
  const claim=await run(env.DB,"INSERT OR IGNORE INTO ocr_attempts(id,owner_id,object_id,model_id,prompt_version,state,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?)",
   randomToken(16),p.user_id,row.object_id,MODEL,VER,now,now);
  if(claim.meta?.changes!==1)return failure('OCR_IN_PROGRESS','已经存在这份原件的 OCR 请求',409);
- await run(env.DB,'INSERT OR IGNORE INTO ocr_app_utc_daily(day_utc) VALUES(?)',utc);
- const quota=await run(env.DB,'UPDATE ocr_app_utc_daily SET calls=calls+1 WHERE day_utc=? AND calls+reserved<?',utc,limit);
+ await run(env.DB,'INSERT OR IGNORE INTO ocr_space_utc_daily(day_utc) VALUES(?)',utc);
+ const quota=await run(env.DB,'UPDATE ocr_space_utc_daily SET calls=calls+1 WHERE day_utc=? AND calls<?',utc,limit);
  if(quota.meta?.changes!==1){
   await run(env.DB,"UPDATE ocr_attempts SET state='failed',updated_at=? WHERE object_id=? AND model_id=?",isoNow(),row.object_id,MODEL);
   return failure('OCR_BUDGET_EXHAUSTED','本应用今日免费云端 OCR 次数已达到限制',429);

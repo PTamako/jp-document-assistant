@@ -3,7 +3,7 @@ import {parseOcrSpaceResult} from './ocr-space.js';
 
 // Private documents are never uploaded to R2 by this route. Users explicitly
 // authorize ONE already-rasterized page before the browser sends it here.
-// Both this endpoint and attachment OCR share the same UTC application quota.
+// This endpoint shares its own UTC counter with saved-attachment OCR.space only.
 export async function ocrSpaceImportPreview(request,env,p){
   if(!env.OCR_SPACE_API_KEY||env.OCR_SPACE_FREE_ONLY_CONFIRMED!=='true')
     return failure('OCR_SPACE_NOT_CONFIGURED','OCR.space 免费密钥尚未配置；没有发送文件',503);
@@ -22,12 +22,12 @@ export async function ocrSpaceImportPreview(request,env,p){
   if(bytes.length!==file.size||bytes[0]!==0xff||bytes[1]!==0xd8||bytes[bytes.length-2]!==0xff||bytes[bytes.length-1]!==0xd9)
     return failure('OCR_PREVIEW_FILE_INVALID','上传的扫描图片格式不正确，未调用第三方',422);
   const day=new Date().toISOString().slice(0,10);
-  const n=Number(env.OCR_APP_UTC_DAILY_LIMIT??1);
-  const limit=Number.isSafeInteger(n)?Math.max(0,Math.min(3,n)):0;
+  const n=Number(env.OCR_SPACE_APP_UTC_DAILY_LIMIT??20);
+  const limit=Number.isSafeInteger(n)?Math.max(0,Math.min(30,n)):0;
   if(!limit)return failure('OCR_BUDGET_DISABLED','本应用暂未开放第三方 OCR 请求额度',503);
-  await env.DB.prepare('INSERT OR IGNORE INTO ocr_app_utc_daily(day_utc) VALUES(?)').bind(day).run();
+  await env.DB.prepare('INSERT OR IGNORE INTO ocr_space_utc_daily(day_utc) VALUES(?)').bind(day).run();
   const claim=await env.DB.prepare(
-    'UPDATE ocr_app_utc_daily SET calls=calls+1 WHERE day_utc=? AND calls+reserved<?'
+    'UPDATE ocr_space_utc_daily SET calls=calls+1 WHERE day_utc=? AND calls<?'
   ).bind(day,limit).run();
   if(claim.meta?.changes!==1)
     return failure('OCR_BUDGET_EXHAUSTED','今天的云端 OCR 次数已用完，请明天再试或人工填写文字',429);

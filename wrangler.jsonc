@@ -21,13 +21,15 @@
   "ai": {"binding":"AI"},
   "vars": {
     "R2_BUCKET_NAME":"jp-document-assistant-private",
-    "ENABLE_EXPERIMENTAL_OCR":"false",
+    "ENABLE_EXPERIMENTAL_OCR":"true",
     "ENABLE_DOCUMENT_AI":"true",
-    "AI_ANALYSIS_DAILY_LIMIT":"2",
+    "AI_ANALYSIS_DAILY_LIMIT":"5",
     // Matches production dashboard; this gate does not change provider billing terms.
     "GEMINI_FREE_ONLY_CONFIRMED":"true",
-    "OCR_CALLS_PER_USER_DAY":"1",
-    "OCR_APP_UTC_DAILY_LIMIT":"1",
+    "OCR_CALLS_PER_USER_DAY":"5",
+    "OCR_APP_UTC_DAILY_LIMIT":"5",
+    // Separate monthly-safe cap for the OCR.space Engine 3 free key.
+    "OCR_SPACE_APP_UTC_DAILY_LIMIT":"20",
     // Only the official no-charge OCR.space endpoint may be called, with per-request consent.
     "OCR_SPACE_FREE_ONLY_CONFIRMED":"true"
   },

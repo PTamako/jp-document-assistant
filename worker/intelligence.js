@@ -174,7 +174,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  // Gemini uses the owner's API key. Let Google enforce its own billing/rate
  // policies; this app's small shared daily quota applies only to Workers AI.
  if(provider==='cloudflare'){
-  const n=Number(env.AI_ANALYSIS_DAILY_LIMIT??2),limit=Number.isSafeInteger(n)?Math.max(0,Math.min(5,n)):0;
+  const n=Number(env.AI_ANALYSIS_DAILY_LIMIT??5),limit=Number.isSafeInteger(n)?Math.max(0,Math.min(5,n)):0;
   if(!limit){await run(env.DB,"UPDATE document_ai_analyses SET state='failed',updated_at=? WHERE document_id=?",isoNow(),doc.id);return {ai_status:'budget_disabled'};}
   const day=new Date().toISOString().slice(0,10);
   await run(env.DB,'INSERT OR IGNORE INTO ai_analysis_daily(day_utc) VALUES(?)',day);

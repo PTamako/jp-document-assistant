@@ -1,6 +1,6 @@
 # D1 migrations (initial schema for a NEW standalone application)
 
-Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`, `0006_document_version.sql`, `0007_ocr_attempts.sql`, `0008_bridge_fingerprint.sql`, `0009_calendar_subscriptions.sql`, `0010_ocr_utc_budget.sql`, `0011_document_ai_provider.sql`, `0012_document_ai_analysis.sql`, `0013_google_oauth_grants.sql`, `0014_google_browser_redirect.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
+Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`, `0006_document_version.sql`, `0007_ocr_attempts.sql`, `0008_bridge_fingerprint.sql`, `0009_calendar_subscriptions.sql`, `0010_ocr_utc_budget.sql`, `0011_document_ai_provider.sql`, `0012_document_ai_analysis.sql`, `0013_google_oauth_grants.sql`, `0014_google_browser_redirect.sql`, `0015_ocr_space_utc_budget.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
 
 **Production safety:** The SQL is tested against local `sqlite3`, **not yet against real D1**. Do not auto-run on production; confirm a backup, current schema, and a production migration plan, and get approval. App-level logic must enforce exactly two users, permissions, imports, 2-phase R2 cleanup, idempotency, and transactional CAS updates. The SQLite trigger additionally blocks a third non-left account in the same household.
 
@@ -25,6 +25,8 @@ The initial schema deliberately has **no FTS virtual table** because D1 support 
 
 
 `0012_document_ai_analysis.sql`: per-document source-hash/model keyed analysis cache and one shared, UTC-day application limit. Does not represent account-wide free-tier remaining. AI results are suggestions only. Existing HomeFlow, 家計簿 and 知学 databases are not touched.
+
+`0015_ocr_space_utc_budget.sql` stores the independent UTC-day OCR.space Engine 3 request count (20 across both family users by default) in the existing private D1. It does not consume the Workers AI OCR budget, does not create new resources, and is intentionally lower than the provider's 1,000/month Engine 3 free quota.
 
 `0013_google_oauth_grants.sql`: scoped to the existing document assistant D1, stores one encrypted Gmail refresh token per signed-in local user with AES-GCM and authenticated user ID. No email contents, Gmail access tokens, or Google passwords persist. Apply production migration only after reviewed D1 backup. Requires Cloudflare GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET and a random 256-bit hex GOOGLE_TOKEN_ENCRYPTION_KEY; missing config gracefully disables persistent grant mode.
 

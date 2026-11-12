@@ -1,7 +1,7 @@
 import { json, bad, failure, readJson } from './http.js';
 import { randomToken, isoNow } from './security.js';
 
-// Experimental OCR is OFF by default and returns ONLY private, unverified suggestions.
+// Optional Workers AI OCR only returns private, unverified suggestions.
 // Same-owner same-R2-object requests share one attempt record; no public image URLs.
 const dbFirst=(db,s,...a)=>db.prepare(s).bind(...a).first();
 const dbRun=(db,s,...a)=>db.prepare(s).bind(...a).run();
@@ -79,9 +79,9 @@ export async function ocrAttachment(request,env,p,id){
    return failure('OCR_RETRY_PAUSED','模型上次调用失败，为保护免费额度一小时内不重复尝试',429);
  if(env.ENABLE_EXPERIMENTAL_OCR!=='true'||!env.AI)
    return failure('OCR_NOT_VERIFIED','免费日文 OCR 尚未通过真实脱敏样本验收，请人工输入/修改文字',503);
- const day=todayJst(),utcDay=todayUtc(),limit=Math.min(3,Math.max(0,Number(env.OCR_CALLS_PER_USER_DAY??1)));
- const appLimitRaw=Number(env.OCR_APP_UTC_DAILY_LIMIT??1);
- const appLimit=Number.isSafeInteger(appLimitRaw)?Math.min(4,Math.max(0,appLimitRaw)):0;
+ const day=todayJst(),utcDay=todayUtc(),limit=Math.min(5,Math.max(0,Number(env.OCR_CALLS_PER_USER_DAY??5)));
+ const appLimitRaw=Number(env.OCR_APP_UTC_DAILY_LIMIT??5);
+ const appLimit=Number.isSafeInteger(appLimitRaw)?Math.min(5,Math.max(0,appLimitRaw)):0;
  if(limit===0||appLimit===0)return failure('OCR_BUDGET_DISABLED','OCR 单人或本应用 UTC 调用预算已关闭',503);
  await dbRun(env.DB,'INSERT OR IGNORE INTO usage_daily(user_id,local_day) VALUES(?,?)',p.user_id,day);
  const quota=await dbRun(env.DB,`UPDATE usage_daily SET ai_reserved=ai_reserved+1 WHERE user_id=? AND local_day=?
