@@ -4,12 +4,11 @@
 export const PADDLE_SDK_VERSION='0.4.2';
 export const ORT_WASM_VERSION='1.31.1';
 const ORT_WASM_BASE='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/';
-// Only the WASM binary is remote. JS/OCR runtime remains same-origin and
-// cannot upload any scanned document images to the CDN.
-// Official PaddleOCR SDK/ONNX Runtime expects a WASM asset URL PREFIX,
- // not {wasm: url}. The previous object left the runtime unable to resolve
- // its required binaries on iOS Safari.
-const wasmPaths=ORT_WASM_BASE;
+// The .mjs module glue is bundled same-origin; only the large .wasm is fetched\n// from a pinned CDN. No document pixels are uploaded by PaddleOCR.\nexport const ORT_MODULE_PATH='/ocr/ort-wasm-simd-threaded.jsep.mjs';
+const wasmPaths={
+  wasm:ORT_WASM_BASE+'ort-wasm-simd-threaded.jsep.wasm',
+  mjs:new URL(ORT_MODULE_PATH,typeof window!=='undefined'?window.location.origin:'https://localhost').href
+};
 let enginePromise;
 export function normalizeOcrItems(results){
   const items=Array.isArray(results?.[0]?.items)?results[0].items:[];
