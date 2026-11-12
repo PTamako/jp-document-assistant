@@ -1,6 +1,6 @@
 # D1 migrations (initial schema for a NEW standalone application)
 
-Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`, `0006_document_version.sql`, `0007_ocr_attempts.sql`, `0008_bridge_fingerprint.sql`, `0009_calendar_subscriptions.sql`, `0010_ocr_utc_budget.sql`, `0011_document_ai_provider.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
+Order: `0001_init.sql`, `0002_indexes.sql`, `0003_password_auth.sql`, `0004_organize.sql`, `0005_single_household.sql`, `0006_document_version.sql`, `0007_ocr_attempts.sql`, `0008_bridge_fingerprint.sql`, `0009_calendar_subscriptions.sql`, `0010_ocr_utc_budget.sql`, `0011_document_ai_provider.sql`, `0012_document_ai_analysis.sql`. These are additive migrations, **not** migrations for the three existing apps. Execute locally in SQLite (or `wrangler d1 execute --local` only after creating a local database) before any production proposal. Do not run against HomeFlow, 家計簿 or 知学 databases, and do not create preview Cloudflare resources.
 
 **Production safety:** The SQL is tested against local `sqlite3`, **not yet against real D1**. Do not auto-run on production; confirm a backup, current schema, and a production migration plan, and get approval. App-level logic must enforce exactly two users, permissions, imports, 2-phase R2 cleanup, idempotency, and transactional CAS updates. The SQLite trigger additionally blocks a third non-left account in the same household.
 
@@ -22,3 +22,6 @@ The initial schema deliberately has **no FTS virtual table** because D1 support 
 
 
 `0011_document_ai_provider.sql`: stores the AI selection independently for every document, never as a global preference. Historic documents default to rules-only. Explicit Gemini consent timestamp is stored per document. This migration **does not initiate any AI inference or send files to Gemini**; live AI analysis still needs separate implementation and verification.
+
+
+`0012_document_ai_analysis.sql`: per-document source-hash/model keyed analysis cache and one shared, UTC-day application limit. Does not represent account-wide free-tier remaining. AI results are suggestions only. Existing HomeFlow, 家計簿 and 知学 databases are not touched.
