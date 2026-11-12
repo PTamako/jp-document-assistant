@@ -2183,3 +2183,44 @@ test('a 20/20 Gemini 3.6 budget blocks imports before Google fetch and is visibl
   assert.equal(usage.data.gemini_daily.remaining,0);
  }finally{globalThis.fetch=existingFetch;}
 });
+
+test('Gemini 503 only retries after a new user action and cooldown, without consuming a second request while waiting',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GEMINI_API_KEY='local-test-key';
+ const previousFetch=globalThis.fetch;
+ let googleCalls=0;
+ globalThis.fetch=async()=>{
+  googleCalls++;
+  if(googleCalls===1)return new Response(JSON.stringify({error:{message:'upstream sensitive information must not be stored'}}),{status:503,headers:{'Content-Type':'application/json'}});
+  return new Response(JSON.stringify({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({
+   summary_zh:'活动信息已识别，需要核对',
+   explanation_zh:'这是一个积分优惠活动，需要确认实际截止时间和参加条件。',
+   important_points_zh:[],vocabulary:[],sentences:[],field_suggestions:[],finance_suggestions:[],homeflow_suggestions:[]
+  })}]}}]}),{status:200,headers:{'Content-Type':'application/json'}});
+ };
+ try{
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+   title:'优惠券',text:'セブンプレミアム 5%OFF キャンペーン。内容をご確認ください。',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+  }});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  assert.equal(imported.data.ai_status,'gemini_service_overloaded');
+  assert.equal(googleCalls,1);
+  const id=imported.data.document_id;
+  const failed=(await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_analysis;
+  assert.equal(failed.failure_code,'gemini_service_overloaded');
+  assert.doesNotMatch(JSON.stringify(failed),/sensitive information/);
+  const retry=await req(env,'/api/documents/'+id+'/ai/analyze',{method:'POST',...auth(owner),data:{confirm:true}});
+  assert.equal(retry.data.ai_status,'gemini_retry_cooldown');
+  assert.ok(retry.data.retry_after_seconds>0);
+  assert.equal(googleCalls,1,'no new Gemini call while in cooldown');
+  const before=await req(env,'/api/usage',auth(owner));
+  assert.equal(before.data.gemini_daily.calls,1,'rate limit counts only actual attempt');
+  env.DB.sql.prepare('UPDATE document_ai_analyses SET updated_at=? WHERE document_id=?')
+   .run(new Date(Date.now()-61000).toISOString(),id);
+  const success=await req(env,'/api/documents/'+id+'/ai/analyze',{method:'POST',...auth(owner),data:{confirm:true}});
+  assert.equal(success.data.ai_status,'success');
+  assert.equal(googleCalls,2,'one explicitly requested retry');
+  const after=await req(env,'/api/usage',auth(owner));
+  assert.equal(after.data.gemini_daily.calls,2);
+ }finally{globalThis.fetch=previousFetch;}
+});

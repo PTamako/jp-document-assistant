@@ -103,8 +103,21 @@ export function classifyGeminiHttpError(status) {
  if(status===401||status===403)return 'gemini_access_denied';
  if(status===404)return 'gemini_model_unavailable';
  if(status===400)return 'gemini_invalid_request';
+ if(status===503)return 'gemini_service_overloaded';
  if(status>=500)return 'gemini_service_unavailable';
  return 'gemini_request_failed';
+}
+// A 5xx may be temporary; protect the shared 20/day quota from repeated taps.
+// Only an explicit retry after cooldown can issue another call; never auto-retry.
+export const GEMINI_5XX_COOLDOWN_MS=60000;
+export function geminiRetryCooldown(old,now=Date.now()) {
+ if(old?.state!=='failed')return 0;
+ let code='';
+ try{code=JSON.parse(old.result_json||'null')?.failure_code||'';}catch{}
+ if(!['gemini_service_overloaded','gemini_service_unavailable'].includes(code))return 0;
+ const age=now-Date.parse(old.updated_at||'');
+ if(!Number.isFinite(age)||age<0||age>=GEMINI_5XX_COOLDOWN_MS)return 0;
+ return Math.ceil((GEMINI_5XX_COOLDOWN_MS-age)/1000);
 }
 export function geminiGenerationConfig() {
  // Gemini 3 does not need deprecated temperature or thinkingBudget parameters.
@@ -197,6 +210,10 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
   const delta=Date.now()-Date.parse(old.updated_at);
   if(Number.isFinite(delta)&&delta<3600000&&provider!=='gemini')return {ai_status:old.state==='pending'?'in_progress':'cooldown'};
   if(old.state==='pending')return {ai_status:'stale_needs_review'};
+  if(provider==='gemini'){
+   const retry_after_seconds=geminiRetryCooldown(old);
+   if(retry_after_seconds)return {ai_status:'gemini_retry_cooldown',retry_after_seconds};
+  }
  }
  const now=isoNow();
  const claim=old?

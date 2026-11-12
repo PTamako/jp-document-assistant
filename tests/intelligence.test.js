@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeAiAnalysis,geminiGenerationConfig,classifyGeminiHttpError,extractGeminiResponseText} from '../worker/intelligence.js';
+import {normalizeAiAnalysis,geminiGenerationConfig,classifyGeminiHttpError,extractGeminiResponseText,geminiRetryCooldown} from '../worker/intelligence.js';
 test('AI output only generates source-grounded Chinese explanations, words and sentences',()=>{
  const source='営業時間を確認してください。納付期限は明日ではありません。';
  const raw=JSON.stringify({summary_zh:'营业时间说明，需要人工确认',
@@ -54,11 +54,25 @@ test('Gemini status codes are categorized safely without exposing provider respo
  assert.equal(classifyGeminiHttpError(403),'gemini_access_denied');
  assert.equal(classifyGeminiHttpError(400),'gemini_invalid_request');
  assert.equal(classifyGeminiHttpError(404),'gemini_model_unavailable');
- assert.equal(classifyGeminiHttpError(503),'gemini_service_unavailable');
+ assert.equal(classifyGeminiHttpError(503),'gemini_service_overloaded');
 });
 test('Gemini distinguishes truncated, blocked, missing and good JSON text',()=>{
  assert.throws(()=>extractGeminiResponseText({candidates:[{finishReason:'MAX_TOKENS',content:{parts:[]}}]}),/gemini_output_truncated/);
  assert.throws(()=>extractGeminiResponseText({promptFeedback:{blockReason:'SAFETY'}}),/gemini_content_blocked/);
  assert.throws(()=>extractGeminiResponseText({candidates:[{finishReason:'STOP',content:{parts:[]}}]}),/gemini_empty_response/);
  assert.equal(extractGeminiResponseText({candidates:[{finishReason:'STOP',content:{parts:[{thought:true,text:'private thoughts'},{text:'{"summary_zh":"已分析"}'}]}}]}),'{"summary_zh":"已分析"}');
+});
+
+test('503 overload is distinct from generic 5xx and manual retry has a short bounded cooldown',()=>{
+ assert.equal(classifyGeminiHttpError(503),'gemini_service_overloaded');
+ assert.equal(classifyGeminiHttpError(502),'gemini_service_unavailable');
+ const timestamp=Date.parse('2026-11-12T11:39:28Z');
+ const failed={state:'failed',updated_at:new Date(timestamp).toISOString(),result_json:JSON.stringify({failure_code:'gemini_service_overloaded'})};
+ assert.equal(geminiRetryCooldown(failed,timestamp+1000),59);
+ assert.equal(geminiRetryCooldown(failed,timestamp+59000),1);
+ assert.equal(geminiRetryCooldown(failed,timestamp+60000),0);
+ assert.equal(geminiRetryCooldown({...failed,state:'success'},timestamp+2000),0);
+ assert.equal(geminiRetryCooldown({...failed,result_json:JSON.stringify({failure_code:'gemini_invalid_request'})},timestamp+2000),0);
+ assert.equal(geminiRetryCooldown({...failed,result_json:'not json'},timestamp+2000),0);
+ assert.equal(geminiRetryCooldown({...failed,updated_at:'invalid'},timestamp+2000),0);
 });
