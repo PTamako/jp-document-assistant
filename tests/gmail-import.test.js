@@ -78,9 +78,9 @@ test('OAuth scope contract explicitly excludes previously granted scopes and bro
 
 test('Gmail OAuth does not force consent for already approved scopes',()=>{
  const source=readFileSync(new URL('../web/src/gmail-import.js',import.meta.url),'utf8');
- assert.match(source,/requestAccessToken\\(\\{prompt:''/);
- assert.doesNotMatch(source,/requestAccessToken\\(\\{prompt:'consent'/);
- assert.match(source,/if\\(gmailConnected\\(\\)\\)return Promise\\.resolve/);
+ assert.ok(source.includes("requestAccessToken({prompt:''"),"Should request a token without forcing consent");
+ assert.ok(!source.includes("requestAccessToken({prompt:'consent'"),"Must not force repeat consent");
+ assert.ok(source.includes("if(gmailConnected())return Promise.resolve"),"Should reuse in-memory token");
 });
 
 test('Gmail popup request is synchronous, and OAuth error/timeout always settle',()=>{
