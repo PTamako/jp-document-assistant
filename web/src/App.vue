@@ -1443,7 +1443,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <div class="sheet-actions"><button class="secondary" type="button" @click="sheet=''">取消</button><button class="destructive" type="button" :disabled="busy" @click="trashCurrent"><UiIcon name="trash" :size="17"/>确认移入</button></div>
       </template>
       <template v-else-if="sheet==='recycle'">
-         <div class="section-head"><h2>回收站</h2><button v-if="trashItems.length||attachmentTrashItems.length" class="destructive small" type="button" :disabled="busy" @click="askEmptyRecycle"><UiIcon name="trash-2" :size="16"/>全部清空</button></div>
+         <div class="section-head"><h2>回收站</h2><button v-if="trashItems.length||attachmentTrashItems.length" class="destructive small" type="button" :disabled="busy" @click="askEmptyRecycle"><UiIcon name="trash" :size="16"/>全部清空</button></div>
          <p class="muted">删除可恢复，永久删除不可撤销。</p><div v-if="!trashItems.length" class="empty">文书回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='emptyRecycleConfirm'">
          <h2 class="danger-text">永久清空回收站？</h2>
@@ -1451,7 +1451,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
          <p v-if="busy" class="muted" role="status">正在清理，已处理 {{recycleEmptyProgress}} 项…</p>
          <div class="sheet-actions">
            <button class="secondary" type="button" :disabled="busy" @click="sheet='recycle'">取消</button>
-           <button class="destructive" type="button" :disabled="busy" @click="emptyRecycle"><UiIcon name="trash-2" :size="17"/>确认全部清空</button>
+           <button class="destructive" type="button" :disabled="busy" @click="emptyRecycle"><UiIcon name="trash" :size="17"/>确认全部清空</button>
          </div>
        </template>
        <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
