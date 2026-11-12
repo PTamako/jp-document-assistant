@@ -1935,7 +1935,7 @@ test('Gemini quota failure persists an error code and explicit user retry succee
  let calls=0;
  globalThis.fetch=async(url,options)=>{
   calls++;
-  assert.match(String(url),/generativelanguage\\.googleapis\\.com/);
+  assert.match(String(url),/generativelanguage\.googleapis\.com/);
   const body=JSON.parse(options.body);
   assert.equal(body.generationConfig.thinkingConfig.thinkingLevel,'MEDIUM');
   assert.equal(body.generationConfig.maxOutputTokens,8192);
