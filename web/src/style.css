@@ -10,3 +10,5 @@
 
 /* Native iOS Files provider: allows Drive-provided exported files without Google popup OAuth. */
 .pwa-native-file-button{display:flex;align-items:center;justify-content:center;position:relative;min-height:48px;padding:11px 14px;border-radius:12px;background:var(--soft);color:var(--blue);font-weight:750;text-align:center;cursor:pointer}.pwa-native-file-button:focus-within{outline:2px solid var(--blue);outline-offset:2px}
+
+.swipe-hint{margin:-6px 0 10px;font-size:12px;line-height:1.35}

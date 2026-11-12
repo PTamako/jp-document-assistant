@@ -9,6 +9,7 @@ import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
 import TabIcon from './TabIcon.vue';
+import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const initialized=ref(null);
@@ -21,6 +22,7 @@ const loadingPage=ref(false),search=ref(''),category=ref('');
 const cats={salary:'工资／奖金',bank:'银行／信用卡',tax:'税务／缴纳',utility:'水电燃气',housing:'房屋租赁',campaign:'活动／优惠',policy:'法规／政策',manual:'使用说明',travel:'旅行交通',delivery:'配送订单',other:'其他'};
 const categoryOptions=Object.entries(cats);
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
+const swipeOpenId=ref(''),swipeTrashTarget=ref(null);
 const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),localTextInput=ref(null),localImportNote=ref(''),inputMode=ref('text');
 const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original'),fileSource=ref('local_file');
 const drivePickerAvailable=!!drivePickerConfig();
@@ -68,6 +70,7 @@ function clearPrivateWorkspace(){
   accountEpoch.invalidate(); // Reject responses from the previous account.
   accountController.abort();accountController=new AbortController();
   loadSerial++;loadingPage.value=false;busy.value=false;detailLoading.value=false;
+  swipeOpenId.value='';swipeTrashTarget.value=null;
   clearGmailSession();revokeOriginal();closeSheet();current.value=null;
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];
@@ -250,6 +253,7 @@ async function loadTab(tab,append=false){
   }catch(e){if(token===loadSerial)problem(e);}finally{if(token===loadSerial)loadingPage.value=false;}
 }
 async function selectTab(tab){
+  swipeOpenId.value='';
   activeTab.value=tab;
   if(pages[tab]&&!pages[tab].loaded)await loadTab(tab);
   if(tab==='mine'&&!usage.value)loadUsage();
@@ -258,6 +262,7 @@ async function searchDocs(){pages.docs.loaded=false;await loadTab('docs');closeS
 async function loadUsage(){try{usage.value=await api('/api/usage');}catch(e){problem(e);}}
 async function cleanupStorage(){busy.value=true;try{const result=await api('/api/storage/cleanup-orphans',{method:'POST',body:{}});flash(result.pending?'部分 R2 文件清理失败，请稍后手动重试':`已清理 ${result.removed} 个无引用原件；不扫描 R2 全桶`);}catch(e){problem(e);}finally{busy.value=false;}}
 async function openDoc(id){
+  swipeOpenId.value='';
   detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];detailTab.value='explain';
   try{
     const d=await api(`/api/documents/${id}`);current.value=d.document;
@@ -265,7 +270,7 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function primeGooglePicker(){
   if(!drivePickerAvailable||iosStandalonePwa||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
   drivePickerLoadingUi.value=true;
@@ -382,6 +387,25 @@ async function saveField(){busy.value=true;try{
   const id=current.value.id;sheet.value='';await openDoc(id);flash(result.linked_records_unchanged?'本地字段已修改；已同步的目标 App 记录不会自动改变，请前往目标 App 核对':'字段已保存');
 }catch(e){problem(e);}finally{busy.value=false;}}
 function askTrash(){sheet.value='trashConfirm';}
+function askTrashFromList(document){
+  if(busy.value || !document?.id)return;
+  swipeOpenId.value='';
+  swipeTrashTarget.value={id:document.id,title:document.title};
+  sheet.value='trashListConfirm';
+}
+async function trashFromList(){
+  const target=swipeTrashTarget.value;
+  if(!target||busy.value)return;
+  busy.value=true;
+  try{
+    await api(`/api/documents/${target.id}/trash`,{method:'POST',body:{}});
+    closeSheet();
+    pages.docs.loaded=false;
+    await loadTab('docs');
+    flash('文书已移入回收站，可从「我的 → 回收站」恢复');
+  }catch(e){problem(e);}
+  finally{busy.value=false;}
+}
 async function trashCurrent(){busy.value=true;try{
   await api(`/api/documents/${current.value.id}/trash`,{method:'POST',body:{}});
   closeSheet();closeDetail();for(const p of Object.values(pages))p.loaded=false;await loadTab(activeTab.value);
@@ -559,8 +583,13 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       <section v-else-if="activeTab==='docs'" class="page-surface" key="docs">
         <div class="search-row"><input v-model="search" type="search" placeholder="搜索标题或中文摘要" @keyup.enter="searchDocs" /><button class="filter-button" aria-label="文书筛选" @click="sheet='filter'">筛选</button><button class="filter-button" @click="searchDocs">查找</button></div>
         <div class="section-head"><h3>文书库</h3><span>{{category?cats[category]:'全部类型'}}</span></div>
+        <p v-if="pageData.items.length" class="fine-print swipe-hint">向左滑动文书，或点击右侧 ···，即可显示删除操作（先移入回收站）。</p>
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">没有匹配的文书。</div>
-        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon">▤</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{d.favorite?'★ · ':''}}{{cats[d.category]||d.category}} · {{d.visibility==='shared'?'家庭共享':'仅自己'}}{{d.archived_at?' · 已归档':''}}</p></div><span class="state-tag">{{d.analysis_status==='needs_review'?'待核验':'已保存'}}</span></button>
+        <DocumentSwipeRow v-for="d in pageData.items" :key="d.id" :id="d.id"
+          :revealed="swipeOpenId===d.id" :disabled="busy"
+          @reveal="swipeOpenId=d.id" @hide="swipeOpenId=''" @delete="askTrashFromList(d)">
+          <button class="item-card" type="button" @click="openDoc(d.id)"><div class="item-icon">▤</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{d.favorite?'★ · ':''}}{{cats[d.category]||d.category}} · {{d.visibility==='shared'?'家庭共享':'仅自己'}}{{d.archived_at?' · 已归档':''}}</p></div><span class="state-tag">{{d.analysis_status==='needs_review'?'待核验':'已保存'}}</span></button>
+        </DocumentSwipeRow>
         <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('docs',true)">加载更多</button>
       </section>
       <section v-else-if="activeTab==='links'" class="page-surface" key="links">
@@ -658,6 +687,11 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       <template v-else-if="sheet==='field'"><h2>核对原文中的字段</h2><label class="form-label">确认值<input v-model="fieldDraft.value" /></label><label class="form-label">审核操作<select v-model="fieldDraft.state"><option value="confirmed">确认无误</option><option value="corrected">修正为此值</option><option value="rejected">无法确认 / 废弃此候选</option></select></label><label class="check-row"><input type="checkbox" v-model="fieldDraft.confirmRemote" /> 若该字段已经联动，我了解修改仅影响本 App；需要去目标 App 核对远端记录</label><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="saveField">保存</button></div></template>
       <template v-else-if="sheet==='detailsMenu'"><h2>文书操作</h2><button class="settings-line" @click="sheet='shareConfirm'">{{current.visibility==='private'?'主动分享给家人':'改为仅自己'}} <span>›</span></button><button class="settings-line" @click="toggleDocument('favorite',!current.favorite)">{{current.favorite?'取消收藏':'收藏文书'}} <span>›</span></button><button class="settings-line" @click="toggleDocument('archived',!current.archived_at)">{{current.archived_at?'取消归档':'归档（停止首页提示）'}} <span>›</span></button><button class="settings-line danger-text" @click="askTrash">移入回收站 <span>›</span></button><div class="sheet-actions"><button class="secondary full" @click="sheet=''">取消</button></div></template>
       <template v-else-if="sheet==='shareConfirm'"><h2>确认家庭可见范围</h2><p>共享后第二位家庭成员可以读取标题、原文、字段和附件。工资、银行、税务资料可能含敏感信息。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="changeShare">{{current.visibility==='private'?'确认共享':'确认设为私人'}}</button></div></template>
+      <template v-else-if="sheet==='trashListConfirm'">
+        <h2>移入回收站？</h2>
+        <p>「{{swipeTrashTarget?.title}}」将从文书库隐藏。原件仍保留在私有 R2，随时可从「我的 → 回收站」恢复；不会删除已同步到其他 App 的任务、账目或生词。</p>
+        <div class="sheet-actions"><button class="secondary" :disabled="busy" @click="closeSheet">取消</button><button class="destructive" :disabled="busy" @click="trashFromList">移入回收站</button></div>
+      </template>
       <template v-else-if="sheet==='trashConfirm'"><h2>移入回收站？</h2><p>文书将从普通列表隐藏。R2 原件仍占空间，但可随时恢复。永久删除需另行确认。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="destructive" :disabled="busy" @click="trashCurrent">移入回收站</button></div></template>
       <template v-else-if="sheet==='recycle'"><h2>回收站</h2><p class="muted">保留直到手动永久清理，删除后不能直接恢复。</p><div v-if="!trashItems.length" class="empty">回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
