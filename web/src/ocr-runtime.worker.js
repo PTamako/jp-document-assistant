@@ -11,9 +11,12 @@ const wasmPaths={
 let enginePromise=null;
 function getEngine(){
   if(!enginePromise){
-    // This IS already a dedicated Worker. Avoid nested SDK workers and
-    // initialize all OpenCV Embind code in this isolated CSP context.
-    enginePromise=PaddleOCR.create({lang:'japan',ocrVersion:'PP-OCRv6',worker:false,
+    // The SDK's worker:false path calls document.createElement('canvas')
+    // during input conversion. Workers do not expose document. Use the SDK's
+    // official worker:true pipeline, which converts input via ImageBitmap and
+    // reconstructs it with OffscreenCanvas in its own nested worker.
+    // Both workers are same-origin and have path-restricted OCR CSP.
+    enginePromise=PaddleOCR.create({lang:'japan',ocrVersion:'PP-OCRv6',worker:true,
       ortOptions:{backend:'wasm',numThreads:1,wasmPaths,proxy:false}})
       .catch(error=>{enginePromise=null;throw error;});
   }
