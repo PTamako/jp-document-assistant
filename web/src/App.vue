@@ -42,7 +42,9 @@ const aiFailureLabels={
  gemini_access_denied:'Gemini 密钥、权限或地区受限',
  gemini_model_unavailable:'Gemini 模型暂不可用',
  gemini_invalid_request:'Gemini 请求参数有误',
- gemini_service_unavailable:'Gemini 服务暂时异常',
+ gemini_service_unavailable:'Google 服务异常（5xx），请稍后再试',
+ gemini_service_overloaded:'Google 服务器繁忙（503），请稍后再试',
+ gemini_retry_cooldown:'Google 服务器繁忙，请稍后再试',
  gemini_request_failed:'Gemini 请求失败',
  gemini_network_error:'Gemini 网络连接失败',
  gemini_invalid_response:'Gemini 响应无法读取',
@@ -560,7 +562,7 @@ async function runAiForCurrent(){
   const result=await api('/api/documents/'+id+'/ai/analyze',{method:'POST',body:{confirm:true}});
   await openDoc(id);
   const labels={success:'AI 已生成中文解读和学习建议',cached:'已使用缓存的 AI 分析',disabled:'AI 服务当前未启用（规则讲解仍可使用）',not_configured:'所选 AI 尚未完成安全配置',budget_exhausted:'Cloudflare AI 今日已达上限',budget_disabled:'AI 预算尚未开放',provider_failed:'AI 返回无效或服务暂不可用，原有数据不受影响',...Object.fromEntries(Object.entries(aiFailureLabels).filter(([k])=>k!=='provider_failed')),awaiting_text:'请先完成 OCR 或补充原文',privacy_blocked:'请确认发送至 Gemini',too_long:'原文过长，请拆分后重试',cooldown:'稍后重试',in_progress:'本份文书的 AI 请求正在执行'};
-  flash(labels[result.ai_status]||'AI 尚未产生新结果');
+  flash(result.ai_status==='gemini_retry_cooldown'?`Google 服务器繁忙，约 ${result.retry_after_seconds||60} 秒后再试`:(labels[result.ai_status]||'AI 尚未产生新结果'));
  }catch(e){problem(e);}finally{busy.value=false;}
 }
 function openDocAiProvider(){if(!current.value)return;docAiProvider.value=current.value.ai_provider||'none';docGeminiConsent.value=false;sheet.value='docAiProvider';}
@@ -1103,7 +1105,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
             <button v-if="current.ai_provider!=='none'" class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button>
             <button class="secondary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="16"/>重新解析</button>
           </div>
-          <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}}，可重新解读。</p>
+          <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}}</p>
           <p class="multiline explanation-text" :class="{expanded:explanationExpanded}">{{explanationText||'还没有可讲解的文字，可在原文页补充。'}}</p>
           <button v-if="explanationText.length>150" class="text-button expand-copy" type="button" :aria-expanded="explanationExpanded" @click="explanationExpanded=!explanationExpanded">{{explanationExpanded?'收起讲解':'查看完整讲解'}}</button>
           <details v-if="aiAnalysis?.important_points_zh?.length" class="explain-points"><summary>重要事项（{{aiAnalysis.important_points_zh.length}}）</summary><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">{{line}}</p></details>
