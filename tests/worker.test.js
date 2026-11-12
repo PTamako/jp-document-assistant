@@ -516,6 +516,100 @@ test('trash restores without deleting R2; permanent deletion removes R2 and priv
   assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n),0);
 });
 
+
+test('recycle empty-all removes paginated trashed documents and detached attachments but keeps live documents',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const ids=[];
+ for(let i=0;i<6;i++){
+  const created=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+   data:{retention:'summary',source_type:'text',text:'予約番号 '+(i+1)+'\n提出期限：2026-11-30'}});
+  assert.equal(created.response.status,201,JSON.stringify(created.data));
+  ids.push(created.data.document_id);
+ }
+ const image=new FormData();
+ image.append('file',new File([new Uint8Array([255,216,255,224,7,6,5,4])],'keep.jpg',{type:'image/jpeg'}));
+ image.append('retention','original');
+ const live=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:image});
+ assert.equal(live.response.status,201,JSON.stringify(live.data));
+ const liveId=live.data.document_id;
+ const attachment=(await req(env,'/api/documents/'+liveId,auth(owner))).data.document.attachments[0];
+ assert.equal((await req(env,'/api/documents/'+liveId+'/attachments/'+attachment.id+'/trash',{
+  method:'POST',...auth(owner),data:{}
+ })).response.status,200);
+ for(const id of ids)assert.equal((await req(env,'/api/documents/'+id+'/trash',{
+  method:'POST',...auth(owner),data:{}
+ })).response.status,200);
+ assert.equal(env._blobs.size,1);
+ const authMissing=await req(env,'/api/recycle/empty',{method:'POST',data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(authMissing.response.status,401);
+ const csrfMissing=await req(env,'/api/recycle/empty',{
+  method:'POST',cookie:owner.cookie,data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(csrfMissing.response.status,403);
+ const notConfirmed=await req(env,'/api/recycle/empty',{
+  method:'POST',...auth(owner),data:{confirm:'NOT_APPROVED'}
+ });
+ assert.equal(notConfirmed.response.status,409);
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM documents WHERE lifecycle='trashed'").get().n,6);
+ const first=await req(env,'/api/recycle/empty',{
+  method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(first.response.status,200,JSON.stringify(first.data));
+ assert.equal(first.data.processed_documents,5);
+ assert.equal(first.data.processed_attachments,1);
+ assert.equal(first.data.has_more,true);
+ assert.equal(first.data.remaining,1);
+ assert.equal(env._blobs.size,0);
+ const second=await req(env,'/api/recycle/empty',{
+  method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(second.response.status,200,JSON.stringify(second.data));
+ assert.equal(second.data.processed_documents,1);
+ assert.equal(second.data.processed_attachments,0);
+ assert.equal(second.data.remaining,0);
+ assert.equal(second.data.has_more,false);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,1);
+ assert.equal((await req(env,'/api/documents/'+liveId,auth(owner))).response.status,200);
+ const recycle=await req(env,'/api/recycle',auth(owner));
+ const attachments=await req(env,'/api/recycle/attachments',auth(owner));
+ assert.deepEqual(recycle.data.items,[]);
+ assert.deepEqual(attachments.data.items,[]);
+ const again=await req(env,'/api/recycle/empty',{
+  method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(again.data.processed,0);
+ assert.equal(again.data.has_more,false);
+});
+test('recycle empty-all records R2 failures and safely retries without discarding metadata',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const file=new FormData();
+ file.append('file',new File([new Uint8Array([255,216,255,224,4,3,2,1])],'failed.jpg',{type:'image/jpeg'}));
+ file.append('retention','original');
+ const created=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:file});
+ const id=created.data.document_id;
+ assert.equal(created.response.status,201);
+ await req(env,'/api/documents/'+id+'/trash',{method:'POST',...auth(owner),data:{}});
+ const original=env.DOCUMENTS.delete.bind(env.DOCUMENTS);
+ let broken=true;
+ env.DOCUMENTS.delete=async key=>{if(broken)throw Error('simulated R2 failure');await original(key)};
+ const failed=await req(env,'/api/recycle/empty',{method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(failed.response.status,200);
+ assert.equal(failed.data.ok,false);
+ assert.equal(failed.data.processed,0);
+ assert.deepEqual(failed.data.failed,[{type:'document',id}]);
+ assert.equal(failed.data.remaining,1);
+ assert.equal(failed.data.has_more,true);
+ assert.equal(env._blobs.size,1);
+ assert.equal(env.DB.sql.prepare('SELECT lifecycle FROM documents WHERE id=?').get(id).lifecycle,'deletion_pending');
+ broken=false;
+ const success=await req(env,'/api/recycle/empty',{method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(success.data.ok,true);
+ assert.equal(success.data.processed_documents,1);
+ assert.equal(success.data.remaining,0);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,0);
+ assert.equal(env._blobs.size,0);
+});
+
 test('CSRF rejects state mutation and target-app bridge fails closed',async()=>{
   const env=makeEnv(),p=await boot(env);
   const failed=await req(env,'/api/documents/import/text',{method:'POST',cookie:p.cookie,data:{retention:'summary',source_type:'text',text:'納付金額 1200円'}});
