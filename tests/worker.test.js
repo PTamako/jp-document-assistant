@@ -2101,6 +2101,29 @@ test('ledger candidate preview fetches registered categories and payment sources
  assert.equal(catalogCalls,1);
  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM integration_links').get().n),0);
 });
+test('ledger options diagnose unreachable, disabled and HTML target without revealing upstream text',async()=>{
+ const {ledgerPickerOptions}=await import('../worker/bridge.js');
+ const env={
+  BRIDGE_USER_MAP:JSON.stringify({owner:{kakebo:'ledger-user'}}),
+  KAKEBO_BRIDGE_SECRET:'fixture-bridge-secret-long-enough-for-test',
+  KAKEBO_BRIDGE_SERVICE:{async fetch(){throw new TypeError('fetch failed [sensitive hostname]')}}
+ };
+ const unavailable=await ledgerPickerOptions(env,'owner','expense');
+ assert.match(unavailable.error,/无法连接家計簿正式接口/);
+ assert.doesNotMatch(unavailable.error,/sensitive|hostname|fixture/);
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(){return Response.json({ok:false,error:'bridge_disabled'},{status:404});}};
+ const disabled=await ledgerPickerOptions(env,'owner','expense');
+ assert.match(disabled.error,/未开启文书助手联动/);
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(){return new Response('<html>private origin</html>',{status:200,headers:{'content-type':'text/html'}});}};
+ const badFormat=await ledgerPickerOptions(env,'owner','expense');
+ assert.match(badFormat.error,/没有返回可用的数据格式/);
+ assert.doesNotMatch(badFormat.error,/private origin/);
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(){return Response.json({ok:true,categories:[{label:'飲食料品',value:'饮食料品'}],payment_sources:[{label:'三井住友カード',value:'三井住友カード'}]});}};
+ const success=await ledgerPickerOptions(env,'owner','expense');
+ assert.equal(success.data.categories[0].value,'饮食料品');
+ assert.equal(success.data.paymentSources[0].value,'三井住友カード');
+});
+
 test('Gmail code-model grants remain encrypted and user-bound; only selected messages are read',async()=>{
  const env=makeEnv(),owner=await boot(env);
  const noConfig=await req(env,'/api/google/gmail/status',auth(owner));

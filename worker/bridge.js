@@ -116,22 +116,39 @@ export async function ledgerPickerOptions(env,userId,kind){
  const body=JSON.stringify({source:'jp-document-assistant',actor_user_id:actor,
   payload:{operation:'options',entryType:kind}});
  const stamp=String(Date.now());
+ let stage='sign';
  try{
   const signature=await hmacHex(dest.secret,stamp+'\n'+body);
+  stage='fetch';
   const response=await dest.fetcher(new Request(dest.url,{method:'POST',headers:{
    'Content-Type':'application/json','X-DA-Timestamp':stamp,'X-DA-Signature':signature
   },body}));
+  stage='parse';
   const parsed=await response.json().catch(()=>null);
-  if(!response.ok||!parsed?.ok)return {error:classifyBridgeRejection('kakebo',response.status,parsed)?.message||'暂时无法读取家計簿选项'};
+  if(!response.ok){
+   const reason=classifyBridgeRejection('kakebo',response.status,parsed);
+   // Never send the untrusted response body or URL to the user's PWA.
+   return {error:reason?.message||'家計簿接口暂时无法使用（HTTP '+response.status+'）'};
+  }
+  if(!parsed)return {error:'家計簿接口没有返回可用的数据格式（HTTP '+response.status+'）'};
+  if(!parsed.ok)return {error:'家計簿接口未接受选项读取请求'};
   const safeList=(items,max)=>Array.isArray(items)?items.slice(0,120).filter(x=>
    typeof x?.value==='string'&&x.value.length>0&&x.value.length<=max&&
    typeof x?.label==='string'&&x.label.length>0&&x.label.length<=max
   ).map(x=>({value:x.value,label:x.label})):[];
   const categories=safeList(parsed.categories,80);
   const paymentSources=safeList(parsed.payment_sources,80);
-  if(!categories.length||!paymentSources.length)return {error:'家計簿当前没有可用的分类或支付方式'};
+  if(!categories.length||!paymentSources.length)
+   return {error:'家計簿接口未返回可用分类或支付方式，请确认正式部署'};
   return {data:{categories,paymentSources}};
- }catch{return {error:'读取家計簿选项失败，请检查联动服务'};}
+ }catch(e){
+  const reason=String(e?.message||'');
+  if(stage==='sign')return {error:'家計簿联动签名失败，请检查服务端配置'};
+  if(stage==='fetch'&&/1042|same.zone|route.*worker/i.test(reason))
+   return {error:'Cloudflare 不允许当前请求路径，请检查跨应用路由配置（1042）'};
+  if(stage==='fetch')return {error:'无法连接家計簿正式接口（网络或路由错误）'};
+  return {error:'家計簿选项响应处理失败'};
+ }
 }
 
 export async function candidatePreview(request,env,p,id){
