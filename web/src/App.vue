@@ -28,6 +28,8 @@ const categoryIcon=kind=>({salary:'wallet',card_spend:'wallet',bank:'wallet',top
 const candidateIcon=kind=>({finance:'wallet',homeflow_task:'today',vocabulary:'book',sentence:'book'}[kind]||'links');
 const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',failed:'同步失败',pending:'待确认'}[state]||'待确认');
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
+// Preserve exact retry fields in memory while the app stays open.
+const pendingCandidateRetry=ref(null);
 const aiAnalysis=computed(()=>current.value?.ai_analysis?.result||null);
 const explanationExpanded=ref(false),ocrTextExpanded=ref(false);
 const attachmentActionsTarget=ref(null);
@@ -240,7 +242,7 @@ async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={})
   const contentType=resp.headers.get('Content-Type')||'';
   const data=contentType.includes('application/json')?await resp.json():null;
   accountEpoch.assertCurrent(epoch);
-  if(!resp.ok)throw new Error(data?.message||`HTTP ${resp.status}`);
+  if(!resp.ok){const err=new Error(data?.message||`HTTP ${resp.status}`);err.code=data?.code||'';err.status=resp.status;throw err;}
   return data;
 }
 function accountApi(snapshot){
@@ -965,15 +967,36 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
  candidateDraft.date=d.confirmed_fields?.[item.payload?.date_field_key||'due_date']||item.payload?.transaction_date||new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});
  candidateDraft.category='';candidateDraft.payment_source=item.payload?.payment_source_hint||'';candidateDraft.note=item.payload?.note||'';candidateDraft.title=item.payload?.title||current.value.title;
+ if(pendingCandidateRetry.value?.id===item.id)Object.assign(candidateDraft,pendingCandidateRetry.value.body);
  candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;
  candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||item.payload?.sentence||'';
  sheet.value='candidate';integrationConfigured.value=d.available;
  }catch(e){problem(e);}}
-async function commitApprovedCandidate(){busy.value=true;try{const id=candidateDraft.id;
+async function commitApprovedCandidate(){
+ if(busy.value||!current.value)return;
+ busy.value=true;
+ const id=candidateDraft.id,docId=current.value.id;
  const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance'};
- const d=await api(`/api/candidates/${id}/commit`,{method:'POST',body,idempotencyKey:`jda-${id}`});
- sheet.value='';await openDoc(current.value.id);flash(d.already_synced?'已存在对应的联动记录':'联动已获目标 App 确认');
- }catch(e){problem(e);}finally{busy.value=false;}}
+ let confirmed=false,feedback='';
+ try{
+  const d=await api(`/api/candidates/${id}/commit`,{method:'POST',body,idempotencyKey:`jda-${id}`});
+  confirmed=true;pendingCandidateRetry.value=null;
+  feedback=d.already_synced?'已关联已有记录，不重复记账':'目标 App 已确认同步成功';
+ }catch(e){
+  // Validation problems remain editable. A completed remote attempt closes
+  // this sheet while preserving its exact retry fields and failure state.
+  const attempted=String(e?.code||'').startsWith('TARGET_')||
+   ['BRIDGE_UNCONFIRMED','LINK_CONFLICT','SENDING','RETRY_PAYLOAD_CHANGED'].includes(e?.code);
+  if(!attempted){problem(e);busy.value=false;return;}
+  pendingCandidateRetry.value={id,body};
+  feedback='同步未成功：'+(e?.message||'请核对目标 App');
+ }
+ sheet.value='';
+ refreshDocumentViews();
+ try{await openDoc(docId,{preserveTab:true,preserveScroll:true});}catch{}
+ if(confirmed)flash(feedback);else problem(new Error(feedback));
+ busy.value=false;
+}
 
 async function restore(id){busy.value=true;try{
   const d=await api(`/api/documents/${id}/restore`,{method:'POST',body:{}});
@@ -1159,7 +1182,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
           <p>扣款来源：<strong>待本人选择</strong>（不能从充值服务名称推断）</p>
           <p class="fine-print">当前家計簿安全接口只支持收入／支出，还不能接收资金转移。请先在家計簿手动选择「资产转移／充值」并核对是否已记账；此建议不会自动写入、不会重复记账。</p>
         </div>
-        <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted" v-if="item.candidate_kind==='finance'">{{item.payload.kind==='expense'?'支出':'收入'}} ¥{{Number(item.payload.amount_jpy).toLocaleString('ja-JP')}} · {{item.payload.merchant||'商户待确认'}} · {{item.payload.transaction_at||item.payload.transaction_date||'日期待确认'}}</p><p class="muted" v-else>{{(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p><p v-if="item.candidate_kind==='finance'" class="fine-print">核对金额、支付卡片及是否已经记账；信用卡授权通知不代表最终结算。</p><p v-if="item.payload.task_type==='delivery'" class="fine-print">{{item.payload.note}}；请先核验「字段」中的配送日期，再手动确认同步到 HomeFlow。</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div>
+        <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted" v-if="item.candidate_kind==='finance'">{{item.payload.kind==='expense'?'支出':'收入'}} ¥{{Number(item.payload.amount_jpy).toLocaleString('ja-JP')}} · {{item.payload.merchant||'商户待确认'}} · {{item.payload.transaction_at||item.payload.transaction_date||'日期待确认'}}</p><p v-if="item.integration_state==='failed'" class="detail-note" role="status">上次同步未成功，未确认已记账。请核对后重试。</p><p class="muted" v-else>{{(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p><p v-if="item.candidate_kind==='finance'" class="fine-print">核对金额、支付卡片及是否已经记账；信用卡授权通知不代表最终结算。</p><p v-if="item.payload.task_type==='delivery'" class="fine-print">{{item.payload.note}}；请先核验「字段」中的配送日期，再手动确认同步到 HomeFlow。</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div>
         <p v-if="!topupAdvice&&!detailCandidates.some(c=>['finance','homeflow_task'].includes(c.candidate_kind))&&!aiAnalysis?.homeflow_suggestions?.length&&!current.campaign_hints?.length&&!campaignPendingDate" class="muted">暂无待办或财务建议。这不代表邮件识别失败；可在「字段」中核对已提取的信息。</p>
         <div v-if="aiAnalysis?.homeflow_suggestions?.length" class="content-card"><h3>AI · HomeFlow 待办建议</h3><p v-for="(item,i) in aiAnalysis.homeflow_suggestions" :key="i">{{item.description_zh}}（{{item.date||'日期待确认'}}）</p><p class="fine-print">这只是 AI 建议，尚未生成可同步任务。请以人工核验日期为准。</p></div>
         <div v-if="aiAnalysis?.finance_suggestions?.length" class="content-card"><h3>AI · 家計簿建议</h3><p v-for="(item,i) in aiAnalysis.finance_suggestions" :key="i">{{item.description_zh}}</p><p class="fine-print">此处没有新增账目；实际到账或消费必须经你确认。</p></div>
