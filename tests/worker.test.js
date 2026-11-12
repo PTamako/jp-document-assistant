@@ -14,7 +14,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0016_google_oauth_callback_error.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -2276,4 +2276,40 @@ test('campaign email rule re-analysis backfills missing deadline without using G
   assert.equal(againCandidates.find(c=>c.candidate_kind==='homeflow_task').id,task.id);
   assert.equal(googleCalls,0);
  }finally{globalThis.fetch=originalFetch;}
+});
+
+test('re-interpret backfills only missing fully dated HomeFlow proposals and never resurrects rejected deadlines',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  async function create(source){
+    const r=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+      title:'本地截止日提醒',text:source,source_type:'text',retention:'summary',ai_provider:'none'
+    }});
+    assert.equal(r.response.status,201,JSON.stringify(r.data));
+    return r.data.document_id;
+  }
+  const id=await create('必要書類の提出期限：2026年11月30日までに提出してください。');
+  const original=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items
+    .find(x=>x.candidate_kind==='homeflow_task');
+  assert.ok(original,'current import proposes a reviewable task for complete dates');
+  // Legacy record: extracted fields exist but the task candidate was missing.
+  env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task'").run(id);
+  const first=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+  assert.equal(first.response.status,200,JSON.stringify(first.data));
+  const candidates=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.filter(x=>x.candidate_kind==='homeflow_task');
+  assert.equal(candidates.length,1);
+  assert.equal(candidates[0].payload.due_on,'2026-11-30');
+  assert.equal(candidates[0].payload.requires_confirmation,true);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+  const second=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+  assert.equal(second.response.status,200);
+  const repeated=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.filter(x=>x.candidate_kind==='homeflow_task');
+  assert.equal(repeated.length,1);
+  assert.equal(repeated[0].id,candidates[0].id);
+  const rejectedId=await create('申請書の提出期限：2026年12月10日までに提出してください。');
+  env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task'").run(rejectedId);
+  env.DB.sql.prepare("UPDATE document_fields SET review_state='rejected' WHERE document_id=? AND field_key='due_date'").run(rejectedId);
+  const again=await req(env,'/api/documents/'+rejectedId+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+  assert.equal(again.response.status,200);
+  const rejected=(await req(env,'/api/documents/'+rejectedId+'/candidates',auth(owner))).data.items;
+  assert.equal(rejected.filter(x=>x.candidate_kind==='homeflow_task').length,0);
 });
