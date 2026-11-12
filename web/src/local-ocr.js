@@ -6,7 +6,7 @@ export const ORT_WASM_VERSION='1.31.1';
 const ORT_WASM_BASE='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/';
 // Only the WASM binary is remote. JS/OCR runtime remains same-origin and
 // cannot upload any scanned document images to the CDN.
-const wasmPaths=Object.fromEntries(['ort-wasm-simd-threaded.jsep.wasm','ort-wasm-simd-threaded.wasm','ort-wasm-simd.jsep.wasm','ort-wasm-simd.wasm'].map(file=>[file,ORT_WASM_BASE+file]));
+const wasmPaths={wasm:ORT_WASM_BASE+'ort-wasm-simd-threaded.jsep.wasm'};
 let enginePromise;
 export function normalizeOcrItems(results){
   const items=Array.isArray(results?.[0]?.items)?results[0].items:[];
