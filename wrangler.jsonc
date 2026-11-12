@@ -25,7 +25,9 @@
     "ENABLE_DOCUMENT_AI":"true",
     "AI_ANALYSIS_DAILY_LIMIT":"2",
     "OCR_CALLS_PER_USER_DAY":"1",
-    "OCR_APP_UTC_DAILY_LIMIT":"1"
+    "OCR_APP_UTC_DAILY_LIMIT":"1",
+    // Only the official no-charge OCR.space endpoint may be called, with per-request consent.
+    "OCR_SPACE_FREE_ONLY_CONFIRMED":"true"
   },
   "workers_dev": true,
   "preview_urls": false,
