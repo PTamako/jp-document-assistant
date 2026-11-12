@@ -30,7 +30,7 @@ const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',f
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 const swipeOpenId=ref(''),swipeTrashTarget=ref(null);
 const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),localTextInput=ref(null),localImportNote=ref(''),inputMode=ref('text');
-const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original'),fileSource=ref('local_file');
+const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original'),fileSource=ref('local_file'),ocrProgress=ref('');
 const drivePickerAvailable=!!drivePickerConfig();
 const iosStandalonePwa=isIosStandalonePwa();
 const mainSiteUrl=typeof window==='undefined'?'':window.location.origin+'/';
@@ -395,7 +395,7 @@ async function saveDocAiProvider(){
  try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
  closeSheet();await openDoc(id);flash('已保存这份文书的 AI 选择，尚未调用 AI');}catch(e){problem(e);}finally{busy.value=false;}
 }
-function closeSheet(){aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function primeGooglePicker(){
   if(!drivePickerAvailable||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
   drivePickerLoadingUi.value=true;
@@ -419,18 +419,49 @@ async function copySafariSite(){
   try{await navigator.clipboard.writeText(mainSiteUrl);flash('网址已复制，请打开 Safari 地址栏粘贴访问');}
   catch{problem(new Error('无法自动复制，请长按页面显示的网址，在 Safari 地址栏打开'));}
 }
+
+async function parseSelectedFileWithOcr(file,epoch){
+  const unchanged=()=>accountEpoch.isCurrent(epoch)&&fileDraft.value===file;
+  const isPdf=/\.pdf$/i.test(file.name)||file.type==='application/pdf';
+  const isImage=/^image\/(?:jpeg|png|webp)$/.test(file.type);
+  const ocr=async blob=>{
+    const {recognizeJapaneseImage}=await import('./local-ocr.js');
+    ocrProgress.value='本机日文 OCR 识别中（首次使用需要下载模型）…';
+    return recognizeJapaneseImage(blob);
+  };
+  let result;
+  try{
+    if(isPdf){
+      result=await extractDocumentText(file,{ocrPage:ocr,maxOcrPages:10,onProgress:message=>{if(unchanged())ocrProgress.value=message;}});
+    }else if(isImage){
+      result=await ocr(file);
+    }else{
+      result=await extractDocumentText(file);
+    }
+    if(!unchanged())return;
+    fileText.value=result.text||'';
+    fileWarning.value=result.warning||(
+      isImage?'已由本机 PaddleOCR 提取候选文字，请核对姓名、金额、日期和漏行。':'');
+    if(isPdf&&(result.ocr_pages_attempted||result.pages_without_text?.length)){
+      // Keep scanned originals available for source verification.
+      fileRetention.value='original';
+    }
+  }catch(e){
+    if(unchanged()){
+      fileWarning.value='自动识别未完成：'+String(e?.message||'未知错误')+'。可保留原件并稍后重试。';
+      if(isPdf||isImage)fileRetention.value='original';
+    }
+  }finally{if(unchanged())ocrProgress.value='';}
+}
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;
-  fileDraft.value=file;fileSource.value='local_file';sheet.value='import';inputMode.value='file';fileText.value='';fileWarning.value='';aiProvider.value='';geminiConsent.value=false;
-  const hasTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
-  fileRetention.value=hasTextLayer?'summary':'original';
-  if(!hasTextLayer)return;
+  fileDraft.value=file;fileSource.value='local_file';sheet.value='import';inputMode.value='file';
+  fileText.value='';fileWarning.value='';ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;
+  const supported=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name)||/^image\/(?:jpeg|png|webp)$/.test(file.type);
+  fileRetention.value=/(?:\.pdf$)/i.test(file.name)||/^image\//.test(file.type)?'original':'summary';
+  if(!supported)return;
   const epoch=accountEpoch.snapshot();busy.value=true;
-  try{
-    const parsed=await extractDocumentText(file);
-    if(!accountEpoch.isCurrent(epoch)||fileDraft.value!==file)return;
-    fileText.value=parsed.text;fileWarning.value=parsed.warning;
-  }catch(e){problem(e);fileWarning.value=e.message;}
+  try{await parseSelectedFileWithOcr(file,epoch);}
   finally{busy.value=false;if(fileInput.value)fileInput.value.value='';}
 }
 
@@ -456,13 +487,9 @@ async function importFromGoogleDrive(){
       fileDraft.value=file;fileSource.value='google_drive';inputMode.value='file';
       fileText.value='';fileWarning.value='';
       const isTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
-      fileRetention.value=isTextLayer?'summary':'original';
-      if(isTextLayer){
-        const parsed=await extractDocumentText(file);
-        if(!accountEpoch.isCurrent(epoch)||fileDraft.value!==file)return;
-        fileText.value=parsed.text;
-        fileWarning.value=parsed.warning||'';
-      }
+      fileRetention.value=/\.pdf$/i.test(file.name)||/^image\//.test(file.type)?'original':isTextLayer?'summary':'original';
+      if(isTextLayer||/^image\/(?:jpeg|png|webp)$/.test(file.type))
+        await parseSelectedFileWithOcr(file,epoch);
     }
     sheet.value='import';
   }catch(e){problem(e)}
@@ -478,6 +505,12 @@ async function importLocalText(event){
     textDraft.text=result.text;textDraft.title=result.title;textDraft.source_type=result.source_type;
     inputMode.value='text';localImportNote.value=result.warning;sheet.value='import';
   }catch(e){problem(e);}finally{busy.value=false;if(localTextInput.value)localTextInput.value.value='';}
+}
+async function retryLocalOcr(){
+ if(!fileDraft.value||busy.value)return;
+ const file=fileDraft.value,epoch=accountEpoch.snapshot();busy.value=true;
+ try{await parseSelectedFileWithOcr(file,epoch);}
+ finally{busy.value=false;}
 }
 async function importDocument(){
   if(!aiProvider.value){problem(new Error('请为这份文书选择 AI 引擎，或明确选择仅规则分析'));return;}
@@ -833,7 +866,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
   <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button>
   <div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')" class="form-label">文件文字层（可核对修改）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="扫描页请人工输入原文"></textarea></label><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
 
         <div class="choice-form-field"><span class="choice-field-label">这份文书使用的 AI</span><button type="button" class="choice-field-control" @click="openChoice('aiProvider')"><span>{{choiceLabel('aiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p class="fine-print">每份文书单独选择，不会作为全局设置。当前 AI 新分析功能仍在开发；现有规则提取照常运行。</p>
