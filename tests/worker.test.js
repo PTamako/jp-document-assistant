@@ -2232,7 +2232,7 @@ test('campaign email rule re-analysis backfills missing deadline without using G
   'セブンプレミアムゴールド肉類加工品。今なら対象商品がよりどり2点で5%OFF！11/15(日)までの期間限定！',
   '▼LINE ID連携で500円OFFクーポンプレゼント▼',
   'キャンペーン・お得情報メール'
- ].join('\\n');
+ ].join('\n');
  const created=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
   title:'测试促销',text:source,source_type:'text',retention:'summary',ai_provider:'none'
  }});
