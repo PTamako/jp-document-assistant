@@ -1,4 +1,5 @@
 import { explainNotice } from './notice-context.js';
+import { chineseExplanation } from '../web/src/chinese-explanation.js';
 import {isSalaryDepositNotice,isCardPurchaseNotice,extractCardPurchaseFields,extractSalaryDepositFields} from './payment-notices.js';
 // Safe, deterministic Japanese document pre-analysis. This is NOT OCR or a generative translation.
 const gloss = [
@@ -240,14 +241,19 @@ export function parseJapaneseText(raw) {
   const notice=explainNotice({text,category,fields});
   const summary_zh=notice.summary||`检测到「${labels[category]}」相关表述；提取字段须核对原文。`;
   const clauseLines=clauses.length?
-   ['关键条款（逐条核对日文原文，未确认个人资格）：',
-    ...clauses.map(c=>'· '+c.term+'｜日文证据：「'+c.source_quote+'」｜中文：'+c.meaning_zh+'｜建议：'+c.action_zh)]:[];
+   ['关键注意事项：',...clauses.map(c=>'· '+c.meaning_zh+'；建议：'+c.action_zh)]:[];
   const versionLines=['policy','government','terms','campaign'].includes(category)?
    [policyVersion.source_document_date?
-      '原文版本／发布日期线索：'+policyVersion.source_document_date+'（'+policyVersion.source_date_quote+'）':
-      '原文版本／发布日期：无法确定，请手动核对',
-    '官方现行有效性：尚未核验（official_current_verified_at = null）；不得据此判定个人权益或现行法律。']: [];
-  const descriptions={merchant:'消费商户',deposit_from:'工资入账来源',transaction_date:'交易日期',due_date:'待核对截止日',event_date:'事件／预计日期',transaction_at:'交易完成时间',service_name:'服务名称',net_salary:'实发金额',gross_salary:'应发金额',total_deductions:'扣款合计',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'检针期间显示电费',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
-  const explanation_zh=[`文书类别建议：${labels[category]}`,...notice.lines,...fields.map(f=>`${descriptions[f.field_key]||(category==='utility'&&f.field_key==='amount_jpy'?'本次请款金额':category==='topup'?'充值金额':'金额线索')}：${f.normalized_value}${f.value_type==='money'?' 日元':''}｜原文：${f.source_quote}`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`)].join('\n');
+      '文件发布日期线索：'+policyVersion.source_document_date:
+      '文件发布日期：无法确定，请手动核对',
+    '官方现行有效性：尚未核验，不能据此判断个人资格或现行法律。']: [];
+  // Common notices already explain their essential fields in context. Do not
+  // repeat every parsed value or attach source_quote lines to the explanation.
+  const detailCategories=new Set(['bank','card_spend','topup','salary','tax','delivery','utility']);
+  const descriptions={transaction_date:'交易日期',due_date:'待核对截止日',event_date:'事件／预计日期',transaction_at:'交易时间',net_salary:'实发金额',gross_salary:'应发金额',total_deductions:'扣款合计',meter_period_start:'计量期间开始',meter_period_end:'计量期间结束',period_charge_jpy:'期间电费',usage_kwh:'用电量',card_advance_date:'信用卡垫付日期'};
+  const fieldLines=detailCategories.has(category)?[]:fields
+    .filter(f=>f.value_type!=='text'||f.field_key==='usage_kwh')
+    .map(f=>`${descriptions[f.field_key]||'金额或日期线索'}：${f.normalized_value}${f.value_type==='money'?' 日元':''}`);
+  const explanation_zh=chineseExplanation([`文书类别：${labels[category]}`,...notice.lines,...fieldLines,...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`)].join('\n'));
   return {category,summary_zh,explanation_zh,fields,issues,vocabulary,clauses,policyVersion,analysis_status:'needs_review'};
 }
