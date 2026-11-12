@@ -98,8 +98,8 @@ const choices={
  visibility:{title:'可见范围',items:[{value:'all',label:'全部'},{value:'mine',label:'我拥有的'},{value:'shared',label:'家庭共享'}]},
  archived:{title:'归档状态',items:[{value:'active',label:'未归档'},{value:'archived',label:'已归档'},{value:'all',label:'全部'}]},
  favorite:{title:'收藏',items:[{value:'all',label:'全部'},{value:'yes',label:'仅收藏'}]},
- aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则分析（不调用 AI）'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 免费 API'}]},
- docAiProvider:{title:'当前文书 AI 引擎',items:[{value:'none',label:'仅规则分析（不调用 AI）'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 免费 API'}]},
+ aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini'}]},
+ docAiProvider:{title:'当前文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini'}]},
  textSource:{title:'文书来源',items:[{value:'text',label:'粘贴文本'},{value:'mail_forward',label:'苹果邮件复制 / 转发'},{value:'gmail',label:'Gmail 逐封选择'},{value:'google_drive',label:'Google Drive 复制'},{value:'local_file',label:'本地文档文本'}]},
  textRetention:{title:'保存方式',items:[{value:'summary',label:'保存文字和分析结果'},{value:'analyze_only',label:'仅分析，不保存'}]},
  fileRetention:{title:'保存方式',items:[{value:'analyze_only',label:'仅分析，不保存'},{value:'summary',label:'仅保存文字，不上传 R2'},{value:'original',label:'保存私有原件到 R2'}]},
@@ -526,17 +526,17 @@ async function runAiForCurrent(){
  try{
   const result=await api('/api/documents/'+id+'/ai/analyze',{method:'POST',body:{confirm:true}});
   await openDoc(id);
-  const labels={success:'AI 已生成中文解读和学习建议',cached:'已使用缓存的 AI 分析',disabled:'AI 服务当前未启用（规则讲解仍可使用）',not_configured:'所选 AI 尚未完成安全配置',budget_exhausted:'本应用今日 AI 请求额度已达上限',budget_disabled:'AI 预算尚未开放',provider_failed:'AI 返回无效或服务暂不可用，原有数据不受影响',awaiting_text:'请先完成 OCR 或补充原文',privacy_blocked:'存在隐私风险，已阻止 Gemini 免费 API',too_long:'原文过长，请拆分后重试',cooldown:'为节省额度，失败后需间隔至少 1 小时再重试',in_progress:'本份文书的 AI 请求正在执行'};
+  const labels={success:'AI 已生成中文解读和学习建议',cached:'已使用缓存的 AI 分析',disabled:'AI 服务当前未启用（规则讲解仍可使用）',not_configured:'所选 AI 尚未完成安全配置',budget_exhausted:'Cloudflare AI 今日已达上限',budget_disabled:'AI 预算尚未开放',provider_failed:'AI 返回无效或服务暂不可用，原有数据不受影响',awaiting_text:'请先完成 OCR 或补充原文',privacy_blocked:'请确认发送至 Gemini',too_long:'原文过长，请拆分后重试',cooldown:'稍后重试',in_progress:'本份文书的 AI 请求正在执行'};
   flash(labels[result.ai_status]||'AI 尚未产生新结果');
  }catch(e){problem(e);}finally{busy.value=false;}
 }
 function openDocAiProvider(){if(!current.value)return;docAiProvider.value=current.value.ai_provider||'none';docGeminiConsent.value=false;sheet.value='docAiProvider';}
 async function saveDocAiProvider(){
  if(!current.value||busy.value)return;
- if(docAiProvider.value==='gemini'&&!docGeminiConsent.value){problem(new Error('请确认这份文书不包含私人或机密信息'));return;}
+ if(docAiProvider.value==='gemini'&&!docGeminiConsent.value){problem(new Error('请确认发送至 Gemini'));return;}
  busy.value=true;const id=current.value.id;
  try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
- closeSheet();await openDoc(id);flash('已保存这份文书的 AI 选择，尚未调用 AI');}catch(e){problem(e);}finally{busy.value=false;}
+ closeSheet();await openDoc(id);flash('已保存 AI 选择');}catch(e){problem(e);}finally{busy.value=false;}
 }
 function closeSheet(){importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){
@@ -548,7 +548,7 @@ async function parseSelectedFileWithOcr(file,epoch){
   const isImage=/^image\/(?:jpeg|png|webp)$/.test(file.type);
   const ocr=async blob=>{
     const {recognizeJapaneseImage}=await import('./local-ocr.js');
-    ocrProgress.value='本机日文 OCR 识别中（首次使用需要下载模型）…';
+    ocrProgress.value='识别中…';
     return recognizeJapaneseImage(blob);
   };
   let result;
@@ -564,9 +564,9 @@ async function parseSelectedFileWithOcr(file,epoch){
     fileText.value=result.text||'';
     if(isPdf)importPdfPages.value=Math.max(1,Number(result.pages_read)||1);
     fileWarning.value=result.warning||(
-      isImage?'已由本机 PaddleOCR 提取候选文字，请核对姓名、金额、日期和漏行。':'');
+      isImage?'识别完成，请核对文字。':'');
     if(isPdf&&fileSource.value==='google_drive'){
-      fileWarning.value='Google Drive PDF 已成功下载并读取（'+(result.pages_read||'?')+' 页）。'+fileWarning.value;
+      fileWarning.value='已读取（'+(result.pages_read||'?')+' 页）。'+fileWarning.value;
     }
     if(isPdf&&(result.ocr_pages_attempted||result.pages_without_text?.length)){
       // Keep scanned originals available for source verification.
@@ -574,7 +574,7 @@ async function parseSelectedFileWithOcr(file,epoch){
     }
   }catch(e){
     if(unchanged()){
-      fileWarning.value='自动识别未完成：'+String(e?.message||'未知错误')+'。可保留原件并稍后重试。';
+      fileWarning.value='识别失败：'+String(e?.message||'未知错误')+'。可保存原件重试。';
       if(isPdf||isImage)fileRetention.value='original';
     }
   }finally{if(unchanged())ocrProgress.value='';}
@@ -613,13 +613,13 @@ async function runImportOcrSpace(){
  }
  busy.value=true;
  try{
-   ocrProgress.value=isPdf?'正在本机将 PDF 第 '+page+' 页转换为小于 900KB 的图片（尚未上传）…':'正在本机压缩所选图片（尚未上传）…';
+   ocrProgress.value=isPdf?'正在处理第 '+page+' 页…':'正在处理图片…';
    const rendered=isPdf
      ?await (await import('./pdf-text.js')).renderPdfOcrPreview(selected,{pageNumber:page,maxBytes:900*1024})
      :await (await import('./ocr-space-image.js')).renderImageOcrPreview(selected,{maxBytes:900*1024});
    accountEpoch.assertCurrent(epoch);
    if(fileDraft.value!==selected)return;
-   ocrProgress.value='已同意发送'+(isPdf?'第 '+page+' 页':'所选图片')+'至 OCR.space Engine 3，识别中…';
+   ocrProgress.value='OCR.space 识别中…';
    const form=new FormData();
    form.append('file',rendered.blob,'scanned-page.jpg');
    form.append('confirm_ocr_space','true');
@@ -630,9 +630,9 @@ async function runImportOcrSpace(){
    const candidate=String(answer.text||'').trim();
    if(!candidate)throw new Error('OCR.space 没有返回可用文字');
    fileText.value=fileText.value.trim()?fileText.value.trim()+'\n\n'+candidate:candidate;
-   fileWarning.value='OCR.space 已返回'+(isPdf?'第 '+page+' 页':'所选图片')+'的日文候选。请核对姓名、金额、日期和漏行后再保存。';
-   flash('备用 OCR 已识别文字，请核对下方可编辑区域');
- }catch(e){problem(e);fileWarning.value='OCR.space 本次识别未完成：'+String(e?.message||'未知错误').slice(0,180);}
+   fileWarning.value='OCR.space 识别完成，请核对。';
+   flash('识别完成，请核对。');
+ }catch(e){problem(e);fileWarning.value='OCR.space 失败：'+String(e?.message||'未知错误').slice(0,180);}
  finally{if(fileDraft.value===selected)ocrProgress.value='';busy.value=false;}
 }
 async function retryLocalOcr(){
@@ -642,8 +642,8 @@ async function retryLocalOcr(){
  finally{busy.value=false;}
 }
 async function importDocument(){
-  if(!aiProvider.value){problem(new Error('请为这份文书选择 AI 引擎，或明确选择仅规则分析'));return;}
-  if(aiProvider.value==='gemini'&&!geminiConsent.value){problem(new Error('使用 Gemini 免费 API 前请确认隐私提示'));return;}
+  if(!aiProvider.value){problem(new Error('请选择分析方式'));return;}
+  if(aiProvider.value==='gemini'&&!geminiConsent.value){problem(new Error('请确认发送至 Gemini'));return;}
   busy.value=true;error.value='';
   try{
     let result;
@@ -972,7 +972,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="loadUsage">刷新服务用量 <UiIcon name="refresh-cw" :size="17"/></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
-        <div class="info-note" v-if="usage">Cloudflare / Gemini 账户级免费额度：<strong>无法确认</strong>。本应用今日文书 AI 请求 {{usage.document_ai_utc_day?.calls??0}} / {{usage.document_ai_utc_day?.limit??0}} 次；OCR 云端尝试 {{usage.app_utc_day?.calls??0}} / {{usage.app_utc_day?.limit??0}} 次。以上仅为本应用限额，不代表提供商剩余额度或是否收费。</div>
+        <div class="info-note" v-if="usage">Cloudflare AI {{usage.document_ai_utc_day?.calls??0}} / {{usage.document_ai_utc_day?.limit??0}} 次 · OCR {{usage.app_utc_day?.calls??0}} / {{usage.app_utc_day?.limit??0}} 次。Gemini 以 Google 实际额度为准。</div>
         <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
@@ -995,8 +995,8 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
       <h2>{{current.title}}</h2>
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
       <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
-      <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>文件日期与官方核验</h3><p>文件日期线索：{{current.source_document_date||'未能确定（请核对文件）'}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文讲解</h3><p class="fine-print">本份文书 AI 引擎：{{({cloudflare:'Cloudflare AI',gemini:'Gemini 免费 API',none:'仅规则分析'})[current.ai_provider]||'仅规则分析'}} · {{current.ai_analysis?.status ? (aiStatusLabel[current.ai_analysis.status]||'等待核对') : '规则讲解可用'}}</p><button class="secondary full" type="button" @click="openDocAiProvider">为这份文书选择 AI</button><button v-if="current.ai_provider!=='none'" class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 智能解读 / 使用缓存</button><p class="multiline">{{chineseExplanation(aiAnalysis?.explanation_zh||current.explanation_zh)||'目前没有可供讲解的文字内容，请检查识别结果。'}}</p><div v-if="aiAnalysis?.important_points_zh?.length" class="stack"><h3>AI 提炼重点（需核对原文）</h3><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">• {{line}}</p></div><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解并补充字段</button><p class="fine-print">只补充缺失字段，不覆盖已核验的数据，也不会修改其他 App 的记录。</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
-      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可点击「重新讲解并补充字段」提取原文中的日期及办理事项。</div><button v-if="current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&(!current.fields?.some(f=>f.field_key==='due_date')||current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全')))" class="secondary full" @click="openCompleteDeadline">确认／修改默认年份（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{field.field_key==='due_date'&&field.source_quote?.startsWith('年份自动补全')?'截止日期（按今年自动补全·待确认）':labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
+      <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>文件日期与官方核验</h3><p>文件日期线索：{{current.source_document_date||'未能确定（请核对文件）'}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">有效性请以官方信息为准。</p></div><div class="content-card"><h3>中文讲解</h3><p class="fine-print">本份文书 AI 引擎：{{({cloudflare:'Cloudflare AI',gemini:'Gemini',none:'仅规则分析'})[current.ai_provider]||'仅规则分析'}} · {{current.ai_analysis?.status ? (aiStatusLabel[current.ai_analysis.status]||'等待核对') : '规则讲解可用'}}</p><button class="secondary full" type="button" @click="openDocAiProvider">为这份文书选择 AI</button><button v-if="current.ai_provider!=='none'" class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button><p class="multiline">{{chineseExplanation(aiAnalysis?.explanation_zh||current.explanation_zh)||'目前没有可供讲解的文字内容，请检查识别结果。'}}</p><div v-if="aiAnalysis?.important_points_zh?.length" class="stack"><h3>重点</h3><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">• {{line}}</p></div><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解</button><p class="fine-print">已核验字段不变。</p></div><p class="fine-print">政策时效请自行核对。</p></section>
+      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可点击「重新讲解」提取原文中的日期及办理事项。</div><button v-if="current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&(!current.fields?.some(f=>f.field_key==='due_date')||current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全')))" class="secondary full" @click="openCompleteDeadline">确认／修改默认年份（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{field.field_key==='due_date'&&field.source_quote?.startsWith('年份自动补全')?'截止日期（按今年自动补全·待确认）':labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">付款与到账请核对。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div v-if="canManualSalary" class="content-card"><p>已识别工资入账通知，但邮件没有金额。</p><button class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写到账金额，生成家計簿收入建议</button></div>
         <div v-if="topupAdvice" class="content-card">
           <h3>家計簿 · 资金转移建议</h3>
@@ -1026,14 +1026,14 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
   <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button>
   <div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print" role="status">{{fileWarning}}</p><div v-if="fileDraft && (fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)||/^image\/(?:jpeg|png|webp)$/.test(fileDraft.type))" class="content-card"><h3>{{fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)?'扫描 PDF':'图片'}} · OCR.space 备用识别</h3><p class="fine-print">本机 PaddleOCR 失败时可手动使用备用 OCR。PDF 只处理所选页；图片在本机去除元数据并压缩为 JPEG。只有你勾选同意后才将该图片发送至 OCR.space，不必先保存到 R2。每日有免费调用限制。</p><label v-if="fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)" class="form-label">要识别的 PDF 页码（共 {{importPdfPages}} 页）<input type="number" min="1" :max="importPdfPages" step="1" v-model.number="importOcrSpacePage"/></label><label class="check-row"><input type="checkbox" v-model="importOcrSpaceConsent"/>我同意将所选扫描页发送至 OCR.space 服务器，并确认其中不包含不应外传的个人或机密资料。</label><button class="secondary full" type="button" :disabled="busy||!importOcrSpaceConsent" @click="runImportOcrSpace"><UiIcon name="scan" :size="17"/>OCR.space 备用识别{{fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)?'当前页':'这张图片'}}</button><p class="fine-print">识别结果先填入下方文本框，由你修改确认；不会直接同步 HomeFlow、知学或家計簿。</p></div><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print" role="status">{{fileWarning}}</p><div v-if="fileDraft && (fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)||/^image\/(?:jpeg|png|webp)$/.test(fileDraft.type))" class="content-card"><h3>OCR.space</h3><p class="fine-print">发送所选图片至第三方识别。</p><label v-if="fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)" class="form-label">要识别的 PDF 页码（共 {{importPdfPages}} 页）<input type="number" min="1" :max="importPdfPages" step="1" v-model.number="importOcrSpacePage"/></label><label class="check-row"><input type="checkbox" v-model="importOcrSpaceConsent"/>同意发送给 OCR.space</label><button class="secondary full" type="button" :disabled="busy||!importOcrSpaceConsent" @click="runImportOcrSpace"><UiIcon name="scan" :size="17"/>OCR.space 识别</button><p class="fine-print">结果可编辑。</p></div><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
 
         <div class="choice-form-field"><span class="choice-field-label">这份文书使用的 AI</span><button type="button" class="choice-field-control" @click="openChoice('aiProvider')"><span>{{choiceLabel('aiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p class="fine-print">每份文书单独选择，不保存全局偏好。首次导入在服务已启用时尝试 AI 分析，同版本命中缓存不会重复调用。</p>
-        <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>我已确认这份文书不含私人或机密信息，并同意今后启用时发送给 Gemini 免费 API。只有启用并执行所选 Gemini 分析时才发送。</label>
+        <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>同意将本份文书发送至 Gemini（可能产生费用）</label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
       <template v-else-if="sheet==='confirmDeadline'"><h2>补全截止日期的年份</h2><p class="fine-print">原文只有月日，系统默认使用日本当前年份作为候选；这不代表文书实际年份。请核对正式文件或办理机构，可修改年份；月日必须与原文一致。确认前不会创建 HomeFlow 待办。</p><label class="form-label">完整截止日期<input type="date" v-model="missingYearDateDraft"/></label><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template>
-      <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">只影响当前文书。保存后可点「AI 智能解读」，同版本命中缓存时不会再次调用。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>我确认这份文书不含个人或机密资料，同意未来启用时发送给 Gemini 免费 API。只有启用并执行所选 Gemini 分析时才发送。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
+      <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">仅影响本份文书。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>同意将本份文书发送至 Gemini（可能产生费用）</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
   <label class="choice-picker-file"><UiIcon name="file" :size="20"/><span>上传 PDF / 图片 / Office</span><UiIcon name="chevron-right" :size="18"/>
@@ -1155,8 +1155,8 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <label class="form-label">确认新密码<input v-model="passwordDraft.confirm_password" type="password" autocomplete="new-password" /></label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!passwordDraft.current_password||passwordDraft.new_password.length<12||passwordDraft.new_password!==passwordDraft.confirm_password" @click="changePassword">修改并退出旧会话</button></div></template>
       <template v-else-if="sheet==='invite'"><h2>邀请家人</h2><p class="muted">仅指定邮箱可使用邀请。</p><label class="form-label">对方邮箱<input v-model="inviteEmail" type="email" placeholder="family@example.com" /></label><button class="primary full" @click="issueInvite" :disabled="busy">生成 48 小时邀请码</button><label v-if="inviteToken" class="form-label">仅复制给家人使用<input :value="inviteToken" readonly @focus="$event.target.select()" /></label><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
-      <template v-else-if="sheet==='ocrSpaceConfirm'"><h2>OCR.space 免费云端识别</h2><p class="fine-print">只有你确认后，才把此附件发送至 OCR.space Engine 3。免费 API 每份文件最多 1MB、PDF 最多三页；识别结果需人工核对。私人敏感文件建议优先使用本机 OCR。</p><label class="check-row"><input type="checkbox" v-model="ocrSpaceConsent"/>我确认愿意将这份原件发送至 OCR.space（第三方服务器）。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!ocrSpaceConsent" @click="confirmOcrSpace">同意并开始识别</button></div></template>
-      <template v-else-if="sheet==='ocrConfirm'"><h2>确认本次图片识别</h2><p>仅将这张私有图片发送至 Cloudflare Workers AI。可能消耗与其他应用共用的免费额度，账户余额仍未确认；此功能默认关闭，只有管理员启用后可用。</p><p class="fine-print">相同图片会复用已完成的识别候选。结果不能作为账单付款、实际收入或政策现行有效性的证明；须对照原图核对。</p><label class="check-row"><input type="checkbox" v-model="ocrRetryStale" />上次任务卡住超过24小时时允许重新调用模型（可能再次消耗额度）</label><label class="check-row"><input type="checkbox" v-model="ocrRetryEmpty" />上次结果为空且已过24小时：再次识别一次（同样消耗免费预算）</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="confirmRunOcr">确认尝试 OCR</button></div></template>
+      <template v-else-if="sheet==='ocrSpaceConfirm'"><h2>OCR.space</h2><p class="fine-print">将此附件发送至第三方识别。</p><label class="check-row"><input type="checkbox" v-model="ocrSpaceConsent"/>同意发送</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!ocrSpaceConsent" @click="confirmOcrSpace">识别</button></div></template>
+      <template v-else-if="sheet==='ocrConfirm'"><h2>AI 图片识别</h2><p class="fine-print">发送图片至 Cloudflare AI，结果需核对。</p><label class="check-row"><input type="checkbox" v-model="ocrRetryStale"/>重试超时任务</label><label class="check-row"><input type="checkbox" v-model="ocrRetryEmpty"/>重试空结果</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="confirmRunOcr">识别</button></div></template>
       <template v-else-if="sheet==='editText'"><h2>人工核对日文原文</h2><p class="fine-print">请对照原图确认。修改文字将重新生成全部候选字段，先前审核的字段会被重置，不会自动记账或创建任务。</p><textarea v-model="editTextDraft" rows="10" placeholder="请输入或粘贴日文内容"></textarea><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!editTextDraft.trim()" @click="saveSourceText">保存并重新分析</button></div></template>
       <template v-else-if="sheet==='backup'"><h2>备份与恢复</h2><p class="fine-print">一次最多 5 份、ZIP 不超过 32 MB。请保存到你选择的 iCloud Drive/电脑，不在本 App 长期保存。仅 JSON 无法恢复永久删除后的原件。</p>
         <label class="form-label">备份范围<select v-model="backupScope" @change="backupOffset=0"><option value="all">我的全部文书（分包）</option><option value="month">某个月份</option><option value="year">某个年份</option></select></label>
