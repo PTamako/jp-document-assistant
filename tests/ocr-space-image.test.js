@@ -31,6 +31,14 @@ test('image OCR fallback removes metadata by creating a fresh bounded JPEG',asyn
    if(oldDocument===undefined)delete globalThis.document;else globalThis.document=oldDocument;
  }
 });
+test('saved image attachments show both Workers AI and OCR.space controls',()=>{
+ const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
+ assert.match(app,/@click="runOcr\(a\)"/);
+ assert.match(app,/\['image\/jpeg','image\/png','image\/webp'\]\.includes\(a\.mime\)/);
+ assert.match(app,/Workers AI 图片识别/);
+ assert.match(app,/@click="openOcrSpace\(a\)"/);
+ assert.match(app,/sheet==='ocrConfirm'/);
+});
 test('JPEG PNG and WebP import controls include explicit-consent OCR.space fallback',()=>{
  const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
  assert.match(app,/renderImageOcrPreview\(selected,\{maxBytes:900\*1024\}\)/);
