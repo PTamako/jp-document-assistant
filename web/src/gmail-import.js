@@ -31,12 +31,13 @@ export function preloadGmailIdentity(){
 // The token request must be made synchronously from the click listener.
 // Awaiting script load here forfeits Safari's popup user activation.
 export function gmailAuthorize(){
+ if(gmailConnected())return Promise.resolve({authorized:true,reused:true});
  if(!gmailConfigured())return Promise.reject(new Error('尚未配置 Gmail OAuth Web Client ID'));
  if(!gmailIdentityReady())return Promise.reject(new Error('Google 授权组件还在加载，请稍后再点击'));
  const initial=version;
  return new Promise((resolve,reject)=>{
   let settled=false;
-  const timer=setTimeout(()=>finish(new Error('Gmail 授权等待超时。请在 Safari 打开网站后重试')),60000);
+  const timer=setTimeout(()=>finish(new Error('Gmail 授权等待超时。可尝试 Safari，或直接从 iPhone「文件」导入')),60000);
   const finish=(err,result)=>{
    if(settled)return;settled=true;clearTimeout(timer);
    if(err)reject(err);else resolve(result);
@@ -48,7 +49,7 @@ export function gmailAuthorize(){
     error_callback:e=>{
      const msg=e?.type==='popup_failed_to_open'?'Gmail 授权弹窗被浏览器阻止':
       e?.type==='popup_closed'?'Gmail 授权窗口已关闭':'Gmail 授权失败';
-     finish(new Error(msg+'。请在 Safari 中重试'));
+     finish(new Error(msg+'。可尝试 Safari，或通过 iPhone「文件」导入'));
     },
     callback:reply=>{
      if(settled){
@@ -65,8 +66,10 @@ export function gmailAuthorize(){
      finish(null,{authorized:true});
     }
    });
-   client.requestAccessToken({prompt:'consent',include_granted_scopes:false});
-  }catch{finish(new Error('浏览器阻止了 Gmail 授权弹窗，请在 Safari 中重试'))}
+   // Google remembers approved grants by user/client. Never force a consent
+   // page on every import; Google still prompts for new scopes when needed.
+   client.requestAccessToken({prompt:'',include_granted_scopes:false});
+  }catch{finish(new Error('浏览器阻止了 Gmail 授权弹窗，可尝试 Safari，或通过 iPhone「文件」导入'))}
  });
 }
 export async function gmailRevoke(){
