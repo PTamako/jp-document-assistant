@@ -12,6 +12,7 @@ import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
 import { oauthCallback,handleBrowserGoogle } from './google-browser-oauth.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
+import {workersAiImportPreview} from './ocr-import-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
@@ -604,6 +605,7 @@ async function route(request,env){
   if(method==='POST'&&path==='/api/documents/import/text')return handleImportText(request,env,p);
   if(method==='POST'&&path==='/api/documents/import/file')return handleFileImport(request,env,p);
   if(method==='POST'&&path==='/api/ocr-space/preview')return ocrSpaceImportPreview(request,env,p);
+  if(method==='POST'&&path==='/api/workers-ai-ocr/preview')return workersAiImportPreview(request,env,p);
   // OCR is opt-in, quota-limited and NEVER silently approves extracted values.
 
   if(method==='GET'&&path==='/api/documents')return handleList(env,p,url);
