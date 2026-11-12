@@ -685,7 +685,7 @@ ELSE 'unreviewed' END review_status,
       const body=await readJson(request,2000);
       if(body.confirm_bank_amount!==true)bad('请先确认金额已与银行入出金明细核对','MANUAL_AMOUNT_CONFIRMATION_REQUIRED',409);
       const amountText=String(body.amount_jpy??'').normalize('NFKC').replace(/[,，]/g,'').trim();
-      if(!/^[1-9]\\d{0,11}$/.test(amountText))bad('请输入大于零的整数日元金额','INVALID_AMOUNT',400);
+      if(!/^[1-9]\d{0,11}$/.test(amountText))bad('请输入大于零的整数日元金额','INVALID_AMOUNT',400);
       const existing=await dbFirst(env.DB,"SELECT id FROM document_fields WHERE document_id=? AND field_key='net_salary'",id);
       if(existing)bad('工资金额字段已存在，请从字段页面核对或修改','AMOUNT_ALREADY_EXISTS',409);
       const prior=await dbFirst(env.DB,"SELECT id FROM action_candidates WHERE document_id=? AND candidate_kind='finance'",id);
