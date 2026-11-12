@@ -550,19 +550,22 @@ async function importLocalText(event){
 async function runImportOcrSpace(){
  if(!fileDraft.value||busy.value||!importOcrSpaceConsent.value)return;
  const selected=fileDraft.value,epoch=accountEpoch.snapshot();
- if(!(/\\.pdf$/i.test(selected.name)||selected.type==='application/pdf'))return;
- const page=Number(importOcrSpacePage.value);
- if(!Number.isSafeInteger(page)||page<1||page>importPdfPages.value){
+ const isPdf=/\.pdf$/i.test(selected.name)||selected.type==='application/pdf';
+ const isImage=/^image\/(?:jpeg|png|webp)$/.test(selected.type);
+ if(!isPdf&&!isImage)return;
+ const page=isPdf?Number(importOcrSpacePage.value):1;
+ if(isPdf&&(!Number.isSafeInteger(page)||page<1||page>importPdfPages.value)){
    problem(new Error('请选择当前 PDF 中有效的页码'));return;
  }
  busy.value=true;
  try{
-   ocrProgress.value='正在本机将 PDF 第 '+page+' 页转换为小于 900KB 的图片（尚未上传）…';
-   const {renderPdfOcrPreview}=await import('./pdf-text.js');
-   const rendered=await renderPdfOcrPreview(selected,{pageNumber:page,maxBytes:900*1024});
+   ocrProgress.value=isPdf?'正在本机将 PDF 第 '+page+' 页转换为小于 900KB 的图片（尚未上传）…':'正在本机压缩所选图片（尚未上传）…';
+   const rendered=isPdf
+     ?await (await import('./pdf-text.js')).renderPdfOcrPreview(selected,{pageNumber:page,maxBytes:900*1024})
+     :await (await import('./ocr-space-image.js')).renderImageOcrPreview(selected,{maxBytes:900*1024});
    accountEpoch.assertCurrent(epoch);
    if(fileDraft.value!==selected)return;
-   ocrProgress.value='已同意发送第 '+page+' 页至 OCR.space Engine 3，识别中…';
+   ocrProgress.value='已同意发送'+(isPdf?'第 '+page+' 页':'所选图片')+'至 OCR.space Engine 3，识别中…';
    const form=new FormData();
    form.append('file',rendered.blob,'scanned-page.jpg');
    form.append('confirm_ocr_space','true');
@@ -573,8 +576,8 @@ async function runImportOcrSpace(){
    const candidate=String(answer.text||'').trim();
    if(!candidate)throw new Error('OCR.space 没有返回可用文字');
    fileText.value=fileText.value.trim()?fileText.value.trim()+'\n\n'+candidate:candidate;
-   fileWarning.value='OCR.space 已返回第 '+page+' 页的日文候选。请核对姓名、金额、日期和漏行后再保存；其他页不会自动识别。';
-   flash('备用 OCR 已识别第 '+page+' 页，文字已填入下方可编辑区域');
+   fileWarning.value='OCR.space 已返回'+(isPdf?'第 '+page+' 页':'所选图片')+'的日文候选。请核对姓名、金额、日期和漏行后再保存。';
+   flash('备用 OCR 已识别文字，请核对下方可编辑区域');
  }catch(e){problem(e);fileWarning.value='OCR.space 本次识别未完成：'+String(e?.message||'未知错误').slice(0,180);}
  finally{if(fileDraft.value===selected)ocrProgress.value='';busy.value=false;}
 }
@@ -965,7 +968,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeou
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
   <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button>
   <div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print" role="status">{{fileWarning}}</p><div v-if="fileDraft && (/\\.pdf$/i.test(fileDraft.name)||fileDraft.type==='application/pdf')" class="content-card"><h3>扫描 PDF · OCR.space 备用识别</h3><p class="fine-print">本机 PaddleOCR 失败也可以直接使用。仅将你选择的一页转成压缩 JPEG，确认后发送至第三方 OCR.space；不必先上传或保存 PDF 到 R2。每日有免费调用限制。</p><label class="form-label">要识别的 PDF 页码（共 {{importPdfPages}} 页）<input type="number" min="1" :max="importPdfPages" step="1" v-model.number="importOcrSpacePage"/></label><label class="check-row"><input type="checkbox" v-model="importOcrSpaceConsent"/>我同意将所选扫描页发送至 OCR.space 服务器，并确认其中不包含不应外传的个人或机密资料。</label><button class="secondary full" type="button" :disabled="busy||!importOcrSpaceConsent" @click="runImportOcrSpace"><UiIcon name="scan" :size="17"/>OCR.space 备用识别当前页</button><p class="fine-print">识别结果先填入下方文本框，由你修改确认；不会直接同步 HomeFlow、知学或家計簿。</p></div><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print" role="status">{{fileWarning}}</p><div v-if="fileDraft && (fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)||/^image\/(?:jpeg|png|webp)$/.test(fileDraft.type))" class="content-card"><h3>{{fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)?'扫描 PDF':'图片'}} · OCR.space 备用识别</h3><p class="fine-print">本机 PaddleOCR 失败时可手动使用备用 OCR。PDF 只处理所选页；图片在本机去除元数据并压缩为 JPEG。只有你勾选同意后才将该图片发送至 OCR.space，不必先保存到 R2。每日有免费调用限制。</p><label v-if="fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)" class="form-label">要识别的 PDF 页码（共 {{importPdfPages}} 页）<input type="number" min="1" :max="importPdfPages" step="1" v-model.number="importOcrSpacePage"/></label><label class="check-row"><input type="checkbox" v-model="importOcrSpaceConsent"/>我同意将所选扫描页发送至 OCR.space 服务器，并确认其中不包含不应外传的个人或机密资料。</label><button class="secondary full" type="button" :disabled="busy||!importOcrSpaceConsent" @click="runImportOcrSpace"><UiIcon name="scan" :size="17"/>OCR.space 备用识别{{fileDraft.type==='application/pdf'||/\.pdf$/i.test(fileDraft.name)?'当前页':'这张图片'}}</button><p class="fine-print">识别结果先填入下方文本框，由你修改确认；不会直接同步 HomeFlow、知学或家計簿。</p></div><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
 
         <div class="choice-form-field"><span class="choice-field-label">这份文书使用的 AI</span><button type="button" class="choice-field-control" @click="openChoice('aiProvider')"><span>{{choiceLabel('aiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p class="fine-print">每份文书单独选择，不保存全局偏好。首次导入在服务已启用时尝试 AI 分析，同版本命中缓存不会重复调用。</p>
