@@ -55,7 +55,8 @@ test('dynamic JavaScript is permitted only inside the exact bundled PaddleOCR wo
 });
 
 
-test('production static assets route only OCR worker through HTTP CSP handler',()=>{
+test('production static assets route API and OCR scripts to Worker first, without changing other static assets',()=>{
  const wrangler=readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8');
- assert.match(wrangler,/"run_worker_first":\s*\["\/assets\/worker-entry-\*\.js"\]/);
+ assert.match(wrangler,/"run_worker_first":\s*\["\/api\/\*","\/assets\/worker-entry-\*\.js"\]/);
+ assert.match(wrangler,/"not_found_handling":\s*"single-page-application"/);
 });
