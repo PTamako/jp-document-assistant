@@ -1,5 +1,6 @@
 import { randomToken, hashString, hmacHex, safeEqual, newCredential, checkPassword, parseCookie, cookieForSession, clearingCookie, sameOrigin, normalizedEmail, validatePassword, isoNow } from './security.js';
 import { parseJapaneseText } from './analysis.js';
+import { deliveryTaskSuggestion } from './delivery-task.js';
 import { json, failure, readJson, bad, validString } from './http.js';
 import { attachmentTrash, attachmentRestore, attachmentDelete, attachmentList } from './lifecycle.js';
 import { planBackup, exportBackup, previewImport, confirmImport } from './backup.js';
@@ -165,7 +166,9 @@ async function analyzeStored(env,doc,force=false){
     stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'finance',JSON.stringify({kind,amount_jpy:Number(amount.normalized_value),currency:'JPY',payment_confirmed:false,category:result.category,note:'必须人工确认实际到账/付款并防重'}),now,now]);
   }
   const due=result.fields.find(f=>f.field_key==='due_date');
-  if(due){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify({title:`确认：${doc.title.slice(0,40)}`,due_on:due.normalized_value,visibility:doc.visibility,requires_confirmation:true}),now,now]);}
+  const deliveryTask=deliveryTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
+  if(deliveryTask){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify(deliveryTask),now,now]);}
+  else if(due){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify({title:`确认：${doc.title.slice(0,40)}`,due_on:due.normalized_value,visibility:doc.visibility,requires_confirmation:true}),now,now]);}
   for(const v of result.vocabulary){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'vocabulary',JSON.stringify({term:v.term,reading:v.reading,meaning_zh:v.meaning_zh,language:'ja',source:'rules-v1',requires_privacy_review:true}),now,now]);}
   await batch(env.DB,stmts);
   return {cached:false,result};
@@ -674,7 +677,7 @@ ELSE 'unreviewed' END review_status,
       const doc=await ownedDocument(env.DB,id,p,'active');
       if(!doc.extracted_text_ja)bad('这份文书尚无可解读的文字，请先导入文字','SOURCE_TEXT_REQUIRED',422);
       const parsed=parseJapaneseText(doc.extracted_text_ja);
-      const existing=await dbAll(env.DB,'SELECT field_key FROM document_fields WHERE document_id=?',id);
+      const existing=await dbAll(env.DB,'SELECT field_key,normalized_value,review_state FROM document_fields WHERE document_id=?',id);
       const keys=new Set(existing.map(x=>x.field_key)),now=isoNow();
       // Add only previously missing fields: never overwrite approved/corrected/
       // rejected values, destroy candidates, or regenerate remote idempotency keys.
@@ -685,6 +688,15 @@ ELSE 'unreviewed' END review_status,
         parsed.summary_zh,parsed.explanation_zh,nextCategory,nextVisibility,'rules-v3-notices',now,id,p.user_id,'active']];
       for(const f of added)statements.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
         randomToken(16),id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);
+      // Backfill one missing *future* delivery suggestion for an old imported mail.
+      // Do not recreate existing linked task IDs or override a rejected/corrected date.
+      const previousEvent=existing.find(x=>x.field_key==='event_date');
+      const sourceEvent=parsed.fields.find(x=>x.field_key==='event_date');
+      const canSuggest=!previousEvent||(previousEvent.review_state!=='rejected'&&previousEvent.normalized_value===sourceEvent?.normalized_value);
+      const proposed=canSuggest?deliveryTaskSuggestion(parsed,doc.extracted_text_ja,{visibility:nextVisibility}):null;
+      if(proposed)statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
+        SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task')`,
+        randomToken(16),id,'homeflow_task',JSON.stringify(proposed),now,now,id]);
       await batch(env.DB,statements);
       return json({ok:true,added_fields:added.length,preserved_fields:existing.length,
         privacy_auto_private:doc.visibility==='shared'&&nextVisibility==='private',
