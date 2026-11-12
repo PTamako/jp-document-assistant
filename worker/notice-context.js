@@ -34,7 +34,7 @@ export function explainNotice({text,category,fields}){
    if(amount)lines.push('通知中的本次消费金额：'+amount+'（实际记账前需核对银行卡明细）。');
    if(when)lines.push('通知列出的使用时间：'+when.normalized_value+'。这不是信用卡扣款日期。');
    if(/Olive|Ｏｌｉｖｅ/i.test(text))lines.push('卡片线索：原文出现 Olive／クレジット；记账时仍须本人选择正确的信用卡账户。');
-   lines.push('建议：可以作为家計簿支出候选，确认金额、交易日、支付卡片和是否已经记录后再入账；通知不一定代表最终入账，退款、取消和金额更正可能发生。');
+   lines.push('建议：可以作为家計簿支出候选，确认金额、交易日、支付卡片和是否已经记录后再入账，避免重复记账；通知不一定代表最终入账，退款、取消和金额更正可能发生。');
  }else if(directDebit){
    summary='银行账户扣款通知';
    lines.push('这是什么：这是一份银行账户自动扣款相关通知。“口座引き落とし／口座振替”指从银行账户扣款，并不等于信用卡当天新增一笔消费。');
