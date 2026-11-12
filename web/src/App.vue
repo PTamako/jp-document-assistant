@@ -30,6 +30,7 @@ const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',f
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 // Preserve exact retry fields in memory while the app stays open.
 const pendingCandidateRetry=ref(null);
+const ledgerOptions=ref({categories:[],paymentSources:[]}),ledgerOptionsError=ref(''),ledgerAttempted=ref(false);
 const aiAnalysis=computed(()=>current.value?.ai_analysis?.result||null);
 const explanationExpanded=ref(false),ocrTextExpanded=ref(false);
 const attachmentActionsTarget=ref(null);
@@ -150,6 +151,8 @@ const choices={
  importOcrEngine:{title:'识别方式',items:[{value:'local',label:'本机 PaddleOCR'},{value:'workers_ai',label:'Workers AI 图片 OCR'},{value:'ocr_space',label:'OCR.space'}]},
  fileRetention:{title:'保存方式',items:[{value:'analyze_only',label:'仅分析，不保存'},{value:'summary',label:'仅保存文字，不上传 R2'},{value:'original',label:'保存私有原件到 R2'}]},
  reviewState:{title:'审核操作',items:[{value:'confirmed',label:'确认无误'},{value:'corrected',label:'修正为此值'},{value:'rejected',label:'无法确认 / 废弃候选'}]},
+ ledgerCategory:{title:'家計簿分类',items:[]},
+ ledgerPaymentSource:{title:'家計簿支付方式',items:[]},
  taskVisibility:{title:'任务可见范围',items:[{value:'private',label:'仅自己'},{value:'household',label:'家庭共享'}]}
 };
 const fileHasTextLayer=computed(()=>/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft.value?.name||''));
@@ -167,11 +170,14 @@ function choiceValue(field){
   case 'fileRetention':return fileRetention.value;
   case 'reviewState':return fieldDraft.state;
   case 'taskVisibility':return candidateDraft.visibility;
+  case 'ledgerCategory':return candidateDraft.category;
+  case 'ledgerPaymentSource':return candidateDraft.payment_source;
   default:return '';
  }
 }
 function choiceItems(field){
- const items=choices[field]?.items||[];
+ const items=field==='ledgerCategory'?ledgerOptions.value.categories:
+  field==='ledgerPaymentSource'?ledgerOptions.value.paymentSources:(choices[field]?.items||[]);
  if(field==='fileRetention'&&!fileHasTextLayer.value)return items.filter(o=>o.value==='original');
  if(field==='taskVisibility'&&current.value?.visibility!=='shared')return items.filter(o=>o.value==='private');
  return items;
@@ -203,6 +209,8 @@ function selectChoice(value){
   case 'fileRetention':fileRetention.value=value;break;
   case 'reviewState':fieldDraft.state=value;break;
   case 'taskVisibility':candidateDraft.visibility=value;break;
+  case 'ledgerCategory':candidateDraft.category=value;break;
+  case 'ledgerPaymentSource':candidateDraft.payment_source=value;break;
  }
  backChoice();
 }
@@ -212,7 +220,10 @@ function closeNestedSheet(){
  else closeSheet();
 }
 
-const showDue=(v)=>v?String(v):'日期待确认';
+const showDue=(v)=>v?String(v):'截止日期待核验';
+const showTodayDate=d=>d?.category==='card_spend'?
+  (d.verified_transaction_at?'利用日：'+String(d.verified_transaction_at).slice(0,16)+' · 已核验':'利用日待核验'):
+  showDue(d?.due_date);
 const pageData=computed(()=>pages[activeTab.value]||{items:[],next:null,loaded:true});
 // Non-blocking global banners disappear in three seconds. Actual confirmation
 // dialogs never expire automatically: the user must choose Confirm/Cancel.
@@ -259,6 +270,7 @@ function clearPrivateWorkspace(){
   clearGmailSession();revokeOriginal();closeSheet();current.value=null;
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];
+  ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;pendingCandidateRetry.value=null;
   sessions.value=[];sessionsNext.value=null;
   backupFile.value=null;backupPass.value='';backupOffset.value=0;
   backupScope.value='all';backupMonth.value='';restoreArchive.value=null;restorePreview.value=[];
@@ -965,18 +977,27 @@ async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(a
 async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
 async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
- candidateDraft.date=d.confirmed_fields?.[item.payload?.date_field_key||'due_date']||item.payload?.transaction_date||new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});
- candidateDraft.category='';candidateDraft.payment_source=item.payload?.payment_source_hint||'';candidateDraft.note=item.payload?.note||'';candidateDraft.title=item.payload?.title||current.value.title;
+ const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
+ candidateDraft.date=String(verifiedDate||item.payload?.transaction_date||'').slice(0,10);
+ ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[]};
+ ledgerOptionsError.value=d.ledger_options_error||'';
+ ledgerAttempted.value=Number(d.integration?.attempt_count||0)>0;
+ candidateDraft.category='';
+ const hint=item.payload?.payment_source_hint||'';
+ candidateDraft.payment_source=ledgerOptions.value.paymentSources.some(x=>x.value===hint)?hint:'';
+ candidateDraft.note=item.payload?.note||'';candidateDraft.title=item.payload?.title||current.value.title;
  if(pendingCandidateRetry.value?.id===item.id)Object.assign(candidateDraft,pendingCandidateRetry.value.body);
  candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;
  candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||item.payload?.sentence||'';
- sheet.value='candidate';integrationConfigured.value=d.available;
+ sheet.value='candidate';integrationConfigured.value=d.available&&(item.candidate_kind!=='finance'||(ledgerOptions.value.categories.length>0&&ledgerOptions.value.paymentSources.length>0));
  }catch(e){problem(e);}}
 async function commitApprovedCandidate(){
  if(busy.value||!current.value)return;
  busy.value=true;
  const id=candidateDraft.id,docId=current.value.id;
  const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance'};
+ if(body.kind==='finance'&&(!ledgerOptions.value.categories.some(x=>x.value===body.category)||
+   !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){problem(new Error('请从家計簿同步的分类和支付方式中选择'));busy.value=false;return;}
  let confirmed=false,feedback='';
  try{
   const d=await api(`/api/candidates/${id}/commit`,{method:'POST',body,idempotencyKey:`jda-${id}`});
@@ -1087,7 +1108,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <div class="welcome"><div><p class="eyebrow">今日概览</p><h2>重要事项，一目了然</h2><p class="muted">待核验文书与截止日期</p></div><div class="welcome-mark"><UiIcon name="today" :size="27"/></div></div>
         <div class="section-head"><h3>需要你关注</h3><span>{{pageData.items.length}} 件</span></div>
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">还没有需要处理的文书。<button class="text-button" @click="openImport()">导入第一份</button></div>
-        <button class="item-card today-list-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon"><UiIcon :name="categoryIcon(d.category)" :size="22"/></div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showDue(d.due_date)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{todayReviewBadge(d)}}</span></button>
+        <button class="item-card today-list-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon"><UiIcon :name="categoryIcon(d.category)" :size="22"/></div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showTodayDate(d)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{todayReviewBadge(d)}}</span></button>
         <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('today',true)">{{loadingPage?'加载中…':'加载更多'}}</button>
       </section>
       <section v-else-if="activeTab==='docs'" class="page-surface" key="docs">
@@ -1391,8 +1412,10 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
       <template v-else-if="sheet==='restoreBackup'"><h2>确认恢复备份</h2><p>检查恢复内容。仅在点击确认后写入 D1 和私有 R2，不重发三个 App 的历史财务/任务/学习记录。</p><div v-for="(x,i) in restorePreview" :key="i" class="recycle-row"><div class="item-info"><strong>{{x.title}}</strong><small>{{x.action==='skip_duplicate'?'已存在 · 跳过':'恢复资料'}}{{x.has_original_reference?' · 原件按备份内容恢复':''}}</small></div></div><div class="sheet-actions"><button class="secondary" @click="sheet='backup'">取消</button><button class="primary" :disabled="busy" @click="confirmRestore">确认恢复</button></div></template>
       <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2><p class="fine-print">只有目标应用独立授权、服务端签名与账户映射配置完成才能写入。重复提交沿用同一幂等键。</p>
         <label v-if="candidateDraft.kind==='finance'" class="form-label">实际付款 / 到账日期<input v-model="candidateDraft.date" type="date" /></label>
-        <label v-if="candidateDraft.kind==='finance'" class="form-label">目标账本分类<input v-model="candidateDraft.category" placeholder="例如：税金・社会保険" /></label>
-        <label v-if="candidateDraft.kind==='finance'" class="form-label">目标账本支付方式 / 账户<input v-model="candidateDraft.payment_source" placeholder="填写目标 App 已存在的名称" /></label>
+        <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
+        <p v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="fine-print">该候选已有同步尝试；若更改此前提交值，安全去重可能拒绝。请先核对目标账本。</p>
         <label v-if="candidateDraft.kind==='finance'" class="form-label">备注<input v-model="candidateDraft.note" /></label>
         <label v-if="candidateDraft.kind==='homeflow_task'" class="form-label">任务名称<input v-model="candidateDraft.title" maxlength="120" /></label><p v-if="candidateDraft.kind==='homeflow_task'" class="fine-print">请先在「字段」核验原文日期；同步后创建的是 HomeFlow 待办，不会把配送时间当作缴费期限。</p>
         <div v-if="candidateDraft.kind==='homeflow_task'"><div class="choice-form-field"><span class="choice-field-label">任务可见范围</span><button type="button" class="choice-field-control" @click="openChoice('taskVisibility')"><span>{{choiceLabel('taskVisibility')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></div>
@@ -1401,8 +1424,8 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
-        <p v-if="!integrationConfigured" class="info-note">目标安全桥接尚未配置。你仍可预览，但现在提交会明确失败、不会修改另一个 App。</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured" @click="commitApprovedCandidate">本人确认后同步</button></div></template>
+        <p v-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)))" @click="commitApprovedCandidate">本人确认后同步</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
   </div>
