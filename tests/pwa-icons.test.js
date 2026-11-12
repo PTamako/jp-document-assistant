@@ -45,9 +45,12 @@ test('bottom navigation uses a consistent outlined SVG icon component',()=>{
   assert.match(app,/<TabIcon :name="tab\.id" \/>/);
   assert.match(app,/:aria-current="activeTab===tab\.id\?'page':undefined"/);
   assert.doesNotMatch(app,/\{\{tab\.icon\}\}|icon:'[◉▤◇☰]'/);
+  const common=text('web/src/UiIcon.vue');
+  assert.match(icon,/import UiIcon from '\.\/UiIcon\.vue'/);
+  assert.match(icon,/<UiIcon :name="name" :size="24" class="nav-icon"\/>/);
   for(const name of ['today','docs','links','mine'])
-    assert.ok(icon.includes("name==='"+name+"'"), name+' icon missing');
-  assert.match(icon,/stroke-width="1\.8"/);
-  assert.match(icon,/aria-hidden="true"/);
+    assert.ok(common.includes("name==='"+name+"'"), name+' icon missing');
+  assert.match(common,/stroke-width="1\.8"/);
+  assert.match(common,/aria-hidden="true"/);
   assert.match(css,/\.nav-icon\{[^}]*width:24px;height:24px/);
 });
