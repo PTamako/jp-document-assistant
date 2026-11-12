@@ -1,4 +1,5 @@
 import { explainNotice } from './notice-context.js';
+import {isSalaryDepositNotice,isCardPurchaseNotice,extractCardPurchaseFields,extractSalaryDepositFields} from './payment-notices.js';
 // Safe, deterministic Japanese document pre-analysis. This is NOT OCR or a generative translation.
 const gloss = [
   ['納付期限', '缴纳期限', 'のうふきげん'],
@@ -24,6 +25,8 @@ const storedValueTopup = text =>
 
 export function classifyText(text) {
   if (storedValueTopup(text)) return 'topup';
+  if (isSalaryDepositNotice(text)) return 'salary';
+  if (isCardPurchaseNotice(text)) return 'card_spend';
   if (/(?:口座引[き]?落[とし]?|口座振替|引落(?:し)?(?:予定日|金額|額))/.test(text)) return 'bank';
   if (/(?:お届け予定日時|配達予定日|配送予定日|お荷物のお届け)/.test(text)) return 'delivery';
   if (/(給与明細|差引支給|支給総額|賞与明細)/.test(text)) return 'salary';
@@ -194,7 +197,7 @@ export function parseJapaneseText(raw) {
   const clauses=interpretCriticalClauses(text);
   const issues=[];
   const dates=extractDates(text);
-  const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):[];
+  const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):category==='card_spend'?extractCardPurchaseFields(text):category==='salary'&&isSalaryDepositNotice(text)?extractSalaryDepositFields(text):[];
   const due=dates.find(d=>d.due_hint && !/(?:お届け予定|配達予定|配送予定|口座引落|引き落とし予定|受取完了)/.test(d.source_quote));
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
   // Scheduled debit and delivery dates are events, NOT actionable deadlines.
@@ -216,7 +219,7 @@ export function parseJapaneseText(raw) {
     const line=text.slice(text.lastIndexOf('\n',m.index-1)+1,text.indexOf('\n',m.index)===-1?text.length:text.indexOf('\n',m.index)).trim().slice(0,200);
     fields.push({field_key:key,value_type:'money',normalized_value:String(value),original_currency:'JPY',source_quote:line || m[0],review_state:'unreviewed'});
   }
-  if (category==='salary' && !fields.some(f=>f.field_key==='net_salary')) issues.push('未确认实发金额，不能生成收入');
+  if (category==='salary' && !fields.some(f=>f.field_key==='net_salary')) issues.push(isSalaryDepositNotice(text)?'邮件没有注明工资入账金额；可以根据银行明细手动填写后确认收入，不自动猜测金额':'未确认实发金额，不能生成收入');
   const fieldValue=k=>Number(fields.find(f=>f.field_key===k)?.normalized_value);
   if(category==='salary'&&fieldValue('gross_salary')>0&&fieldValue('total_deductions')>0&&fieldValue('net_salary')>0&&
       Math.abs(fieldValue('gross_salary')-fieldValue('total_deductions')-fieldValue('net_salary'))>1)issues.push('应发－扣款与实发不一致，请逐项核查。系统不推定税率或公司计算错误');
@@ -233,7 +236,7 @@ export function parseJapaneseText(raw) {
   const policyVersion={source_document_date:sourceDate?.date||null,
     source_date_quote:sourceDate?.source_quote||null,official_current_verified_at:null};
   const vocabulary=gloss.filter(([term])=>text.includes(term)).slice(0,8).map(([term,meaning_zh,reading])=>({term,reading,meaning_zh}));
-  const labels={salary:'工资／奖金',bank:'银行／信用卡',topup:'电子钱包／充值',tax:'缴纳／税务',insurance:'保险',medical:'医疗通知',government:'行政手续',utility:'水电燃气',housing:'住房／合同',campaign:'活动／优惠',policy:'法规／政策',terms:'合同／使用条款',manual:'使用说明',travel:'航班／旅行',hotel:'酒店预约',shopping:'购物订单',delivery:'配送／订单',other:'其他文书'};
+  const labels={salary:'工资／奖金',card_spend:'信用卡消费',bank:'银行／信用卡',topup:'电子钱包／充值',tax:'缴纳／税务',insurance:'保险',medical:'医疗通知',government:'行政手续',utility:'水电燃气',housing:'住房／合同',campaign:'活动／优惠',policy:'法规／政策',terms:'合同／使用条款',manual:'使用说明',travel:'航班／旅行',hotel:'酒店预约',shopping:'购物订单',delivery:'配送／订单',other:'其他文书'};
   const notice=explainNotice({text,category,fields});
   const summary_zh=notice.summary||`检测到「${labels[category]}」相关表述；提取字段须核对原文。`;
   const clauseLines=clauses.length?
@@ -244,7 +247,7 @@ export function parseJapaneseText(raw) {
       '原文版本／发布日期线索：'+policyVersion.source_document_date+'（'+policyVersion.source_date_quote+'）':
       '原文版本／发布日期：无法确定，请手动核对',
     '官方现行有效性：尚未核验（official_current_verified_at = null）；不得据此判定个人权益或现行法律。']: [];
-  const descriptions={due_date:'待核对截止日',event_date:'事件／预计日期',transaction_at:'交易完成时间',service_name:'服务名称',net_salary:'实发金额',gross_salary:'应发金额',total_deductions:'扣款合计',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'检针期间显示电费',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
+  const descriptions={merchant:'消费商户',deposit_from:'工资入账来源',transaction_date:'交易日期',due_date:'待核对截止日',event_date:'事件／预计日期',transaction_at:'交易完成时间',service_name:'服务名称',net_salary:'实发金额',gross_salary:'应发金额',total_deductions:'扣款合计',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'检针期间显示电费',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
   const explanation_zh=[`文书类别建议：${labels[category]}`,...notice.lines,...fields.map(f=>`${descriptions[f.field_key]||(category==='utility'&&f.field_key==='amount_jpy'?'本次请款金额':category==='topup'?'充值金额':'金额线索')}：${f.normalized_value}${f.value_type==='money'?' 日元':''}｜原文：${f.source_quote}`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`)].join('\n');
   return {category,summary_zh,explanation_zh,fields,issues,vocabulary,clauses,policyVersion,analysis_status:'needs_review'};
 }
