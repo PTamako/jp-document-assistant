@@ -9,6 +9,7 @@ import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
 import TabIcon from './TabIcon.vue';
+import UiIcon from './UiIcon.vue';
 import { invalidateDocumentLists } from './document-list-cache.js';
 import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
@@ -22,6 +23,9 @@ const pages=reactive({today:{items:[],next:0,loaded:false},docs:{items:[],next:0
 const loadingPage=ref(false),search=ref(''),category=ref('');
 const cats={salary:'工资／奖金',bank:'银行／信用卡',tax:'税务／缴纳',utility:'水电燃气',housing:'房屋租赁',campaign:'活动／优惠',policy:'法规／政策',manual:'使用说明',travel:'旅行交通',delivery:'配送订单',other:'其他'};
 const categoryOptions=Object.entries(cats);
+const categoryIcon=kind=>({salary:'wallet',bank:'wallet',tax:'file-text',utility:'file-text',housing:'file-text',campaign:'tag',policy:'shield',manual:'book',travel:'calendar',delivery:'archive'}[kind]||'file');
+const candidateIcon=kind=>({finance:'wallet',homeflow_task:'today',vocabulary:'book',sentence:'book'}[kind]||'links');
+const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',failed:'同步失败',pending:'待确认'}[state]||'待确认');
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 const swipeOpenId=ref(''),swipeTrashTarget=ref(null);
 const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),localTextInput=ref(null),localImportNote=ref(''),inputMode=ref('text');
@@ -580,10 +584,10 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
 <div class="app-shell">
   <template v-if="!user">
     <div class="auth-shell">
-      <div class="auth-symbol">文</div>
-      <p class="eyebrow">PRIVATE FAMILY SPACE</p>
+      <div class="auth-symbol"><UiIcon name="file-text" :size="30"/></div>
+      <p class="eyebrow">私人家庭空间</p>
       <h1>日本生活文书助手</h1>
-      <p class="muted auth-intro">看懂日文通知，确认重要日期。两人家庭，默认私人保存。</p>
+      <p class="muted auth-intro">读懂日本生活文书，重要事项不错过。</p>
       <div class="auth-panel">
         <div class="segments"><button v-for="m in [{id:'login',name:'登录'},{id:'bootstrap',name:'首次设置'},{id:'join',name:'接受邀请'}]" :key="m.id" :class="{selected:authMode===m.id}" @click="authMode=m.id;error=''">{{m.name}}</button></div>
         <p v-if="initialized===false" class="fine-print">家庭尚未初始化。请使用「首次设置」，输入 Cloudflare 中完整的初始化令牌。设置完成后再使用「登录」。</p>
@@ -596,52 +600,52 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
           <button class="primary action-large" :disabled="busy" type="submit">{{busy?'处理中…':authMode==='login'?'登录':authMode==='join'?'加入家庭':'初始化私人空间'}}</button>
         </form>
       </div>
-      <p class="fine-print">内容保存在私有云端；不在浏览器持久保存工资、原图或 OCR 文字。</p>
+      <p class="fine-print">私人云端保存，敏感内容不留在设备缓存中。</p>
     </div>
   </template>
   <template v-else>
-    <header class="topbar"><div><p class="eyebrow">日本生活文书助手 · 仅家庭使用</p><h1>{{tabs.find(t=>t.id===activeTab)?.name}}</h1></div><button class="round ghost" aria-label="导入文书" @click="openImport()">＋</button></header>
+    <header class="topbar"><div><p class="eyebrow">日本生活文书助手</p><h1>{{tabs.find(t=>t.id===activeTab)?.name}}</h1></div><button class="round ghost top-add" aria-label="导入文书" @click="openImport()"><UiIcon name="plus" :size="23"/></button></header>
     <main class="main-content">
       <section v-if="activeTab==='today'" class="page-surface" key="today">
-        <div class="welcome"><div><p class="eyebrow">TODAY · あんしん</p><h2>重要的事，别漏掉。</h2><p class="muted">待确认与截止事项会集中显示。日期未经人工核验前不会自动创建提醒。</p></div><div class="welcome-mark">日</div></div>
+        <div class="welcome"><div><p class="eyebrow">今日概览</p><h2>重要事项，一目了然</h2><p class="muted">待核验文书与截止日期</p></div><div class="welcome-mark"><UiIcon name="today" :size="27"/></div></div>
         <div class="section-head"><h3>需要你关注</h3><span>{{pageData.items.length}} 件</span></div>
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">还没有需要处理的文书。<button class="text-button" @click="openImport()">导入第一份</button></div>
-        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon">{{d.category==='salary'?'¥':d.category==='campaign'?'%':'文'}}</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showDue(d.due_date)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{documentReviewLabel(d)==='已核验'?(d.due_date?dueState(d.due_date):'已核验'):documentReviewLabel(d)==='部分核验'?'部分核验':d.analysis_status==='needs_review'?'待核验':dueState(d.due_date)}}</span></button>
+        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon"><UiIcon :name="categoryIcon(d.category)" :size="22"/></div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showDue(d.due_date)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{documentReviewLabel(d)==='已核验'?(d.due_date?dueState(d.due_date):'已核验'):documentReviewLabel(d)==='部分核验'?'部分核验':d.analysis_status==='needs_review'?'待核验':dueState(d.due_date)}}</span></button>
         <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('today',true)">{{loadingPage?'加载中…':'加载更多'}}</button>
       </section>
       <section v-else-if="activeTab==='docs'" class="page-surface" key="docs">
-        <div class="search-row"><input v-model="search" type="search" placeholder="搜索标题或中文摘要" @keyup.enter="searchDocs" /><button class="filter-button" aria-label="文书筛选" @click="sheet='filter'">筛选</button><button class="filter-button" @click="searchDocs">查找</button></div>
+        <div class="search-row"><input v-model="search" type="search" placeholder="搜索标题或中文摘要" @keyup.enter="searchDocs" /><button class="filter-button icon-label" aria-label="文书筛选" @click="sheet='filter'"><UiIcon name="filter" :size="17"/>筛选</button><button class="filter-button icon-label" @click="searchDocs"><UiIcon name="search" :size="17"/>查找</button></div>
         <div class="section-head"><h3>文书库</h3><span>{{category?cats[category]:'全部类型'}}</span></div>
-        <p v-if="pageData.items.length" class="fine-print swipe-hint">向左滑动文书，或点击右侧 ···，即可显示删除操作（先移入回收站）。</p>
+        <p v-if="pageData.items.length" class="fine-print swipe-hint">左滑或点击右侧按钮，可移入回收站。</p>
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">没有匹配的文书。</div>
         <DocumentSwipeRow v-for="d in pageData.items" :key="d.id" :id="d.id"
           :revealed="swipeOpenId===d.id" :disabled="busy"
           @reveal="swipeOpenId=d.id" @hide="swipeOpenId=''" @delete="askTrashFromList(d)">
-          <button class="item-card" type="button" @click="openDoc(d.id)"><div class="item-icon">▤</div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{d.favorite?'★ · ':''}}{{cats[d.category]||d.category}} · {{d.visibility==='shared'?'家庭共享':'仅自己'}}{{d.archived_at?' · 已归档':''}}</p></div><span class="state-tag">{{documentReviewLabel(d)}}</span></button>
+          <button class="item-card" type="button" @click="openDoc(d.id)"><div class="item-icon"><UiIcon :name="categoryIcon(d.category)" :size="22"/></div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{d.favorite?'★ · ':''}}{{cats[d.category]||d.category}} · {{d.visibility==='shared'?'家庭共享':'仅自己'}}{{d.archived_at?' · 已归档':''}}</p></div><span class="state-tag">{{documentReviewLabel(d)}}</span></button>
         </DocumentSwipeRow>
         <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('docs',true)">加载更多</button>
       </section>
       <section v-else-if="activeTab==='links'" class="page-surface" key="links">
-        <div class="info-note">三个 App 的安全服务桥尚未建立。这里先展示候选预览，不会自动记账、发提醒或写入生词本。</div>
+        <div class="info-note">核对提取结果后，再选择同步到目标 App。</div>
         <div class="section-head"><h3>待确认的联动</h3><span>独立核验 · 幂等</span></div>
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">文书识别后的财务、任务、学习建议会出现在这里。</div>
-        <button class="item-card" v-for="item in pageData.items" :key="item.id" @click="openDoc(item.document_id)"><div class="item-icon">◇</div><div class="item-info"><div class="item-title">{{candidateLabel[item.candidate_kind]}}</div><p>{{item.title}} · {{item.integration_state||'待接入'}}</p></div><span class="state-tag">预览</span></button>
+        <button class="item-card" v-for="item in pageData.items" :key="item.id" @click="openDoc(item.document_id)"><div class="item-icon"><UiIcon :name="candidateIcon(item.candidate_kind)" :size="22"/></div><div class="item-info"><div class="item-title">{{candidateLabel[item.candidate_kind]}}</div><p>{{item.title}} · {{integrationLabel(item.integration_state)}}</p></div><span class="state-tag">预览</span></button>
         <button v-if="pageData.next!==null" class="load-more" @click="loadTab('links',true)">加载更多</button>
       </section>
       <section v-else class="page-surface" key="mine">
         <div class="profile-card"><div class="avatar">{{(user.display_name||user.email||'我').slice(0,1).toUpperCase()}}</div><div><h3>{{user.display_name||'家庭成员'}}</h3><p class="muted">{{user.email}} · {{user.role==='owner'?'管理员':'家庭成员'}}</p></div></div>
         <div class="section-head"><h3>家庭与数据</h3></div>
-        <button class="settings-line" v-if="user.role==='owner'" @click="sheet='invite'">邀请第二位家庭成员 <span>›</span></button>
-        <button class="settings-line" @click="showRecycle">回收站 · 仅自己的文书 <span>›</span></button>
-        <button class="settings-line" @click="sheet='backup'">备份与恢复（ZIP / 加密） <span>›</span></button>
-        <button class="settings-line" @click="openCalendar">私人日历订阅（ICS） <span>›</span></button>
-        <button class="settings-line" @click="loadUsage">刷新服务用量 <span>↻</span></button>
-        <button class="settings-line" :disabled="busy" @click="cleanupStorage">重试无引用 R2 原件清理 <span>↻</span></button>
+        <button class="settings-line" v-if="user.role==='owner'" @click="sheet='invite'">邀请第二位家庭成员 <UiIcon name="chevron-right" :size="18"/></button>
+        <button class="settings-line" @click="showRecycle">回收站 <UiIcon name="chevron-right" :size="18"/></button>
+        <button class="settings-line" @click="sheet='backup'">备份与恢复 <UiIcon name="chevron-right" :size="18"/></button>
+        <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
+        <button class="settings-line" @click="loadUsage">刷新服务用量 <UiIcon name="refresh-cw" :size="17"/></button>
+        <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
         <div class="info-note" v-if="usage">Cloudflare 全账号免费额度：<strong>未确认</strong>。本地统计 AI 调用 {{usage.local_today.ai_calls}} 次，不代表全账号剩余额度。</div>
-        <button class="settings-line" @click="openSessions">管理登录设备与会话 <span>›</span></button>
-        <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <span>›</span></button>
-        <button class="settings-line" @click="logout">退出当前账号 <span>›</span></button>
-        <p class="fine-print">原件按需从私有 R2 读取；删除文书不会删除其他三个 App 的已确认数据。</p>
+        <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
+        <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
+        <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
+        <p class="fine-print">删除文书不会删除其他 App 已同步的记录。</p>
       </section>
     </main>
     <nav class="bottom-nav" aria-label="主要导航">
@@ -650,53 +654,53 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       </button>
     </nav>
   </template>
-  <div v-if="notice" class="status-toast" role="status"><span>{{notice}}</span><button @click="notice=''" aria-label="关闭提示">×</button></div>
-  <div v-if="error" class="status-toast error-toast" role="alert"><span>{{error}}</span><button @click="error=''" aria-label="关闭错误">×</button></div>
+  <div v-if="notice" class="status-toast" role="status"><span>{{notice}}</span><button @click="notice=''" aria-label="关闭提示"><UiIcon name="x" :size="19"/></button></div>
+  <div v-if="error" class="status-toast error-toast" role="alert"><span>{{error}}</span><button @click="error=''" aria-label="关闭错误"><UiIcon name="x" :size="19"/></button></div>
 
   <div v-if="current" class="detail-surface" role="dialog" aria-modal="true" aria-label="文书详情">
-    <div class="detail-top"><button class="round ghost" @click="closeDetail" aria-label="返回">‹</button><strong>文书详情</strong><button class="round ghost" @click="sheet='detailsMenu'" aria-label="更多操作">···</button></div>
+    <div class="detail-top"><button class="round ghost" @click="closeDetail" aria-label="返回"><UiIcon name="arrow-left" :size="21"/></button><strong>文书详情</strong><button class="round ghost" @click="sheet='detailsMenu'" aria-label="更多操作"><UiIcon name="ellipsis" :size="22"/></button></div>
     <div class="detail-body">
       <p class="eyebrow">{{cats[current.category]||current.category}} · {{current.visibility==='shared'?'家庭共享':'仅自己'}}</p>
       <h2>{{current.title}}</h2>
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
       <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
       <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>原文版本与官方核验</h3><p>原文注明的日期：{{current.source_document_date||'未能确定（请核对原件）'}}</p><p v-if="current.source_date_quote" class="muted">来源：{{current.source_date_quote}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文说明</h3><p class="multiline">{{current.explanation_zh||'当前仅保存原件。图像 OCR 尚未验证，建议使用粘贴文字导入。'}}</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
-      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button" @click="amountVisible=!amountVisible">{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>原文：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
-      <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':'截止日：'+item.payload.due_on}}</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div><p class="fine-print">HomeFlow 负责任务提醒，家計簿负责收支。这里不会自动写入。</p></section>
+      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>原文：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
+      <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':'截止日：'+item.payload.due_on}}</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div><p class="fine-print">确认后才写入目标 App。</p></section>
       <section v-if="detailTab==='study'"><h3 class="section-title">值得记住的日文词语</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id"><strong>{{item.payload.term}}</strong><p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入</button></div><div v-if="!detailCandidates.some(c=>c.candidate_kind==='vocabulary')" class="empty">尚未找到可复用词语。</div></section>
-      <section v-if="detailTab==='original'"><div class="content-card"><h3>原文与原件</h3><p class="multiline" v-if="current.extracted_text_ja">{{current.extracted_text_ja}}</p><p v-else class="muted">原文尚未提取。你可以主动查看私有附件，查看时才会请求 R2。</p><button class="secondary full" @click="editText">人工输入 / 修正 OCR 文字</button><button class="secondary full" @click="extraFileInput?.click()">＋ 添加扫描页或附件</button><input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" /><div class="attachment-row" v-for="(a,i) in current.attachments" :key="a.id"><button class="secondary" @click="showOriginal(a)">查看 · {{a.file_label}}</button><button class="secondary small" :disabled="busy||i===0" :aria-label="`将${a.file_label}上移一页`" @click="moveAttachment(a,-1)">↑</button><button class="secondary small" :disabled="busy||i===current.attachments.length-1" :aria-label="`将${a.file_label}下移一页`" @click="moveAttachment(a,1)">↓</button><button class="secondary small" @click="runOcr(a)">尝试 OCR</button><button class="secondary small danger-text" @click="trashAttachment(a)">移入回收站</button></div></div><p class="fine-print">不在后台预取原图或保存至本机持久缓存。</p></section>
+      <section v-if="detailTab==='original'"><div class="content-card"><h3>原文与原件</h3><p class="multiline" v-if="current.extracted_text_ja">{{current.extracted_text_ja}}</p><p v-else class="muted">原文尚未提取，可查看附件。</p><button class="secondary full" @click="editText">人工输入 / 修正 OCR 文字</button><button class="secondary full icon-label" @click="extraFileInput?.click()"><UiIcon name="plus" :size="18"/>添加扫描页或附件</button><input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" /><div class="attachment-row" v-for="(a,i) in current.attachments" :key="a.id"><button class="secondary" @click="showOriginal(a)">查看 · {{a.file_label}}</button><button class="secondary small" :disabled="busy||i===0" :aria-label="`将${a.file_label}上移一页`" @click="moveAttachment(a,-1)"><UiIcon name="arrow-up" :size="16"/></button><button class="secondary small" :disabled="busy||i===current.attachments.length-1" :aria-label="`将${a.file_label}下移一页`" @click="moveAttachment(a,1)"><UiIcon name="arrow-down" :size="16"/></button><button class="secondary small" @click="runOcr(a)"><UiIcon name="scan" :size="16"/>识别文字</button><button class="secondary small danger-text" @click="trashAttachment(a)"><UiIcon name="trash" :size="16"/>移入回收站</button></div></div><p class="fine-print">原件仅在查看时加载。</p></section>
     </div>
   </div>
 
   <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeSheet()">
     <section class="bottom-sheet" role="dialog" aria-modal="true" :aria-label="sheet">
       <div class="grabber"></div>
-      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><p v-if="iosStandalonePwa && (gmailAvailable||drivePickerAvailable)" class="info-note">这是 iPhone 主屏幕 PWA。Google 网页授权请在 Safari 完成；如果文件已在 iPhone「文件」App 中，也可以直接选取，无须 Google 弹窗。</p>
+      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><p v-if="iosStandalonePwa && (gmailAvailable||drivePickerAvailable)" class="info-note">iPhone PWA 可直接导入本地文件；Google 授权请使用 Safari。</p>
         <div v-if="iosStandalonePwa" class="upload-box">
           <label class="pwa-native-file-button">
             从 iPhone「文件」选择 PDF / Word / 图片
             <input type="file" class="visually-hidden" accept=".pdf,.docx,.xlsx,.pptx,.jpg,.jpeg,.png,.webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" @change="selectFile" />
           </label>
-          <p class="fine-print">如果 Google Drive 已作为「文件」App 的位置提供者，可从那里选取已下载的 PDF / Office / 图片。Google Docs 原生文件需先在 Google Drive 中导出为支持的格式；不会读取整个云端硬盘。</p>
+          <p class="fine-print">支持「文件」App 里的 PDF、Office 和图片；Google Docs 请先导出。</p>
         </div>
-        <div v-if="gmailAvailable" class="upload-box"><button class="secondary full" :disabled="busy" @click="openGmailSheet">{{iosStandalonePwa?'Gmail 授权：在 Safari 打开':'从 Gmail 选择邮件（只读 / 逐封）'}}</button><p class="fine-print">只有主动授权和选取后才读取文字，无后台同步、自动上传或附件下载。</p></div>
-        <div v-if="drivePickerAvailable" class="upload-box"><button class="secondary full" :disabled="busy||(!iosStandalonePwa&&!drivePickerReadyUi)" @click="importFromGoogleDrive">{{iosStandalonePwa?'Google Drive：在 Safari 打开':drivePickerLoadingUi?'正在准备 Google Drive 授权组件…':'从 Google Drive 选择文件（逐份授权）'}}</button><p class="fine-print">只读取你主动选择的文件。读取后需要再次确认保存。</p><button v-if="!iosStandalonePwa&&!drivePickerLoadingUi&&!drivePickerReadyUi" class="text-button full" type="button" @click="primeGooglePicker">重新加载 Google Drive 组件</button></div>
-        <template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><div class="upload-box"><button class="secondary" :disabled="busy" @click="localTextInput?.click()">读取本地 .eml 邮件 / .txt 文字文件</button><input ref="localTextInput" type="file" accept=".eml,.txt,message/rfc822,text/plain" class="visually-hidden" @change="importLocalText" /><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><p class="fine-print">仅在本次页面会话中提取文字；不执行邮件 HTML，不抓取远程图片或附件。</p></div><label class="form-label">来源<select v-model="textDraft.source_type"><option value="text">粘贴文本</option><option value="mail_forward">苹果邮件复制 / 转发</option><option value="gmail">Gmail 逐封选择</option><option value="google_drive">Google Drive 复制</option><option value="local_file">本地文档文本</option></select></label><div class="radio-stack"><label><input v-model="textDraft.retention" type="radio" value="summary" />保存文书文字和分析结果</label><label><input v-model="textDraft.retention" type="radio" value="analyze_only" />仅规则分析，不存储内容</label></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')" class="form-label">文件文字层（可核对修改）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="扫描页请人工输入原文"></textarea></label><div class="radio-stack"><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')"><input v-model="fileRetention" type="radio" value="analyze_only" />仅分析、不保存</label><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')"><input v-model="fileRetention" type="radio" value="summary" />仅保存文字（不请求 R2）</label><label><input v-model="fileRetention" type="radio" value="original" />保存私有原件到 R2</label></div><p class="fine-print">PDF、Word、Excel、PowerPoint 优先在本机提取文字层，不自动 OCR，不在本机持久保存。图片仅临时压缩。</p></template>
+        <div v-if="gmailAvailable" class="upload-box"><button class="secondary full" :disabled="busy" @click="openGmailSheet">{{iosStandalonePwa?'Gmail 授权：在 Safari 打开':'从 Gmail 选择邮件（只读 / 逐封）'}}</button><p class="fine-print">只读取你选定的邮件正文，不自动同步附件。</p></div>
+        <div v-if="drivePickerAvailable" class="upload-box"><button class="secondary full" :disabled="busy||(!iosStandalonePwa&&!drivePickerReadyUi)" @click="importFromGoogleDrive">{{iosStandalonePwa?'Google Drive：在 Safari 打开':drivePickerLoadingUi?'正在准备 Google Drive 授权组件…':'从 Google Drive 选择文件（逐份授权）'}}</button><p class="fine-print">仅访问选定文件，保存前可确认。</p><button v-if="!iosStandalonePwa&&!drivePickerLoadingUi&&!drivePickerReadyUi" class="text-button full" type="button" @click="primeGooglePicker">重新加载 Google Drive 组件</button></div>
+        <template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><div class="upload-box"><button class="secondary" :disabled="busy" @click="localTextInput?.click()">读取本地 .eml 邮件 / .txt 文字文件</button><input ref="localTextInput" type="file" accept=".eml,.txt,message/rfc822,text/plain" class="visually-hidden" @change="importLocalText" /><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><p class="fine-print">仅提取文字，不加载远程图片和附件。</p></div><label class="form-label">来源<select v-model="textDraft.source_type"><option value="text">粘贴文本</option><option value="mail_forward">苹果邮件复制 / 转发</option><option value="gmail">Gmail 逐封选择</option><option value="google_drive">Google Drive 复制</option><option value="local_file">本地文档文本</option></select></label><div class="radio-stack"><label><input v-model="textDraft.retention" type="radio" value="summary" />保存文书文字和分析结果</label><label><input v-model="textDraft.retention" type="radio" value="analyze_only" />仅规则分析，不存储内容</label></div></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')" class="form-label">文件文字层（可核对修改）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="扫描页请人工输入原文"></textarea></label><div class="radio-stack"><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')"><input v-model="fileRetention" type="radio" value="analyze_only" />仅分析、不保存</label><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')"><input v-model="fileRetention" type="radio" value="summary" />仅保存文字（不请求 R2）</label><label><input v-model="fileRetention" type="radio" value="original" />保存私有原件到 R2</label></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
       <template v-else-if="sheet==='safariGoogleGuide'">
         <h2>请在 Safari 中完成 Google 授权</h2>
-        <p class="info-note">iPhone 主屏幕 PWA 可能无法接收 Google 的弹窗授权结果。当前没有读取邮件或云端文件，也没有保存任何内容。</p>
+        <p class="info-note">iPhone 主屏幕 PWA 可能拦截 Google 授权弹窗。</p>
         <p>请复制下方网址，在 <strong>Safari 地址栏</strong>打开文书助手并登录，点击右上角「＋」，再选择 Gmail 或 Google Drive。</p>
         <button class="primary full" type="button" @click="copySafariSite">复制文书助手网址</button>
         <a class="secondary full safari-link" :href="mainSiteUrl" target="_blank" rel="noopener noreferrer">尝试在浏览器中打开</a>
         <p class="fine-print safari-url">{{mainSiteUrl}}</p>
-        <p class="fine-print">在 Safari 保存后，回到 PWA 点击下面的「刷新文书库」即可看到资料。两个入口使用同一个正式 D1，不会再次导入或创建重复文件。</p>
+        <p class="fine-print">Safari 保存后，回到这里刷新文书库即可。</p>
         <button class="secondary full" type="button" :disabled="loadingPage" @click="refreshDocumentsAfterSafari">{{loadingPage?'正在刷新文书库…':'刷新文书库'}}</button>
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">返回</button></div>
       </template>
       <template v-else-if="sheet==='gmail'"><h2>Gmail · 只读选取</h2>
-        <p class="fine-print">OAuth Token 仅保留在本次页面会话内存。每页主动读取最多五封的标题；选择后才获取对应文字正文。没有后台全量同步，不读取附件或远程像素，保存还需要人工核对。</p>
+        <p class="fine-print">一次最多浏览五封邮件；选择后只读取正文，保存前需确认。</p>
         <button v-if="!gmailAuthorizedUi" class="primary full" :disabled="gmailBusy||gmailIdentityLoadingUi||!gmailIdentityReadyUi" @click="connectGmail">{{gmailIdentityLoadingUi?'正在准备 Google 登录…':'授权 Gmail 只读访问'}}</button><button v-if="!gmailAuthorizedUi&&!gmailIdentityLoadingUi&&!gmailIdentityReadyUi" class="text-button full" type="button" @click="openGmailSheet">重试加载 Google 登录组件</button>
         <template v-else>
           <label class="form-label">Gmail 搜索条件<input v-model.trim="gmailQuery" maxlength="180" placeholder="newer_than:30d" /></label>
@@ -709,20 +713,20 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
           <button v-if="gmailNext" class="text-button full" :disabled="gmailBusy" @click="loadGmailMessages(true)">继续查看五封</button>
           <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">撤销 Gmail 授权</button>
         </template>
-        <p class="fine-print">Google Gmail 只读属于受限授权范围，正式 OAuth 审核和 iPhone 实机测试尚未完成；Apple Mail 聚合邮箱无法由 PWA 直接读取。</p>
+        <p class="fine-print">Gmail 只读授权受 Google 限制；Apple Mail 聚合邮箱无法直接读取。</p>
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
       </template>
       <template v-else-if="sheet==='filter'"><h2>筛选文书</h2><label class="form-label">可见范围<select v-model="visibilityFilter"><option value="all">全部</option><option value="mine">我拥有的</option><option value="shared">家庭共享</option></select></label><label class="form-label">归档状态<select v-model="archivedFilter"><option value="active">未归档</option><option value="archived">已归档</option><option value="all">全部</option></select></label><label class="form-label">收藏<select v-model="favoriteFilter"><option value="all">全部</option><option value="yes">仅收藏</option></select></label><label class="form-label">创建月份<input type="month" v-model="monthFilter" /></label><button class="primary full" @click="searchDocs">应用筛选</button><h3>文书类型</h3><div class="option-list"><button :class="{chosen:category===''}" @click="category='';searchDocs()">全部类型</button><button v-for="[key,label] in categoryOptions" :key="key" :class="{chosen:category===key}" @click="category=key;searchDocs()">{{label}}</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div></template>
       <template v-else-if="sheet==='field'"><h2>核对原文中的字段</h2><label class="form-label">确认值<input v-model="fieldDraft.value" /></label><label class="form-label">审核操作<select v-model="fieldDraft.state"><option value="confirmed">确认无误</option><option value="corrected">修正为此值</option><option value="rejected">无法确认 / 废弃此候选</option></select></label><label class="check-row"><input type="checkbox" v-model="fieldDraft.confirmRemote" /> 若该字段已经联动，我了解修改仅影响本 App；需要去目标 App 核对远端记录</label><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="saveField">保存</button></div></template>
-      <template v-else-if="sheet==='detailsMenu'"><h2>文书操作</h2><button class="settings-line" @click="sheet='shareConfirm'">{{current.visibility==='private'?'主动分享给家人':'改为仅自己'}} <span>›</span></button><button class="settings-line" @click="toggleDocument('favorite',!current.favorite)">{{current.favorite?'取消收藏':'收藏文书'}} <span>›</span></button><button class="settings-line" @click="toggleDocument('archived',!current.archived_at)">{{current.archived_at?'取消归档':'归档（停止首页提示）'}} <span>›</span></button><button class="settings-line danger-text" @click="askTrash">移入回收站 <span>›</span></button><div class="sheet-actions"><button class="secondary full" @click="sheet=''">取消</button></div></template>
+      <template v-else-if="sheet==='detailsMenu'"><h2>文书操作</h2><button class="settings-line" @click="sheet='shareConfirm'">{{current.visibility==='private'?'主动分享给家人':'改为仅自己'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line" @click="toggleDocument('favorite',!current.favorite)">{{current.favorite?'取消收藏':'收藏文书'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line" @click="toggleDocument('archived',!current.archived_at)">{{current.archived_at?'取消归档':'归档（停止首页提示）'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line danger-text" @click="askTrash">移入回收站 <UiIcon name="chevron-right" :size="18"/></button><div class="sheet-actions"><button class="secondary full" @click="sheet=''">取消</button></div></template>
       <template v-else-if="sheet==='shareConfirm'"><h2>确认家庭可见范围</h2><p>共享后第二位家庭成员可以读取标题、原文、字段和附件。工资、银行、税务资料可能含敏感信息。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="changeShare">{{current.visibility==='private'?'确认共享':'确认设为私人'}}</button></div></template>
       <template v-else-if="sheet==='trashListConfirm'">
         <h2>移入回收站？</h2>
         <p>「{{swipeTrashTarget?.title}}」将从文书库隐藏。原件仍保留在私有 R2，随时可从「我的 → 回收站」恢复；不会删除已同步到其他 App 的任务、账目或生词。</p>
-        <div class="sheet-actions"><button class="secondary" :disabled="busy" @click="closeSheet">取消</button><button class="destructive" :disabled="busy" @click="trashFromList">移入回收站</button></div>
+        <div class="sheet-actions"><button class="secondary" :disabled="busy" @click="closeSheet">取消</button><button class="destructive" :disabled="busy" @click="trashFromList"><UiIcon name="trash" :size="16"/>移入回收站</button></div>
       </template>
-      <template v-else-if="sheet==='trashConfirm'"><h2>移入回收站？</h2><p>文书将从普通列表隐藏。R2 原件仍占空间，但可随时恢复。永久删除需另行确认。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="destructive" :disabled="busy" @click="trashCurrent">移入回收站</button></div></template>
-      <template v-else-if="sheet==='recycle'"><h2>回收站</h2><p class="muted">保留直到手动永久清理，删除后不能直接恢复。</p><div v-if="!trashItems.length" class="empty">回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+      <template v-else-if="sheet==='trashConfirm'"><h2>移入回收站？</h2><p>文书将从普通列表隐藏。R2 原件仍占空间，但可随时恢复。永久删除需另行确认。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="destructive" :disabled="busy" @click="trashCurrent"><UiIcon name="trash" :size="16"/>移入回收站</button></div></template>
+      <template v-else-if="sheet==='recycle'"><h2>回收站</h2><p class="muted">删除可恢复，永久删除不可撤销。</p><div v-if="!trashItems.length" class="empty">回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
       <template v-else-if="sheet==='permanent'"><h2 class="danger-text">永久删除文书？</h2><p>将从 D1 清理私人内容，并在没有其他文书引用该原件时同步物理删除 R2 文件。不能撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" :disabled="busy" @click="permanentDelete">确认永久删除</button></div></template>
       <template v-else-if="sheet==='calendar'"><h2>私人日历订阅</h2>
@@ -737,7 +741,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
           <button class="primary" :disabled="busy" @click="createCalendar">{{calendarStatusInfo?.active?'重新生成':'创建订阅'}}</button></div>
       </template>
       <template v-else-if="sheet==='sessions'"><h2>登录设备与会话</h2>
-        <p class="fine-print">仅管理自己账号的登录，不显示家人账号。系统目前只记录登录时间，不读取设备位置或浏览器指纹。</p>
+        <p class="fine-print">仅显示自己的登录会话。</p>
         <div v-if="!sessions.length" class="empty">暂无有效登录会话。</div>
         <div class="recycle-row" v-for="s in sessions" :key="s.id">
           <div class="item-info"><strong>{{s.is_current?'当前设备':'其他登录会话'}}</strong>
@@ -756,7 +760,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <label class="form-label">新密码（至少12位）<input v-model="passwordDraft.new_password" type="password" autocomplete="new-password" /></label>
         <label class="form-label">确认新密码<input v-model="passwordDraft.confirm_password" type="password" autocomplete="new-password" /></label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!passwordDraft.current_password||passwordDraft.new_password.length<12||passwordDraft.new_password!==passwordDraft.confirm_password" @click="changePassword">修改并退出旧会话</button></div></template>
-      <template v-else-if="sheet==='invite'"><h2>邀请家人</h2><p class="muted">一个家庭最多两人，邀请仅对指定邮箱有效。</p><label class="form-label">对方邮箱<input v-model="inviteEmail" type="email" placeholder="family@example.com" /></label><button class="primary full" @click="issueInvite" :disabled="busy">生成 48 小时邀请码</button><label v-if="inviteToken" class="form-label">仅复制给家人使用<input :value="inviteToken" readonly @focus="$event.target.select()" /></label><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+      <template v-else-if="sheet==='invite'"><h2>邀请家人</h2><p class="muted">仅指定邮箱可使用邀请。</p><label class="form-label">对方邮箱<input v-model="inviteEmail" type="email" placeholder="family@example.com" /></label><button class="primary full" @click="issueInvite" :disabled="busy">生成 48 小时邀请码</button><label v-if="inviteToken" class="form-label">仅复制给家人使用<input :value="inviteToken" readonly @focus="$event.target.select()" /></label><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='ocrConfirm'"><h2>确认本次图片识别</h2><p>仅将这张私有图片发送至 Cloudflare Workers AI。可能消耗与其他应用共用的免费额度，账户余额仍未确认；此功能默认关闭，只有管理员启用后可用。</p><p class="fine-print">相同图片会复用已完成的识别候选。结果不能作为账单付款、实际收入或政策现行有效性的证明；须对照原图核对。</p><label class="check-row"><input type="checkbox" v-model="ocrRetryStale" />上次任务卡住超过24小时时允许重新调用模型（可能再次消耗额度）</label><label class="check-row"><input type="checkbox" v-model="ocrRetryEmpty" />上次结果为空且已过24小时：再次识别一次（同样消耗免费预算）</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="confirmRunOcr">确认尝试 OCR</button></div></template>
       <template v-else-if="sheet==='editText'"><h2>人工核对日文原文</h2><p class="fine-print">请对照原图确认。修改文字将重新生成全部候选字段，先前审核的字段会被重置，不会自动记账或创建任务。</p><textarea v-model="editTextDraft" rows="10" placeholder="请输入或粘贴日文内容"></textarea><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!editTextDraft.trim()" @click="saveSourceText">保存并重新分析</button></div></template>
       <template v-else-if="sheet==='backup'"><h2>备份与恢复</h2><p class="fine-print">一次最多 5 份、ZIP 不超过 32 MB。请保存到你选择的 iCloud Drive/电脑，不在本 App 长期保存。仅 JSON 无法恢复永久删除后的原件。</p>
