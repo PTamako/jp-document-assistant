@@ -975,7 +975,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeou
       <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">只影响当前文书。保存后可点「AI 智能解读」，同版本命中缓存时不会再次调用。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>我确认这份文书不含个人或机密资料，同意未来启用时发送给 Gemini 免费 API。只有启用并执行所选 Gemini 分析时才发送。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
-  <p class="fine-print">只读取你主动选择的文件或邮件。iPhone PWA 可直接尝试 Gmail／Google Drive；若 Google 弹窗受限，可在「文件」App 的 Google Drive 位置选择文件。Google Docs 原生格式通过下方在线选择器导出。</p>
+  <p class="fine-print">只读取你主动选择的文件或邮件。iPhone PWA 推荐使用「文件」App 的 Google Drive 位置导入 PDF、Office 或图片；Google 原生 Docs／表格／幻灯片需在 Safari 网页版通过 Google 在线选择器导出。</p>
   <label class="choice-picker-file">
     <UiIcon name="file" :size="20"/><span>iPhone「文件」（含已启用的 Google Drive）／本地 PDF、Office、图片</span><UiIcon name="chevron-right" :size="18"/>
     <input type="file" class="visually-hidden" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="selectFile" />
@@ -985,17 +985,23 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeou
     <input type="file" class="visually-hidden" accept=".eml,.txt,message/rfc822,text/plain" @change="importLocalText" />
   </label>
   <button v-if="gmailAvailable" class="choice-picker-file" type="button" @click="openGmailSheet"><UiIcon name="mail" :size="20"/><span>{{iosStandalonePwa?'从 Gmail 选择邮件（PWA 尝试授权）':'从 Gmail 选择邮件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
-  <button v-if="drivePickerAvailable" class="choice-picker-file" type="button" :disabled="!drivePickerReadyUi" @click="importFromGoogleDrive"><UiIcon name="file" :size="20"/><span>{{drivePickerLoadingUi?'Google Drive 准备中…':driveAuthorizationReady()?'从 Google Drive 选文件（已授权）':'从 Google Drive 在线选择文件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
+  <button v-if="drivePickerAvailable" class="choice-picker-file" type="button" :disabled="!iosStandalonePwa&&!drivePickerReadyUi" @click="iosStandalonePwa?sheet='safariGoogleGuide':importFromGoogleDrive()"><UiIcon name="file" :size="20"/><span>{{iosStandalonePwa?'Google Drive 在线选择（查看 iPhone 兼容方式）':drivePickerLoadingUi?'Google Drive 准备中…':driveAuthorizationReady()?'从 Google Drive 选文件（已授权）':'从 Google Drive 在线选择文件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
   <div class="sheet-actions"><button class="secondary full" type="button" @click="sheet='import'">返回导入表单</button></div>
 </template>
 <template v-else-if="sheet==='safariGoogleGuide'">
-        <h2>请在 Safari 中完成 Google 授权</h2>
-        <p class="info-note">iPhone PWA 已允许尝试直接授权，但系统仍可能阻止 Google 弹窗。你可以在 PWA 里从 iPhone「文件」选取已启用的 Google Drive，或复制苹果邮件正文；不要求 Safari 登录。</p>
-        <p>若确实需要在线 Gmail／Google Drive 授权而 PWA 弹窗失败，可以在 Safari 打开文书助手完成导入；同一账号保存的文书会在 PWA 刷新后出现。</p>
+        <h2>iPhone 上使用 Google Drive</h2>
+        <p class="info-note">Google Picker 会在嵌入式窗口访问 Google 账号。iPhone 主屏幕 PWA 可能阻止跨网站 Cookie，即使 Google 已授权，也会显示「Can't access your Google Account」。这不代表文书助手登录失效。</p>
+        <p>推荐直接从 iPhone「文件」→「浏览」→「位置」→「Google Drive」选择 PDF、图片或 Office 文书。若没有 Google Drive 位置，请先安装并登录 Google Drive App，再在「文件」里开启该位置。</p>
+        <label class="choice-picker-file">
+          <UiIcon name="file" :size="20"/><span>从 iPhone「文件」选择文书</span><UiIcon name="chevron-right" :size="18"/>
+          <input type="file" class="visually-hidden" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="selectFile" />
+        </label>
+        <p>Google Docs／表格／幻灯片等原生格式，请复制下方网址，在 Safari 地址栏打开后导入。同一文书助手账号保存的数据会同步到 PWA。</p>
         <button class="primary full" type="button" @click="copySafariSite">复制文书助手网址</button>
         <a class="secondary full safari-link" :href="mainSiteUrl" target="_blank" rel="noopener noreferrer">尝试在浏览器中打开</a>
         <p class="fine-print safari-url">{{mainSiteUrl}}</p>
-        <p class="fine-print">Safari 保存后，回到这里刷新文书库即可。</p>
+        <p class="fine-print">Safari 保存后，回到这里刷新文书库即可；不必关闭系统的跨网站追踪保护。</p>
+        <button v-if="drivePickerAvailable" class="secondary full" type="button" :disabled="!drivePickerReadyUi||busy" @click="importFromGoogleDrive">{{drivePickerReadyUi?'仍尝试在 PWA 在线选择（可能失败）':'正在准备 Google 组件…'}}</button>
         <button class="secondary full" type="button" :disabled="loadingPage" @click="refreshDocumentsAfterSafari">{{loadingPage?'正在刷新文书库…':'刷新文书库'}}</button>
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">返回</button></div>
       </template>
