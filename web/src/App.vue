@@ -574,6 +574,14 @@ async function changeShare(){
   }catch(e){problem(e);}finally{busy.value=false;}
 }
 const dueState=(v)=>{if(!v)return '待确认';const today=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});return v<today?'已逾期':v===today?'今天到期':'近期';};
+function todayReviewBadge(d){
+  const due=dueState(d?.due_date);
+  // A due-date emergency takes priority, but verified upcoming documents
+  // must visibly say 已核验 rather than the generic 近期 badge.
+  if(due==='已逾期'||due==='今天到期')return due;
+  const reviewed=documentReviewLabel(d);
+  return reviewed==='已核验'||reviewed==='部分核验'||reviewed==='待核验'?reviewed:due;
+}
 const labelFor=(key)=>fieldLabel[key]||key;
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 onMounted(async()=>{await boot();if(!user.value)await refreshInitStatus();});
@@ -610,7 +618,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <div class="welcome"><div><p class="eyebrow">今日概览</p><h2>重要事项，一目了然</h2><p class="muted">待核验文书与截止日期</p></div><div class="welcome-mark"><UiIcon name="today" :size="27"/></div></div>
         <div class="section-head"><h3>需要你关注</h3><span>{{pageData.items.length}} 件</span></div>
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">还没有需要处理的文书。<button class="text-button" @click="openImport()">导入第一份</button></div>
-        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon"><UiIcon :name="categoryIcon(d.category)" :size="22"/></div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showDue(d.due_date)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{documentReviewLabel(d)==='已核验'?(d.due_date?dueState(d.due_date):'已核验'):documentReviewLabel(d)==='部分核验'?'部分核验':d.analysis_status==='needs_review'?'待核验':dueState(d.due_date)}}</span></button>
+        <button class="item-card" v-for="d in pageData.items" :key="d.id" @click="openDoc(d.id)"><div class="item-icon"><UiIcon :name="categoryIcon(d.category)" :size="22"/></div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{cats[d.category]||d.category}} · {{showDue(d.due_date)}}</p></div><span class="state-tag" :class="{'danger':d.due_date&&dueState(d.due_date)==='已逾期'}">{{todayReviewBadge(d)}}</span></button>
         <button v-if="pageData.next!==null" class="load-more" :disabled="loadingPage" @click="loadTab('today',true)">{{loadingPage?'加载中…':'加载更多'}}</button>
       </section>
       <section v-else-if="activeTab==='docs'" class="page-surface" key="docs">
