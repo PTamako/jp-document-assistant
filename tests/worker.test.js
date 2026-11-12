@@ -1958,6 +1958,10 @@ test('Gmail code-model grants remain encrypted and user-bound; only selected mes
  const scope='https://www.googleapis.com/auth/gmail.readonly';
  let refreshCount=0,fullCount=0,metadataCount=0,listCount=0;
  env.GOOGLE_OAUTH_FETCH=async(url,options)=>{
+   // Browser callback uses Cloudflare-compatible manual redirect; so must
+   // Gmail's refresh, message listing and individual metadata/body reads.
+   assert.equal(options.redirect,'manual');
+   assert.equal(options.cache,'no-store');
    const u=new URL(url);
    if(u.origin==='https://oauth2.googleapis.com'&&u.pathname==='/token'){
      const form=new URLSearchParams(options.body);
@@ -2029,6 +2033,86 @@ test('Gmail code-model grants remain encrypted and user-bound; only selected mes
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM google_oauth_grants').get().n,0);
  const after=await req(env,'/api/google/gmail/messages',auth(owner));
  assert.equal(after.response.status,409);
+});
+
+test('Gmail browser grant refreshes and searches with Cloudflare manual redirect (no reauthorization)',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GOOGLE_OAUTH_CLIENT_ID='123-test.apps.googleusercontent.com';
+ env.GOOGLE_OAUTH_CLIENT_SECRET='unit-test-secret';
+ env.GOOGLE_TOKEN_ENCRYPTION_KEY='5a'.repeat(32);
+ const scope='https://www.googleapis.com/auth/gmail.readonly';
+ const seen=[];
+ env.GOOGLE_OAUTH_FETCH=async(url,options)=>{
+   const u=new URL(url);
+   seen.push({path:u.pathname,method:options.method,redirect:options.redirect});
+   assert.equal(options.redirect,'manual');
+   assert.equal(options.cache,'no-store');
+   if(u.hostname==='oauth2.googleapis.com'&&u.pathname==='/token'){
+     const body=new URLSearchParams(options.body);
+     if(body.get('grant_type')==='authorization_code')
+       return Response.json({access_token:'test-access-token',refresh_token:'secret-refresh-token',scope});
+     assert.equal(body.get('grant_type'),'refresh_token');
+     assert.equal(body.get('refresh_token'),'secret-refresh-token');
+     return Response.json({access_token:'test-new-access-token',scope});
+   }
+   if(u.pathname==='/gmail/v1/users/me/profile')
+     return Response.json({emailAddress:'example@gmail.test'});
+   if(u.pathname==='/gmail/v1/users/me/messages'){
+     assert.equal(u.searchParams.get('q'),'newer_than:30d');
+     assert.equal(u.searchParams.get('maxResults'),'5');
+     return Response.json({messages:[{id:'testMsg123456'}]});
+   }
+   if(u.pathname==='/gmail/v1/users/me/messages/testMsg123456'){
+     assert.equal(u.searchParams.get('format'),'metadata');
+     return Response.json({payload:{headers:[{name:'Subject',value:'电子收据'},
+       {name:'From',value:'sender@example.invalid'},{name:'Date',value:'2026-11-12'}]}});
+   }
+   throw Error('Unexpected fake Google path '+u.pathname);
+ };
+ const start=await req(env,'/api/google/oauth/start',{method:'POST',...auth(owner),data:{service:'gmail'}});
+ assert.equal(start.response.status,200);
+ const state=new URL(start.data.authorization_url).searchParams.get('state');
+ const callback=await req(env,'/api/google/oauth/callback?state='+state+'&code=example-authorization-code-123456');
+ assert.equal(callback.response.status,200);
+ assert.match(await callback.response.text(),/Google 授权成功/);
+ const listed=await req(env,'/api/google/gmail/messages?q=newer_than%3A30d',auth(owner));
+ assert.equal(listed.response.status,200,JSON.stringify(listed.data));
+ assert.equal(listed.data.items.length,1);
+ assert.equal(listed.data.items[0].subject,'电子收据');
+ const grant=env.DB.sql.prepare('SELECT status,refresh_cipher FROM google_oauth_grants WHERE user_id=? AND service=?')
+   .get(owner.user.id,'gmail');
+ assert.equal(grant.status,'connected');
+ assert.doesNotMatch(grant.refresh_cipher,/secret-refresh-token/);
+ assert.deepEqual(seen.map(x=>x.path),[
+   '/token','/gmail/v1/users/me/profile','/token',
+   '/gmail/v1/users/me/messages','/gmail/v1/users/me/messages/testMsg123456'
+ ]);
+});
+
+test('Gmail rejects HTTP redirects in refresh without following Google token or deleting grant',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GOOGLE_OAUTH_CLIENT_ID='123-test.apps.googleusercontent.com';
+ env.GOOGLE_OAUTH_CLIENT_SECRET='unit-test-secret';
+ env.GOOGLE_TOKEN_ENCRYPTION_KEY='5a'.repeat(32);
+ let invoked=0;
+ env.GOOGLE_OAUTH_FETCH=async(url,options)=>{
+   assert.equal(options.redirect,'manual');
+   invoked++;
+   if(invoked===1)return Response.json({
+     access_token:'a',refresh_token:'fake-refresh-123456789',
+     scope:'https://www.googleapis.com/auth/gmail.readonly'});
+   if(invoked===2)return Response.json({emailAddress:'example@gmail.test'});
+   return new Response(null,{status:302,headers:{Location:'https://example.invalid/untrusted'}});
+ };
+ const start=await req(env,'/api/google/oauth/start',{method:'POST',...auth(owner),data:{service:'gmail'}});
+ const state=new URL(start.data.authorization_url).searchParams.get('state');
+ const callback=await req(env,'/api/google/oauth/callback?state='+state+'&code=valid-code-1234567');
+ assert.match(await callback.response.text(),/Google 授权成功/);
+ const out=await req(env,'/api/google/gmail/messages?q=newer_than%3A30d',auth(owner));
+ assert.equal(out.response.status,502);
+ assert.equal(out.data.code,'GOOGLE_UNEXPECTED_REDIRECT');
+ assert.equal(invoked,3,'never follow redirects');
+ assert.equal(env.DB.sql.prepare('SELECT status FROM google_oauth_grants').get().status,'connected');
 });
 
 test('Gemini quota failure persists an error code and explicit user retry succeeds without an automatic second call',async()=>{
