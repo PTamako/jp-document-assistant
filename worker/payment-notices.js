@@ -18,11 +18,19 @@ const fld=(field_key,value_type,normalized_value,source_quote)=>({
 });
 const extractStamp=(raw,kind)=>{
  const lines=String(raw||'').split(/\r?\n/);
- const marker=kind==='deposit'?/(?:入金日時|お振込日時|振込日時)/:/(?:ご利用日時|利用日時|利用日(?:時)?)/;
- const source=lines.find(line=>marker.test(norm(line)));
- if(!source)return null;
- const line=norm(source);
- const match=/((?:19|20)\d{2})[\/.\-年]([01]?\d)[\/.\-月]([0-3]?\d)日?[ \t　]*(?:(\d{1,2})[:時](\d{2})(?:[:分](\d{2}))?秒?)?/.exec(line);
+ const marker=kind==='deposit'?/(?:入金日時|お振込日時|振込日時)/:
+  /(?:ご利用日時|利用日時|利用日(?:時)?|取引日時|購入日時|注文日時|決済日時|お買(?:い)?上げ日時|購入日|決済日)/;
+ const found=lines.findIndex(line=>marker.test(norm(line)));
+ if(found<0)return null;
+ const source=lines[found];
+ let line=norm(source);
+ // An OCR line break is safe only when the adjacent line explicitly labels
+ // the transaction clock; do not use the email's transmission time.
+ const following=norm(lines[found+1]||'').trim();
+ if(!/(?:[01]?\d|2[0-3])[:時][0-5]\d/.test(line)&&
+   /^(?:ご利用時刻|利用時刻|購入時刻|取引時刻|決済時刻)\s*[:：]/.test(following))
+   line+=' '+following;
+ const match=/((?:19|20)\d{2})[\/.\-年]([01]?\d)[\/.\-月]([0-3]?\d)日?\s*(?:[（(][日月火水木金土][)）]\s*)?(?:(\d{1,2})[:時](\d{2})(?:[:分](\d{2}))?秒?)?/.exec(line);
  if(!match)return null;
  const date=civil(match[1],match[2],match[3]);
  if(!date)return null;
@@ -57,12 +65,12 @@ const cardPurchaseLine=raw=>{
 function labeledCardPurchase(raw){
  const lines=String(raw||'').split(/\r?\n/);
  const matches=re=>lines.filter(line=>re.test(norm(line).trim()));
- const merchantLines=matches(/^[◇◆■□\s]*(?:ご)?利用先\s*[:：]/);
+ const merchantLines=matches(/^[◇◆■□\s]*(?:(?:ご)?利用先|利用店舗|加盟店(?:名)?|店舗名|ご利用店)\s*[:：]/);
  const amountLines=matches(/^[◇◆■□\s]*(?:ご)?利用金額\s*[:：]/);
  const typeLines=matches(/^[◇◆■□\s]*(?:ご)?利用取引\s*[:：]/);
  if(merchantLines.length!==1||amountLines.length!==1||typeLines.length>1)return null;
  if(typeLines.length&&!/[:：]\s*(?:買物|購入|ショッピング)\s*$/.test(norm(typeLines[0]).trim()))return null;
- const merchant=norm(merchantLines[0]).replace(/^[◇◆■□\s]*(?:ご)?利用先\s*[:：]\s*/,'').trim();
+ const merchant=norm(merchantLines[0]).replace(/^[◇◆■□\s]*(?:(?:ご)?利用先|利用店舗|加盟店(?:名)?|店舗名|ご利用店)\s*[:：]\s*/,'').trim();
  const amountText=norm(amountLines[0]).replace(/^[◇◆■□\s]*(?:ご)?利用金額\s*[:：]\s*/,'').trim();
  const match=/^([0-9][0-9,]{0,13})\s*円\s*$/.exec(amountText);
  const amount=match&&money(match[1]);
@@ -71,7 +79,7 @@ function labeledCardPurchase(raw){
 }
 export const isCardPurchaseNotice=raw=>{
  const t=norm(raw);
- return /(?:クレジット|カード|Olive)/i.test(t)&&/(?:ご利用日時|利用日時|利用日)/.test(t)&&
+ return /(?:クレジット|カード|Olive)/i.test(t)&&/(?:ご利用日時|利用日時|利用日|取引日時|決済日時)/.test(t)&&
   /(?:カードの利用内容|カードご利用|カードのご利用|利用内容をお知らせ|ご利用内容)/.test(t)&&!!cardPurchaseLine(raw);
 };
 export function extractCardPurchaseFields(raw){
@@ -80,6 +88,22 @@ export function extractCardPurchaseFields(raw){
  const fields=[fld('amount_jpy','money',purchase.amount,purchase.source),
    fld('merchant','text',purchase.merchant,purchase.merchantSource||purchase.source)];
  const stamp=extractStamp(raw,'card');
+ if(stamp)fields.push(stamp);
+ return fields;
+}
+// Explicit source labels on shopping orders and receipts. No merchant guess
+// from the email sender, document title, opening hours, or nearby addresses.
+export function extractCommerceFields(raw){
+ const lines=String(raw||'').split(/\r?\n/);
+ const merchantLabel=/^[◇◆■□\s]*(?:ご利用先|利用店舗|購入店舗|販売店|販売元|加盟店(?:名)?|店舗名|ショップ名|購入先)\s*[:：]\s*/;
+ const matches=lines.filter(line=>merchantLabel.test(norm(line).trim()));
+ const fields=[];
+ if(matches.length===1){
+  const merchant=norm(matches[0]).trim().replace(merchantLabel,'').trim();
+  if(merchant&&merchant.length<=100&&!/(?:請求|引落|返金|取消|チャージ)/.test(merchant))
+   fields.push(fld('merchant','text',merchant,matches[0]));
+ }
+ const stamp=extractStamp(raw,'commerce');
  if(stamp)fields.push(stamp);
  return fields;
 }
