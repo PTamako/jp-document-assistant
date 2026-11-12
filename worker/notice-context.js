@@ -8,13 +8,13 @@ const money=fields=>{
  return x&&Number.isSafeInteger(Number(x.normalized_value))?Number(x.normalized_value).toLocaleString('ja-JP')+' 日元':null;
 };
 const days=fields=>{
- const d=field(fields,'event_date')||field(fields,'due_date');
+ const d=field(fields,'transaction_at')||field(fields,'event_date')||field(fields,'due_date');
  return d?d.normalized_value:null;
 };
 export function explainNotice({text,category,fields}){
  const amount=money(fields),date=days(fields),lines=[];
  let summary=null;
- const receipt=/(?:Suica|PASMO|交通系IC|電子マネー).{0,80}(?:チャージ|入金|受取)|(?:チャージ|受取).{0,80}(?:Suica|PASMO)/is.test(text);
+ const receipt=category==='topup'||/(?:Suica|PASMO|交通系IC|電子マネー).{0,80}(?:チャージ|入金|受取)|(?:チャージ|受取).{0,80}(?:Suica|PASMO)/is.test(text);
  const directDebit=/(?:口座引[き]?落[とし]?|口座振替|引落(?:し)?(?:予定日|金額|額))/.test(text);
  const delivery=category==='delivery'||/(?:お届け予定日時|配達予定日|配送予定日|お荷物のお届け)/.test(text);
  if(receipt){
