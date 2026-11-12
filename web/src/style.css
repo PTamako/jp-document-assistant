@@ -261,3 +261,10 @@
   .explain-actions>button{font-size:13px}
   .explain-provider{font-size:12px}
 }
+
+/* Learning candidates: compact, persisted cross-app sync status. */
+.study-word-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:5px}
+.study-word-head strong,.study-word-head h3{min-width:0;overflow-wrap:anywhere;margin:0}
+.study-sync-tag{display:inline-flex;align-items:center;flex:none;border-radius:999px;padding:4px 9px;border:1px solid color-mix(in srgb,var(--blue) 24%,var(--line));background:color-mix(in srgb,var(--blue) 10%,var(--panel));color:var(--blue);font-size:12px;font-weight:650;white-space:nowrap}
+.study-sync-tag.error{border-color:color-mix(in srgb,var(--danger) 24%,var(--line));background:color-mix(in srgb,var(--danger) 10%,var(--panel));color:var(--danger)}
+.study-sync-tag.neutral{border-color:var(--line);background:var(--soft);color:var(--secondary)}
