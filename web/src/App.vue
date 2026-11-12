@@ -237,6 +237,7 @@ async function selectGmailMessage(id){
   try{
     const doc=await gmailReadOne(id);
     if(serial!==gmailGeneration||!user.value)return;
+    aiProvider.value='';geminiConsent.value=false;
     textDraft.title=doc.title;textDraft.text=doc.text;
     textDraft.source_type='gmail';textDraft.retention='summary';
     localImportNote.value=doc.warning;inputMode.value='text';
@@ -443,6 +444,7 @@ async function importFromGoogleDrive(){
     const file=await pickGoogleDriveFile();
     accountEpoch.assertCurrent(epoch);
     if(!file)return; // Canceling Google Picker does not request an R2 upload or import.
+    aiProvider.value='';geminiConsent.value=false;
     if(/\.(?:eml|txt)$/i.test(file.name)){
       const parsed=await readLocalText(file);
       accountEpoch.assertCurrent(epoch);
@@ -472,6 +474,7 @@ async function importLocalText(event){
   const epoch=accountEpoch.snapshot();busy.value=true;try{
     const result=await readLocalText(file);
     accountEpoch.assertCurrent(epoch);
+    aiProvider.value='';geminiConsent.value=false;
     textDraft.text=result.text;textDraft.title=result.title;textDraft.source_type=result.source_type;
     inputMode.value='text';localImportNote.value=result.warning;sheet.value='import';
   }catch(e){problem(e);}finally{busy.value=false;if(localTextInput.value)localTextInput.value.value='';}
