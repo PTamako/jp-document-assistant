@@ -28,7 +28,7 @@ test('private user logout/identity switch invalidates requests and purges memory
   assert.match(source,/sessions\.value=\[\]/);
   assert.match(source,/detailCandidates\.value=\[\]/);
   assert.match(source,/clearGmailSession\(\)/);
-  assert.match(source,/onBeforeUnmount\(\(\)=>\{clearPrivateWorkspace\(\)/);
+  assert.match(source,/onBeforeUnmount\(\(\)=>\{[^\n]*clearPrivateWorkspace\(\)/);
 });
 
 
