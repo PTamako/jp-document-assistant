@@ -23,22 +23,24 @@ const extractStamp=(raw,kind)=>{
  const found=lines.findIndex(line=>marker.test(norm(line)));
  if(found<0)return null;
  const source=lines[found];
- let line=norm(source);
- // An OCR line break is safe only when the adjacent line explicitly labels
- // the transaction clock; do not use the email's transmission time.
+ let line=norm(source),sourceQuote=source;
+ // Only read the next OCR line when it has an explicit transaction-time label.
+ // Keep both source lines as evidence so the time is user-verifiable.
  const following=norm(lines[found+1]||'').trim();
- if(!/(?:[01]?\d|2[0-3])[:時][0-5]\d/.test(line)&&
-   /^(?:ご利用時刻|利用時刻|購入時刻|取引時刻|決済時刻)\s*[:：]/.test(following))
-   line+=' '+following;
+ const labeledTime=/^(?:ご利用時刻|利用時刻|購入時刻|取引時刻|決済時刻)\s*[:：]\s*((?:[01]?\d|2[0-3])[:時][0-5]\d)/.exec(following);
+ if(!/(?:[01]?\d|2[0-3])[:時][0-5]\d/.test(line)&&labeledTime){
+   line+=' '+labeledTime[1];
+   sourceQuote=source+' / '+lines[found+1];
+ }
  const match=/((?:19|20)\d{2})[\/.\-年]([01]?\d)[\/.\-月]([0-3]?\d)日?\s*(?:[（(][日月火水木金土][)）]\s*)?(?:(\d{1,2})[:時](\d{2})(?:[:分](\d{2}))?秒?)?/.exec(line);
  if(!match)return null;
  const date=civil(match[1],match[2],match[3]);
  if(!date)return null;
  const h=match[4],m=match[5],s=match[6];
- if(h===undefined||m===undefined)return fld('transaction_date','date',date,source);
+ if(h===undefined||m===undefined)return fld('transaction_date','date',date,sourceQuote);
  if(Number(h)>23||Number(m)>59||(s!==undefined&&Number(s)>59))return null;
  const clock=[h.padStart(2,'0'),m,...(s!==undefined?[s]:[])].join(':');
- return fld('transaction_at','datetime',date+' '+clock,source);
+ return fld('transaction_at','datetime',date+' '+clock,sourceQuote);
 };
 export const isSalaryDepositNotice=raw=>{
  const t=norm(raw);
