@@ -19,6 +19,7 @@
   // Calls to the two existing Workers use same-account Service Bindings (zero extra Workers).
   // Each receiving endpoint stays fail-closed without an approved account mapping.
   "services": [
+    {"binding":"KAKEBO_BRIDGE_SERVICE","service":"kakeibo-homeflow-bridge"},
     {"binding":"HOMEFLOW_BRIDGE_SERVICE","service":"homeflow"},
     {"binding":"ZHIXUE_BRIDGE_SERVICE","service":"it-study-platform"}
   ],

@@ -21,6 +21,7 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes all
  assert.equal(wrangler.r2_buckets[0].binding,'DOCUMENTS');
  assert.equal(wrangler.r2_buckets[0].bucket_name,'jp-document-assistant-private');
  assert.deepEqual(wrangler.services,[
+  {binding:'KAKEBO_BRIDGE_SERVICE',service:'kakeibo-homeflow-bridge'},
   {binding:'HOMEFLOW_BRIDGE_SERVICE',service:'homeflow'},
   {binding:'ZHIXUE_BRIDGE_SERVICE',service:'it-study-platform'}
  ]);
