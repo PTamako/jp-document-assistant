@@ -13,7 +13,13 @@ const gloss = [
   ['申請', '申请', 'しんせい'],
   ['お支払い', '支付', 'おしはらい'],
 ];
+// Stored-value top-ups move funds between accounts, not expense or income events.
+const storedValueTopup = text =>
+  /(?:Suica|PASMO|ICOCA|TOICA|Kitaca|SUGOCA|nimoca|はやかけん|楽天Edy|nanaco|WAON|PayPay|電子マネー|プリペイド|交通系IC)/i.test(text) &&
+  /(?:チャージ|受取完了|残高への入金)/.test(text);
+
 export function classifyText(text) {
+  if (storedValueTopup(text)) return 'topup';
   if (/(給与明細|差引支給|支給総額|賞与明細)/.test(text)) return 'salary';
   if (/(カードご利用|利用速報|クレジットカード|ご請求額|利用確定)/.test(text)) return 'bank';
   if (/(納付書|納付期限|税額|保険料|年金保険料)/.test(text)) return 'tax';
@@ -97,18 +103,40 @@ export function interpretCriticalClauses(raw,{limit=12}={}){
  }
  return found;
 }
+// Extract only source-labeled values. A service name does not prove the debit account.
+function extractTopupFields(text) {
+  const fields = [];
+  const amt = /(?:受取額|チャージ金額|チャージ額|入金金額|入金額)[ \t　:：]*(?:\r?\n[ \t　]*)?(?:[￥¥][ \t]*)?([0-9０-９][0-9０-９,，]{0,14})[ \t　]*円?/.exec(text);
+  if (amt) {
+    const amount = Number(normDigits(amt[1]).replace(/[,，]/g,''));
+    if (Number.isSafeInteger(amount) && amount>0)
+      fields.push({field_key:'amount_jpy',value_type:'money',normalized_value:String(amount),original_currency:'JPY',source_quote:amt[0].slice(0,180),review_state:'unreviewed'});
+  }
+  const when = /(?:受取完了日時|チャージ完了日時|チャージ日時|入金完了日時|入金日時)[ \t　:：]*(?:\r?\n[ \t　]*)?((?:19|20)\d{2})[\/.\-](\d{1,2})[\/.\-](\d{1,2})[ \t]+([01]?\d|2[0-3]):([0-5]\d)/.exec(text);
+  if (when) {
+    const date=validDate(Number(when[1]),Number(when[2]),Number(when[3]));
+    if (date)
+      fields.push({field_key:'transaction_at',value_type:'datetime',normalized_value:`${date.date} ${when[4].padStart(2,'0')}:${when[5]}`,source_quote:when[0].slice(0,180),review_state:'unreviewed'});
+  }
+  const service = /(?:サービス名)[ \t　:：]*(?:\r?\n[ \t　]*)?([^\r\n]{1,80})/.exec(text);
+  if (service && service[1].trim() && !/^[□■●]/.test(service[1].trim()))
+    fields.push({field_key:'service_name',value_type:'text',normalized_value:service[1].trim(),source_quote:service[0].slice(0,180),review_state:'unreviewed'});
+  return fields;
+}
+
 export function parseJapaneseText(raw) {
   const text = String(raw || '').slice(0,100000);
   const category = classifyText(text);
   const clauses=interpretCriticalClauses(text);
   const issues=[];
   const dates=extractDates(text);
-  const fields=[];
+  const fields=category==='topup'?extractTopupFields(text):[];
   const due=dates.find(d=>d.due_hint);
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
   if (dates.some(x=>x.weekday_mismatch)) issues.push('日期与原文星期不一致，请核对原件');
   if(!due && /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2})/.test(text)) issues.push('存在未注明年份的日期，无法直接确认截止日');
   for(const {key,re} of priority){
+    if(category==='topup' && key==='amount_jpy')continue; // No payment or income inference from a top-up.
     re.lastIndex=0;
     const m=re.exec(text);
     if(!m)continue;
@@ -127,14 +155,15 @@ export function parseJapaneseText(raw) {
   if(/(併用不可|対象外|上限に達し次第|先着|エントリー必須|消印有効)/.test(text)) issues.push('包含活动限制条件，请逐项核对适用资格、报名方式和期限');
   if(/(自動更新|解約期限|違約金|無料期間終了|試用期間)/.test(text)) issues.push('可能存在自动续约或解约/试用期限，须核对正式条款及后续版本');
   if(category==='travel'||category==='hotel')issues.push('预订确认不等于付款或入住；请对照票号/旅客/日期，不公开个人行程');
+  if(category==='topup')issues.push('电子钱包充值属于资金转移，不是新增消费或收入；在家計簿记录前须核实真实扣款账户、入账账户及重复记录。');
   if(category==='bank')issues.push('信用卡授权、确定金额、月度合计和退款是不同事件，不能仅凭邮件重复记入支出');
   if(category==='policy'||category==='terms')issues.push('仅解释用户提供的原文，未核验政府或发行机构最新版本，不替代专业建议');
   const sourceDate=dates.find(d=>!d.weekday_mismatch&&/(?:発行日|公布日|公表日|改訂日|更新日)/.test(d.source_quote));
   const policyVersion={source_document_date:sourceDate?.date||null,
     source_date_quote:sourceDate?.source_quote||null,official_current_verified_at:null};
   const vocabulary=gloss.filter(([term])=>text.includes(term)).slice(0,8).map(([term,meaning_zh,reading])=>({term,reading,meaning_zh}));
-  const labels={salary:'工资／奖金',bank:'银行／信用卡',tax:'缴纳／税务',insurance:'保险',medical:'医疗通知',government:'行政手续',utility:'水电燃气',housing:'住房／合同',campaign:'活动／优惠',policy:'法规／政策',terms:'合同／使用条款',manual:'使用说明',travel:'航班／旅行',hotel:'酒店预约',shopping:'购物订单',delivery:'配送／订单',other:'其他文书'};
-  const summary_zh=`检测到「${labels[category]}」相关表述；以下字段仅为规则提取结果，仍需核对日文原文。`;
+  const labels={salary:'工资／奖金',bank:'银行／信用卡',topup:'电子钱包／充值',tax:'缴纳／税务',insurance:'保险',medical:'医疗通知',government:'行政手续',utility:'水电燃气',housing:'住房／合同',campaign:'活动／优惠',policy:'法规／政策',terms:'合同／使用条款',manual:'使用说明',travel:'航班／旅行',hotel:'酒店预约',shopping:'购物订单',delivery:'配送／订单',other:'其他文书'};
+  const summary_zh=category==='topup'?'检测到电子钱包充值／余额转移通知；已识别的信息仍须核对原文，不作为消费或收入。':`检测到「${labels[category]}」相关表述；以下字段仅为规则提取结果，仍需核对日文原文。`;
   const clauseLines=clauses.length?
    ['关键条款（逐条核对日文原文，未确认个人资格）：',
     ...clauses.map(c=>'· '+c.term+'｜日文证据：「'+c.source_quote+'」｜中文：'+c.meaning_zh+'｜建议：'+c.action_zh)]:[];
@@ -143,6 +172,6 @@ export function parseJapaneseText(raw) {
       '原文版本／发布日期线索：'+policyVersion.source_document_date+'（'+policyVersion.source_date_quote+'）':
       '原文版本／发布日期：无法确定，请手动核对',
     '官方现行有效性：尚未核验（official_current_verified_at = null）；不得据此判定个人权益或现行法律。']: [];
-  const explanation_zh=[`文书类别建议：${labels[category]}`,...fields.map(f=>`${f.field_key==='due_date'?'疑似截止日':f.field_key==='net_salary'?'疑似实发金额':f.field_key==='gross_salary'?'疑似应发金额':f.field_key==='total_deductions'?'疑似扣款合计':'疑似金额'}：${f.normalized_value}${f.value_type==='money'?' 日元':''}（未核验）`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`),'此版本只进行有来源的规则抽取，并非完整机器翻译、OCR 或法律效力核实。'].join('\n');
+  const explanation_zh=[`文书类别建议：${labels[category]}`,...fields.map(f=>`${f.field_key==='due_date'?'疑似截止日':f.field_key==='net_salary'?'疑似实发金额':f.field_key==='gross_salary'?'疑似应发金额':f.field_key==='total_deductions'?'疑似扣款合计':category==='topup'&&f.field_key==='amount_jpy'?'充值金额':f.field_key==='transaction_at'?'疑似完成时间':f.field_key==='service_name'?'服务名称':'疑似金额'}：${f.normalized_value}${f.value_type==='money'?' 日元':''}（未核验）`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`),'此版本只进行有来源的规则抽取，并非完整机器翻译、OCR 或法律效力核实。'].join('\n');
   return {category,summary_zh,explanation_zh,fields,issues,vocabulary,clauses,policyVersion,analysis_status:'needs_review'};
 }
