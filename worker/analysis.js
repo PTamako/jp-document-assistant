@@ -233,7 +233,7 @@ export function extractActionableTextFields(text,hasFullDueDate=false,{defaultYe
   // Promotional emails often write 11/15(日)まで, not 11月15日.
   // This is an offer end, NOT a confirmed requirement to purchase anything.
   if(category==='campaign'&&!hasFullDueDate&&!result.some(f=>f.field_key==='due_date_partial')){
-    const slash=/(?<![0-9０-９/／])([0-9０-９]{1,2})\s*[\/／]\s*([0-9０-９]{1,2})(?:\s*[(（]([日月火水木金土])(?:曜(?:日)?)?[)）])?)(?![0-9０-９/／])/g;
+    const slash=/(?<![0-9０-９/／])([0-9０-９]{1,2})\s*[\/／]\s*([0-9０-９]{1,2})(?:\s*[(（]([日月火水木金土])(?:曜(?:日)?)?[)）])?(?![0-9０-９/／])/g;
     for(const m of text.matchAll(slash)){
       const month=Number(normDigits(m[1])),day=Number(normDigits(m[2]));
       if(!validDate(2000,month,day))continue;
