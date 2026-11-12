@@ -2,6 +2,43 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parseJapaneseText,interpretCriticalClauses} from '../worker/analysis.js';
 
+const suicaEmail = [
+  'Suicaポケット受取完了：モバイルSuica',
+  'ポケット受取カードに設定したSuicaへの入金（チャージ）が完了しました。',
+  '□サービス名', '楽天ペイSuicaチャージ',
+  '□会社名', '楽天ペイメント',
+  '□受取額', '1,000円',
+  '□Suicaポケット依頼ID', 'SYNTHETIC-TEST-ID',
+  '□受取完了日時', '2026/11/08 13:04'
+].join('\n');
+
+
+test('Suica pocket completion email extracts top-up amount and timestamp without inferring expense or sender account',()=>{
+ const p=parseJapaneseText(suicaEmail);
+ assert.equal(p.category,'topup');
+ assert.equal(p.fields.find(f=>f.field_key==='amount_jpy')?.normalized_value,'1000');
+ assert.equal(p.fields.find(f=>f.field_key==='transaction_at')?.normalized_value,'2026-11-08 13:04');
+ assert.equal(p.fields.find(f=>f.field_key==='service_name')?.normalized_value,'楽天ペイSuicaチャージ');
+ assert.equal(p.fields.find(f=>f.field_key==='amount_jpy')?.source_quote.includes('受取額'),true);
+ assert.equal(p.fields.some(f=>/source_account|due_date/.test(f.field_key)),false);
+ assert.match(p.summary_zh,/充值／余额转移/);
+ assert.match(p.explanation_zh,/不是新增消费或收入|不是新增消费|资金转移/);
+});
+
+test('PayPay charge email has a completion timestamp but no invented payment source or due date',()=>{
+ const p=parseJapaneseText('PayPayへのチャージが完了しました。\nチャージ金額：500円\nチャージ完了日時：2026-11-09 08:01');
+ assert.equal(p.category,'topup');
+ assert.equal(p.fields.find(f=>f.field_key==='amount_jpy')?.normalized_value,'500');
+ assert.equal(p.fields.find(f=>f.field_key==='transaction_at')?.normalized_value,'2026-11-09 08:01');
+ assert.equal(p.fields.some(f=>f.field_key==='due_date'),false);
+});
+
+test('using Suica to pay a merchant is not a stored-value top-up',()=>{
+ const p=parseJapaneseText('モバイルSuicaでお買い物をしました。\nご利用金額：800円\n利用日時：2026/11/08 13:04');
+ assert.notEqual(p.category,'topup');
+ assert.equal(p.fields.some(f=>f.field_key==='transaction_at'),false);
+});
+
 test('policy interpretation cites actual Japanese evidence and keeps current-law verification null',()=>{
  const raw=[
  '発行日：令和8年11月11日（水）',
