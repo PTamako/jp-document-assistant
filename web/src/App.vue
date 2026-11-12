@@ -756,7 +756,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
-  <p class="fine-print">仅在你选取文件或邮件时读取；不会自动同步整个账号。</p>
+  <p class="fine-print">仅在你选取文件或邮件时读取；不会自动同步整个账号。Google Docs 原生格式需先导出 PDF 等再选取。</p>
   <label class="choice-picker-file">
     <UiIcon name="file" :size="20"/><span>iPhone「文件」/ 本地 PDF、Office、图片</span><UiIcon name="chevron-right" :size="18"/>
     <input type="file" class="visually-hidden" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="selectFile" />
