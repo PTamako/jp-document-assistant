@@ -713,12 +713,29 @@ ELSE 'unreviewed' END review_status,
       // Add only previously missing fields: never overwrite approved/corrected/
       // rejected values, destroy candidates, or regenerate remote idempotency keys.
       const added=parsed.fields.filter(x=>!keys.has(x.field_key));
-      const nextCategory=doc.category==='other'?parsed.category:doc.category;
+      const nextCategory=doc.category==='other'||(doc.category==='bank'&&parsed.category==='card_spend')?parsed.category:doc.category;
       const nextVisibility=requiresPrivateDefault(nextCategory,doc.extracted_text_ja)?'private':doc.visibility;
+      const manualSalary=existing.find(x=>x.field_key==='net_salary'&&x.review_state==='corrected'&&parsed.category==='salary');
+      const explanation=manualSalary?parsed.explanation_zh+'\n金额说明：已根据银行明细人工填写工资金额，原文未提供此数额，请在字段中核对。':parsed.explanation_zh;
       const statements=[['UPDATE documents SET summary_zh=?,explanation_zh=?,category=?,visibility=?,extraction_version=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=? AND lifecycle=?',
-        parsed.summary_zh,parsed.explanation_zh,nextCategory,nextVisibility,'rules-v3-notices',now,id,p.user_id,'active']];
+        parsed.summary_zh,explanation,nextCategory,nextVisibility,'rules-v4-payments',now,id,p.user_id,'active']];
       for(const f of added)statements.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
         randomToken(16),id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);
+      // Explicit re-interpretation of a legacy bank-labelled card purchase may
+      // safely ADD a missing expense proposal, but never replace existing IDs.
+      const cardAmount=parsed.category==='card_spend'?parsed.fields.find(x=>x.field_key==='amount_jpy'):null;
+      const previousAmount=existing.find(x=>x.field_key==='amount_jpy');
+      const usableAmount=cardAmount&&(!previousAmount||(previousAmount.review_state!=='rejected'&&previousAmount.normalized_value===cardAmount.normalized_value));
+      if(usableAmount){
+        const merchant=parsed.fields.find(x=>x.field_key==='merchant');
+        const date=parsed.fields.find(x=>x.field_key==='transaction_at'||x.field_key==='transaction_date');
+        statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
+          SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='finance')`,
+          randomToken(16),id,'finance',JSON.stringify({kind:'expense',amount_jpy:Number(cardAmount.normalized_value),currency:'JPY',
+            category:'card_spend',payment_confirmed:false,transaction_date:date?.normalized_value?.slice(0,10)||null,
+            merchant:merchant?.normalized_value||null,
+            note:'信用卡消费通知，核对金额、卡片、是否已入账，避免与月度账单重复记账'}),now,now,id]);
+      }
       // Backfill one missing *future* delivery suggestion for an old imported mail.
       // Do not recreate existing linked task IDs or override a rejected/corrected date.
       const previousEvent=existing.find(x=>x.field_key==='event_date');
