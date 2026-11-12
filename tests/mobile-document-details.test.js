@@ -62,3 +62,20 @@ test('campaign offer and date are shown as review-only suggestions without a con
  assert.match(app,/只是邮件中的优惠说明，不会自动领取或创建正式待办/);
  assert.match(app,/!aiAnalysis\?\.homeflow_suggestions\?\.length/);
 });
+
+test('recycle sheet keeps titles full width and buttons in a compact second row',()=>{
+ const recycle=app.slice(app.indexOf('<template v-else-if="sheet===\x27recycle\x27">'),app.indexOf('<template v-else-if="sheet===\x27emptyRecycleConfirm\x27">'));
+ assert.match(recycle,/class="recycle-header"/);
+ assert.match(recycle,/class="recycle-clear-button"/);
+ assert.match(recycle,/class="recycle-title"/);
+ assert.match(recycle,/class="recycle-row-bottom"/);
+ assert.match(recycle,/class="recycle-row-actions"/);
+ assert.match(recycle,/class="recycle-action restore"/);
+ assert.match(recycle,/class="recycle-action permanent"/);
+ assert.match(recycle,/v-if="attachmentTrashItems.length" class="recycle-subheading"/);
+ assert.match(recycle,/!trashItems.length&&!attachmentTrashItems.length/);
+ assert.match(css,/\.recycle-row\{[^}]*flex-direction:column/);
+ assert.match(css,/\.recycle-title\{[^}]*-webkit-line-clamp:2/);
+ assert.match(css,/\.recycle-row-actions\{[^}]*flex:0 0 auto/);
+ assert.match(css,/\.recycle-footer\{margin:10px 0 0/);
+});
