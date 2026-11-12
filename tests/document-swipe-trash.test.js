@@ -30,6 +30,6 @@ test('swiping only reveals the button; user must confirm before trash API is cal
   assert.doesNotMatch(ask,/api\(/);
   assert.match(app,/await api\(`\/api\/documents\/\$\{target\.id\}\/trash`,\{method:'POST',body:\{\}\}\)/);
   assert.match(app,/pages\.docs\.loaded=false;\s*await loadTab\('docs'\)/);
-  assert.match(app,/原件仍保留在私有 R2/);
+  assert.match(app,/可恢复，已同步到其他 App 的内容不受影响/);
   assert.doesNotMatch(swipe,/permanent-delete|DELETE_FOREVER/);
 });

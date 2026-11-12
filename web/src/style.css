@@ -179,3 +179,80 @@
 .ocr-cloud-options .check-row{margin:3px 0}
 .ocr-page-control{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--secondary)}
 .ocr-page-control input{width:62px;min-height:44px;text-align:center;padding:5px;font-size:15px}
+
+
+/* Document library and detail: prevent long OCR-derived titles and badges from
+   turning one item into a several-screen-long card on narrow phones. */
+.item-card .item-info{min-width:0;overflow:hidden}
+.item-card .item-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  line-clamp:2;overflow:hidden;overflow-wrap:anywhere;line-height:1.43}
+.item-card .item-info p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item-card .state-tag{flex:none;align-self:center;max-width:82px}
+.document-swipe-row .document-list-card{min-width:0}
+.detail-body .document-detail-title{font-size:clamp(19px,5vw,24px);line-height:1.4;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+  overflow:hidden;overflow-wrap:anywhere;letter-spacing:-.02em}
+.detail-body .detail-note{margin:6px 0 0;line-height:1.4}
+.detail-body .detail-tabs{margin:14px 0 16px}
+
+/* One compact AI toolbar, with narrative collapsed by default but accessible. */
+.explain-panel{padding:14px}
+.explain-heading,.original-section-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.explain-heading h3,.original-section-heading h3{margin:0;min-width:0;font-size:16px}
+.explain-provider{display:inline-flex;align-items:center;justify-content:center;gap:3px;
+  min-height:44px;max-width:52%;padding:6px 8px;color:var(--blue);font-size:13px;
+  font-weight:700;white-space:nowrap}
+.explain-actions{display:flex;gap:8px;margin:8px 0 14px}
+.explain-actions>button{min-width:0;flex:1;min-height:44px;font-size:14px;padding:9px 8px;
+  white-space:nowrap;display:inline-flex;justify-content:center;align-items:center;gap:5px}
+.explanation-text,.ocr-text-preview{font-size:14px;line-height:1.7;word-break:break-word;overflow-wrap:anywhere}
+.explanation-text:not(.expanded),.ocr-text-preview:not(.expanded){display:-webkit-box;
+  -webkit-box-orient:vertical;-webkit-line-clamp:5;line-clamp:5;overflow:hidden}
+.ocr-text-preview:not(.expanded){-webkit-line-clamp:6;line-clamp:6}
+.explanation-text.expanded,.ocr-text-preview.expanded{display:block;white-space:pre-wrap}
+.expand-copy{display:block;margin-top:2px;padding-inline:0;font-size:13px}
+.explain-points{border-top:1px solid var(--line);margin-top:9px;padding-top:11px;
+  font-size:13px;line-height:1.55}
+.explain-points summary{cursor:pointer;font-weight:650;color:var(--blue);padding:8px 0}
+.explain-points p{margin:7px 0}
+
+/* One file per row. View is primary; sort/OCR/trash are behind the ellipsis. */
+.original-panel{padding:13px}
+.original-section-heading .text-button{white-space:nowrap}
+.attachment-files{display:grid;gap:7px;margin:11px 0 16px}
+.attachment-file-row{display:flex;align-items:stretch;gap:7px;min-width:0}
+.attachment-file-open{display:flex;align-items:center;gap:9px;flex:1;min-width:0;
+  min-height:48px;padding:8px 11px;border:1px solid var(--line);border-radius:12px;
+  background:var(--soft);color:var(--ink);text-align:left}
+.attachment-file-open .ui-icon{color:var(--blue)}
+.attachment-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:14px;font-weight:650}
+.attachment-view-label{flex:none;font-size:12px;color:var(--blue);font-weight:700}
+.attachment-file-more{display:grid;place-items:center;flex:0 0 48px;min-width:48px;
+  min-height:48px;border:1px solid var(--line);border-radius:12px;
+  background:var(--soft);color:var(--blue)}
+.original-copy-section{border-top:1px solid var(--line);padding-top:11px}
+.original-copy-section .multiline{margin:10px 0 0;white-space:pre-wrap}
+.original-section-heading .muted{font-size:13px;font-weight:500}
+.attachment-menu-filename{margin:0 0 10px;font-size:13px;color:var(--secondary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attachment-action-line{justify-content:flex-start;gap:12px;font-size:15px;text-align:left}
+.attachment-action-line .ui-icon{flex:none;width:20px;color:var(--secondary)}
+.attachment-action-line.danger-text .ui-icon{color:var(--danger)}
+
+/* Confirmation sheets: short copy, stable button widths and zero wrapped labels. */
+.trash-confirm-title{display:-webkit-box;-webkit-box-orient:vertical;
+  -webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;
+  margin:0 0 8px;font-size:14px;line-height:1.5;font-weight:650}
+.confirmation-help{font-size:14px;line-height:1.55;margin:8px 0 16px;color:var(--secondary)}
+.sheet-actions{min-width:0}
+.sheet-actions>button{display:inline-flex;align-items:center;justify-content:center;
+  gap:6px;min-width:0;white-space:nowrap;padding-inline:8px;font-size:14px}
+.sheet-actions>button .ui-icon{flex:none}
+@media(max-width:370px){
+  .item-card{gap:8px;padding:10px}
+  .item-card .state-tag{font-size:10px;padding:4px 6px}
+  .detail-body .document-detail-title{font-size:19px}
+  .explain-actions>button{font-size:13px}
+  .explain-provider{font-size:12px}
+}
