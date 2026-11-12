@@ -35,13 +35,9 @@ test('Google code popup error and invalid code are fail-closed',async()=>{
  }),/客户端/);
 });
 
-test('PWA explicitly prefers the persistent Gmail API when Cloudflare is configured',()=>{
+test('PWA invokes browser redirect to grant Gmail access',()=>{
  const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
- assert.match(app,/gmailAuthorizePersistent\(/);
- assert.match(app,/api\('\/api\/google\/gmail\/status'\)/);
- assert.match(app,/api\('\/api\/google\/gmail\/connect'/);
- assert.match(app,/api\('\/api\/google\/gmail\/disconnect'/);
- assert.match(app,/api\('\/api\/google\/gmail\/messages/);
+ assert.match(app,/startGoogleAuthorization\('gmail'\)/);
+ assert.match(app,/api\/google\/gmail\/messages/);
  assert.match(app,/gmailPayloadToDocument\(/);
- assert.match(app,/长期授权/);
 });

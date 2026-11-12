@@ -87,9 +87,11 @@ function prompt(source){
  ].join('\n');
 }
 function config(env,provider){
+ // Gemini is user-selected and uses the user's API key; only Google determines
+ // its actual account quota/availability.
+ if(provider==='gemini')return env.GEMINI_API_KEY?'ready':'not_configured';
  if(env.ENABLE_DOCUMENT_AI!=='true')return 'disabled';
  if(provider==='cloudflare')return env.AI?.run?'ready':'not_configured';
- if(provider==='gemini')return env.GEMINI_API_KEY&&env.GEMINI_FREE_ONLY_CONFIRMED==='true'?'ready':'not_configured';
  return 'rules_only';
 }
 async function generate(env,provider,source){
@@ -142,7 +144,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  const provider=doc.ai_provider||'none';
  if(provider==='none')return {ai_status:'rules_only'};
  if(!doc.extracted_text_ja)return {ai_status:'awaiting_text'};
- if(provider==='gemini'&&(!doc.ai_consent_at||sensitive))return {ai_status:'privacy_blocked'};
+ if(provider==='gemini'&&!doc.ai_consent_at)return {ai_status:'privacy_blocked'};
  const available=config(env,provider);
  if(available!=='ready')return {ai_status:available};
  const source=String(doc.extracted_text_ja);
@@ -159,7 +161,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
    return {ai_status:'cached',result,added_fields};
   }
   const delta=Date.now()-Date.parse(old.updated_at);
-  if(Number.isFinite(delta)&&delta<3600000)return {ai_status:old.state==='pending'?'in_progress':'cooldown'};
+  if(Number.isFinite(delta)&&delta<3600000&&provider!=='gemini')return {ai_status:old.state==='pending'?'in_progress':'cooldown'};
   if(old.state==='pending')return {ai_status:'stale_needs_review'};
  }
  const now=isoNow();
@@ -169,14 +171,18 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
   await run(env.DB,"INSERT OR IGNORE INTO document_ai_analyses(document_id,provider,source_sha,model_id,prompt_version,state,updated_at) VALUES(?,?,?,?,?,'pending',?)",
    doc.id,provider,sourceHash,model,PROMPT,now);
  if(claim.meta?.changes!==1)return {ai_status:'in_progress'};
- const n=Number(env.AI_ANALYSIS_DAILY_LIMIT??2),limit=Number.isSafeInteger(n)?Math.max(0,Math.min(5,n)):0;
- if(!limit){await run(env.DB,"UPDATE document_ai_analyses SET state='failed',updated_at=? WHERE document_id=?",isoNow(),doc.id);return {ai_status:'budget_disabled'};}
- const day=new Date().toISOString().slice(0,10);
- await run(env.DB,'INSERT OR IGNORE INTO ai_analysis_daily(day_utc) VALUES(?)',day);
- const allowed=await run(env.DB,'UPDATE ai_analysis_daily SET calls=calls+1 WHERE day_utc=? AND calls<?',day,limit);
- if(allowed.meta?.changes!==1){
-  await run(env.DB,"UPDATE document_ai_analyses SET state='failed',updated_at=? WHERE document_id=?",isoNow(),doc.id);
-  return {ai_status:'budget_exhausted'};
+ // Gemini uses the owner's API key. Let Google enforce its own billing/rate
+ // policies; this app's small shared daily quota applies only to Workers AI.
+ if(provider==='cloudflare'){
+  const n=Number(env.AI_ANALYSIS_DAILY_LIMIT??2),limit=Number.isSafeInteger(n)?Math.max(0,Math.min(5,n)):0;
+  if(!limit){await run(env.DB,"UPDATE document_ai_analyses SET state='failed',updated_at=? WHERE document_id=?",isoNow(),doc.id);return {ai_status:'budget_disabled'};}
+  const day=new Date().toISOString().slice(0,10);
+  await run(env.DB,'INSERT OR IGNORE INTO ai_analysis_daily(day_utc) VALUES(?)',day);
+  const allowed=await run(env.DB,'UPDATE ai_analysis_daily SET calls=calls+1 WHERE day_utc=? AND calls<?',day,limit);
+  if(allowed.meta?.changes!==1){
+   await run(env.DB,"UPDATE document_ai_analyses SET state='failed',updated_at=? WHERE document_id=?",isoNow(),doc.id);
+   return {ai_status:'budget_exhausted'};
+  }
  }
  try{
   const result=normalizeAiAnalysis(await generate(env,provider,source),source);

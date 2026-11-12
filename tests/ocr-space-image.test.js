@@ -37,5 +37,6 @@ test('JPEG PNG and WebP import controls include explicit-consent OCR.space fallb
  assert.match(app,/importOcrSpaceConsent/);
  assert.match(app,/image\\\/\(\?:jpeg\|png\|webp\)/);
  assert.match(app,/ocr-space\/preview/);
- assert.match(app,/不必先保存到 R2/);
+ assert.match(app,/发送所选图片至第三方识别/);
+ assert.match(app,/同意发送给 OCR.space/);
 });
