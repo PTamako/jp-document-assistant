@@ -486,6 +486,14 @@ paths:
                   type: string
                   enum: [local_file, image, google_drive]
                   description: 用户声明的文件来源，不能作为官方真实性证明
+                ai_provider:
+                  type: string
+                  enum: [none, cloudflare, gemini]
+                  description: 仅为这一份文件保存 AI 选择；不会在上传时发起 AI 推理
+                gemini_consent:
+                  type: string
+                  enum: ['true', 'false']
+                  description: 选择 Gemini 时必须明确确认；仅保存同意状态，当前不上传 Gemini
               required:
               - file
               - retention
