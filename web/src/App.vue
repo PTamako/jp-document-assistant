@@ -839,7 +839,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">返回</button></div>
       </template>
       <template v-else-if="sheet==='gmail'"><h2>Gmail · 只读选取</h2>
-        <p class="fine-print">每次最多浏览五封；只在选择邮件后读取正文。授权令牌仅在应用运行期间保留，Google 已授予的权限不再强制重复同意。</p>
+        <p class="fine-print">每次最多浏览五封；只在选择邮件后读取正文。授权令牌仅在应用运行期间保留，Google 已授予的权限不再强制重复同意。 保存前需确认所选邮件内容。</p>
         <button v-if="!gmailAuthorizedUi" class="primary full" :disabled="gmailBusy||gmailIdentityLoadingUi||!gmailIdentityReadyUi" @click="connectGmail">{{gmailIdentityLoadingUi?'正在准备 Google 登录…':'授权 Gmail 只读访问'}}</button><button v-if="!gmailAuthorizedUi&&!gmailIdentityLoadingUi&&!gmailIdentityReadyUi" class="text-button full" type="button" @click="openGmailSheet">重试加载 Google 登录组件</button>
         <template v-else>
           <label class="form-label">Gmail 搜索条件<input v-model.trim="gmailQuery" maxlength="180" placeholder="newer_than:30d" /></label>
@@ -852,7 +852,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
           <button v-if="gmailNext" class="text-button full" :disabled="gmailBusy" @click="loadGmailMessages(true)">继续查看五封</button>
           <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">撤销 Gmail 授权</button>
         </template>
-        <p class="fine-print">如果主屏幕 PWA 的 Google 弹窗失败，可直接从苹果邮件复制正文，或使用「文件」导入；Apple Mail 聚合邮箱无法通过 Gmail API 直接读取。</p><button v-if="iosStandalonePwa" class="text-button full" type="button" @click="sheet='safariGoogleGuide'">Google 弹窗无法使用？查看替代导入方式</button>
+        <p class="fine-print">Gmail 只读授权受 Google 限制。如果主屏幕 PWA 的 Google 弹窗失败，可直接从苹果邮件复制正文，或使用「文件」导入；Apple Mail 聚合邮箱无法通过 Gmail API 直接读取。</p><button v-if="iosStandalonePwa" class="text-button full" type="button" @click="sheet='safariGoogleGuide'">Google 弹窗无法使用？查看替代导入方式</button>
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
       </template>
       <template v-else-if="sheet==='filter'">
