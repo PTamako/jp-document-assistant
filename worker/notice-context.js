@@ -80,10 +80,34 @@ export function explainNotice({text,category,fields}){
    summary='保险通知';
    lines.push('这是什么：保险合同或理赔相关文书。应区分投保、续约、缴费、申请与理赔是否批准。');
  }else if(category==='utility'){
-   summary='水电燃气通知';
-   lines.push('这是什么：生活公共费用通知。请区分账单金额、支付期限和是否已经实际扣款。');
-   if(amount)lines.push('原文金额线索：'+amount+'（待核对）。');
- }else if(category==='travel'||category==='hotel'){
+   const electric=/(?:電気|電力|検針|kWh)/i.test(text);
+   if(electric){
+     summary='电费账单／用电量通知';
+     lines.push('这是什么：日本电费通知，包含计量期间、用电量、该期间显示的电费及本次请款金额。各金额不一定相等，不能混为一笔款项。');
+     const from=field(fields,'meter_period_start'),to=field(fields,'meter_period_end');
+     if(from&&to)lines.push('电费检针期间：'+from.normalized_value+' 至 '+to.normalized_value+'（以原文为准）。');
+     const used=field(fields,'usage_kwh');
+     if(used)lines.push('本期用电量：'+used.normalized_value+' kWh（来自原文）。');
+     const charge=field(fields,'period_charge_jpy');
+     const invoice=field(fields,'amount_jpy');
+     const showYen=x=>Number(x.normalized_value).toLocaleString('ja-JP')+' 日元';
+     if(charge)lines.push('检针期间显示电费：'+showYen(charge)+( /税込/.test(charge.source_quote)?'（原文标记含税）':'')+'；这是期间费用信息，不应替代本次请款总额。');
+     if(invoice)lines.push('本次请款金额：'+showYen(invoice)+( /税込/.test(invoice.source_quote)?'（原文标记含税）':'')+'；这是账单当前列示的请款金额，不代表已经扣款。');
+     if(charge&&invoice&&Number(charge.normalized_value)!==Number(invoice.normalized_value)){
+       const diff=Math.abs(Number(charge.normalized_value)-Number(invoice.normalized_value));
+       lines.push('两项金额相差 '+diff.toLocaleString('ja-JP')+' 日元。原文没有说明差额原因，不能擅自判断是折扣、积分、补贴或税费调整，应查询正式明细。');
+     }
+     const card=field(fields,'card_advance_date');
+     if(card)lines.push('カード立替日：'+card.normalized_value+'。这表示通知所列的信用卡垫付日期，不是缴费截止日，也不能据此断定发卡机构已最终扣款。');
+     const due=field(fields,'due_date');
+     if(due)lines.push('另外，原文明确列出的办理／缴费期限：'+due.normalized_value+'，需核对支付规定。');
+     else lines.push('本段没有明确缴费截止日；检针结束日和卡垫付日期都不能当作截止期限。');
+     lines.push('建议：向电力公司或支付服务查验请款明细与卡交易状态；在家計簿中先核对是否已经记录，避免重复计费。');
+   }else{
+     summary='水电燃气通知';
+     lines.push('这是什么：生活公共费用通知。请区分账单金额、支付期限和是否已经实际扣款。');
+     if(amount)lines.push('原文金额线索：'+amount+'（待核对）。');
+   }else if(category==='travel'||category==='hotel'){
    summary=category==='hotel'?'住宿预订通知':'出行／机票通知';
    lines.push('这是什么：预订或行程通知。预订成功与实际付款、入住或乘机不是同一状态。');
  }else{
