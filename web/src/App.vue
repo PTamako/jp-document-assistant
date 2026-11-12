@@ -837,7 +837,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="loadUsage">刷新服务用量 <UiIcon name="refresh-cw" :size="17"/></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
-        <div class="info-note" v-if="usage">Cloudflare 全账号免费额度：<strong>未确认</strong>。本地统计 AI 调用 {{usage.local_today.ai_calls}} 次，不代表全账号剩余额度。</div>
+        <div class="info-note" v-if="usage">Cloudflare / Gemini 账户级免费额度：<strong>无法确认</strong>。本应用今日文书 AI 请求 {{usage.document_ai_utc_day?.calls??0}} / {{usage.document_ai_utc_day?.limit??0}} 次；OCR 云端尝试 {{usage.app_utc_day?.calls??0}} / {{usage.app_utc_day?.limit??0}} 次。以上仅为本应用限额，不代表提供商剩余额度或是否收费。</div>
         <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
