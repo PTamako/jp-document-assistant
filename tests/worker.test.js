@@ -1330,3 +1330,41 @@ test('re-interpretation only adds missing fields, preserves manual review and ne
   assert.equal((await req(env,`/api/documents/${id}/reinterpret`,{method:'POST',...auth(owner),data:{}})).data.added_fields,0);
   assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
 });
+
+
+test('electricity mail import previews only invoiced 1770 JPY, not 1966 metering charge or false due task',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const text=[
+  '電気料金の検針期間','2026/09/16 ~ 2026/10/15\t1,966円 (税込)',
+  '56.00kWh','今回のご請求金額合計：','1,770円（税込)',
+  'カード立替日 : 2026/10/28'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{
+   method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text}
+ });
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(doc.category,'utility');
+ assert.equal(doc.fields.find(x=>x.field_key==='amount_jpy')?.normalized_value,'1770');
+ assert.equal(doc.fields.find(x=>x.field_key==='period_charge_jpy')?.normalized_value,'1966');
+ assert.equal(doc.fields.find(x=>x.field_key==='card_advance_date')?.normalized_value,'2026-10-28');
+ assert.equal(doc.fields.some(x=>x.field_key==='due_date'),false);
+ const suggestions=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ assert.equal(suggestions.some(x=>x.candidate_kind==='homeflow_task'),false);
+ const financial=suggestions.find(x=>x.candidate_kind==='finance');
+ assert.equal(financial?.payload.amount_jpy,1770);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+ const amount=doc.fields.find(x=>x.field_key==='amount_jpy');
+ const saved=await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
+   data:{normalized_value:'1770',review_state:'confirmed'}});
+ assert.equal(saved.response.status,200);
+ // Existing verified field id/state and bridge proposals survive explicit re-explanation.
+ const updated=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ assert.equal(updated.response.status,200);
+ assert.equal(updated.data.remote_integrations_unchanged,true);
+ const now=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(now.fields.find(x=>x.field_key==='amount_jpy')?.review_state,'confirmed');
+ assert.equal(now.fields.find(x=>x.field_key==='amount_jpy')?.id,amount.id);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+});
