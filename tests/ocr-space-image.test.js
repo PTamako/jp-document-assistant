@@ -33,10 +33,10 @@ test('image OCR fallback removes metadata by creating a fresh bounded JPEG',asyn
 });
 test('saved image attachments show both Workers AI and OCR.space controls',()=>{
  const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
- assert.match(app,/@click="runOcr\(a\)"/);
- assert.match(app,/\['image\/jpeg','image\/png','image\/webp'\]\.includes\(a\.mime\)/);
- assert.match(app,/Workers AI 图片识别/);
- assert.match(app,/@click="openOcrSpace\(a\)"/);
+ assert.match(app,/@click="runOcr\(selectedAttachment\)"/);
+ assert.match(app,/\['image\/jpeg','image\/png','image\/webp'\]\.includes\(selectedAttachment\?\.mime\)/);
+ assert.match(app,/Workers AI 识别/);
+ assert.match(app,/@click="openOcrSpace\(selectedAttachment\)"/);
  assert.match(app,/sheet==='ocrConfirm'/);
 });
 test('import file/photo OCR provider picker offers Workers AI for images and PDF pages',()=>{
@@ -69,7 +69,7 @@ test('JPEG PNG and WebP import controls include explicit-consent OCR.space fallb
  assert.match(app,/importOcrEngine==='ocr_space'/);
  assert.match(app,/同意发送所选/);
  assert.doesNotMatch(app,/<h3>OCR\.space<\/h3>/);
- assert.doesNotMatch(app,/>OCR\.space 识别<\/button>/);
+ assert.doesNotMatch(app.slice(app.indexOf("<template v-if=\"sheet===\'import\'\">"),app.indexOf("<template v-else-if=\"sheet===\'confirmDeadline\'\">")),/>OCR\.space 识别<\/button>/);
  assert.doesNotMatch(app,/>重新运行本机日文 OCR<\/button>/);
  const css=readFileSync(new URL('../web/src/style.css',import.meta.url),'utf8');
  assert.match(css,/\.ocr-method-row\{/);
