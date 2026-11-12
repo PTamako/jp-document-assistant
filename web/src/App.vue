@@ -247,7 +247,7 @@ async function connectGmail(){
         exchangeCode:code=>api('/api/google/gmail/connect',{method:'POST',body:{code}})
       });
       accountEpoch.assertCurrent(epoch);
-      gmailPersistent.value={...gmailPersistent.value,connected:true,google_email:result.google_email};
+      gmailPersistent.value={...gmailPersistent.value,connected:true,needs_reauthorization:false,google_email:result.google_email};
       gmailAuthorizedUi.value=true;
       flash('Gmail 长期连接已建立。令牌由 Cloudflare 加密保管，过期时自动续期。');
     }else{
@@ -296,9 +296,9 @@ async function disconnectGmail(){
   gmailGeneration++;gmailItems.value=[];gmailNext.value=null;
   gmailBusy.value=true;
   try{
-    if(gmailPersistent.value.connected){
+    if(gmailPersistent.value.enabled&&(gmailPersistent.value.connected||gmailPersistent.value.needs_reauthorization)){
       const result=await api('/api/google/gmail/disconnect',{method:'POST',body:{}});
-      gmailPersistent.value={...gmailPersistent.value,connected:false,google_email:null};
+      gmailPersistent.value={...gmailPersistent.value,connected:false,needs_reauthorization:false,google_email:null};
       gmailForget();
       flash(result.remotely_revoked?'Gmail 已断开并撤销 Google 权限':'Gmail 本应用连接已删除；Google 远端撤销尚未确认');
     }else{
@@ -1053,6 +1053,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeou
       </template>
       <template v-else-if="sheet==='gmail'"><h2>Gmail · 只读选取</h2>
         <p class="fine-print">每次最多浏览五封，只读取你主动选择的邮件正文。{{gmailPersistent.enabled?'Cloudflare 将加密保存 Gmail 长期授权并自动续期；手机不保存 Google 令牌。':'当前为临时授权，关闭 PWA 后可能需要重新连接；长期授权需要后台完成安全配置。'}} 保存前需确认内容。</p>
+        <button v-if="gmailPersistent.enabled&&gmailPersistent.needs_reauthorization" class="secondary full" :disabled="gmailBusy" @click="disconnectGmail">清除过期的 Gmail 长期授权</button>
         <button v-if="!gmailAuthorizedUi" class="primary full" :disabled="gmailBusy||gmailIdentityLoadingUi||!gmailIdentityReadyUi" @click="connectGmail">{{gmailIdentityLoadingUi?'正在准备 Google 登录…':gmailPersistent.enabled?'连接 Gmail（长期授权）':'授权 Gmail 只读访问（临时）'}}</button><button v-if="!gmailAuthorizedUi&&!gmailIdentityLoadingUi&&!gmailIdentityReadyUi" class="text-button full" type="button" @click="openGmailSheet">重试加载 Google 登录组件</button>
         <template v-else>
           <p v-if="gmailPersistent.connected&&gmailPersistent.google_email" class="fine-print">已长期连接：{{gmailPersistent.google_email}}</p>
