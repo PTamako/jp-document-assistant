@@ -873,6 +873,65 @@ paths:
         required: true
         schema:
           type: string
+  /api/documents/{documentId}/ai/analyze:
+    post:
+      tags: [Documents]
+      operationId: analyzeSelectedDocumentOnce
+      summary: 按当前文书所选引擎运行一次 AI 分析；缓存命中不再调用，预算与隐私保护
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: {type: string}
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm: {type: boolean, const: true}
+              required: [confirm]
+      responses:
+        '200': {description: AI 状态或受约束的候选解读；不会直接写三个目标 App}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/ocr-space:
+    post:
+      tags: [Documents]
+      operationId: explicitlyRunOcrSpaceBackup
+      summary: 经明确隐私确认后使用免费 OCR.space Engine 3 对 R2 附件识别
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: {type: string}
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                attachment_id: {type: string}
+                confirm_ocr_space: {type: boolean, const: true}
+                confirm_private_upload: {type: boolean, const: true}
+              required: [attachment_id, confirm_ocr_space, confirm_private_upload]
+      responses:
+        '200': {description: 仅返回未经人工确认的 OCR 候选文字}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /api/documents/{documentId}/ai-provider:
     patch:
       tags: [Documents]
