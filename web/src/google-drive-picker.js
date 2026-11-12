@@ -13,6 +13,24 @@ const MIME_BY_EXT={
  '.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp'
 };
 const scripts=new Map();
+// Keep a short-lived, scope-specific Drive access token in memory only.
+// Google keeps the *consent grant* until the user revokes it; don't revoke it
+// on every file selection. Clear the token when the app user switches/logs out.
+let driveToken='',driveExpiresAt=0,driveGeneration=0;
+export const driveAuthorizationReady=()=>!!driveToken&&Date.now()+30000<driveExpiresAt;
+export function forgetDriveAuthorization(){
+ driveGeneration++;driveToken='';driveExpiresAt=0;
+}
+export async function revokeDriveAuthorization(){
+ const old=driveToken;forgetDriveAuthorization();
+ if(!old)return true;
+ if(typeof window==='undefined'||!window.google?.accounts?.oauth2?.revoke)return false;
+ return new Promise((resolve,reject)=>{
+  try{window.google.accounts.oauth2.revoke(old,r=>r?.successful===true||r?.error==='invalid_token'?resolve(true):reject(new Error('Google 远程撤销未成功')))}
+  catch(e){reject(e)}
+ });
+}
+
 const cleanName=name=>{
  const n=String(name||'').replace(/[\x00-\x1f\x7f\\/]/g,'_').trim().slice(0,180);
  return n&&n!=='.'&&n!=='..'?n:'Google-Drive-文书';
@@ -109,8 +127,8 @@ export async function prepareGoogleDrivePicker(config=drivePickerConfig()){
 export function pickGoogleDriveFile(config=drivePickerConfig()){
  if(!config)return Promise.reject(new Error('尚未配置 Google Drive 授权'));
  if(!googlePickerReady())return Promise.reject(new Error('Google 授权组件尚未准备好，请稍后重新点击选择文件'));
- const google=window.google,p=google.picker;
- // No await before requestAccessToken: Safari needs the direct click stack.
+ const google=window.google,p=google.picker,session=driveGeneration;
+ // No await before a first requestAccessToken: iOS needs the direct click.
  return new Promise((resolve,reject)=>{
   let token=null,finished=false,timeout=null;
   function deadline(ms,message){
@@ -120,47 +138,65 @@ export function pickGoogleDriveFile(config=drivePickerConfig()){
   function finish(value,error){
    if(finished)return;
    finished=true;clearTimeout(timeout);
-   const toRevoke=token;token=null;
-   if(toRevoke)try{google.accounts.oauth2.revoke(toRevoke,()=>{})}catch{}
+   token=null;
+   // Do not revoke here: revoking would undo Google consent every time the
+   // user picks a single file. Only a separate explicit revoke may do that.
    if(error)reject(error);else resolve(value);
   }
-  deadline(60000,'Google 授权未返回结果。请在 Safari 打开网站并重新授权；主屏幕 PWA 可能拦截弹窗');
+  function showPicker(granted){
+   if(session!==driveGeneration)return finish(null,new Error('账号已切换，请重新选择 Google 文件'));
+   token=granted;
+   deadline(180000,'Google 文件选择等待超时，请重新打开选择器');
+   try{
+    const picker=new p.PickerBuilder().addView(p.ViewId.DOCS)
+     .setOAuthToken(granted).setDeveloperKey(config.apiKey)
+     .setAppId(config.appId).setOrigin(window.location.origin)
+     .setCallback(async event=>{
+      if(finished)return;
+      if(event.action===p.Action.CANCEL)return finish(null,null);
+      if(event.action===p.Action.ERROR)return finish(null,new Error('Google Picker 加载失败，请检查授权或改用 iPhone「文件」导入'));
+      if(event.action!==p.Action.PICKED)return;
+      try{
+       const item=event.docs?.[0];
+       if(!item)return finish(null,new Error('没有选中任何文件'));
+       const file=await fetchPickedDriveFile(item,granted);
+       if(session!==driveGeneration)return finish(null,new Error('账号已切换，文件已丢弃'));
+       finish(file,null);
+      }catch(e){
+       // A revoked or expired token is discarded before the next user click.
+       if(/Google.*(?:401|授权|读取失败)/.test(e?.message||''))forgetDriveAuthorization();
+       finish(null,e);
+      }
+     }).build();
+    picker.setVisible(true);
+   }catch(e){finish(null,e)}
+  }
+  if(driveAuthorizationReady())return showPicker(driveToken);
+  deadline(60000,'Google 授权未返回结果。主屏幕 PWA 可尝试从 iPhone「文件」选择 Google Drive 文件');
   try{
    const client=google.accounts.oauth2.initTokenClient({
     client_id:config.clientId,scope:SCOPE,include_granted_scopes:false,
     error_callback(error){
      const reason=error?.type==='popup_failed_to_open'?'授权弹窗被拦截':
       error?.type==='popup_closed'?'授权窗口已关闭':'Google 授权弹窗失败';
-     finish(null,new Error(reason+'。请改用 Safari 直接打开网站授权'));
+     finish(null,new Error(reason+'。可尝试 Safari 或通过 iPhone「文件」导入'));
     },
     callback(auth){
-     if(finished){
-      if(auth?.access_token)try{google.accounts.oauth2.revoke(auth.access_token,()=>{})}catch{}
-      return;
+     if(finished)return;
+     if(session!==driveGeneration)return finish(null,new Error('账号已切换，授权已取消'));
+     if(auth?.error||!auth?.access_token)return finish(null,new Error('Google 授权未完成，请检查账号或 Google 同意页面设置'));
+     if(!google.accounts.oauth2.hasGrantedAllScopes?.(auth,SCOPE))
+      return finish(null,new Error('没有获得所需的 Google Drive 文件读取权限'));
+     const seconds=Number(auth.expires_in);
+     // If expiration is missing, use the token for only the current pick.
+     if(Number.isFinite(seconds)&&seconds>60){
+      driveToken=auth.access_token;driveExpiresAt=Date.now()+seconds*1000;
      }
-     if(auth?.error||!auth?.access_token)return finish(null,new Error('Google 授权未完成，请检查测试用户及 Google 授权设置'));
-     token=auth.access_token;
-     deadline(180000,'Google 文件选择等待超时，请重新打开选择器');
-     try{
-      const picker=new p.PickerBuilder().addView(p.ViewId.DOCS)
-       .setOAuthToken(token).setDeveloperKey(config.apiKey)
-       .setAppId(config.appId).setOrigin(window.location.origin)
-       .setCallback(async event=>{
-        if(finished)return;
-        if(event.action===p.Action.CANCEL)return finish(null,null);
-        if(event.action===p.Action.ERROR)return finish(null,new Error('Google Picker 加载失败，请检查 Picker API 与密钥限制'));
-        if(event.action!==p.Action.PICKED)return;
-        try{
-         const item=event.docs?.[0];
-         if(!item)return finish(null,new Error('没有选中任何文件'));
-         finish(await fetchPickedDriveFile(item,token),null);
-        }catch(e){finish(null,e)}
-       }).build();
-      picker.setVisible(true);
-     }catch(e){finish(null,e)}
+     showPicker(auth.access_token);
     }
    });
-   client.requestAccessToken({prompt:'consent'});
-  }catch(e){finish(null,new Error('无法打开 Google 授权窗口，请在 Safari 中重试：'+(e?.message||'未知错误')))}
+   // Empty prompt preserves Google's previously granted consent.
+   client.requestAccessToken({prompt:''});
+  }catch(e){finish(null,new Error('无法打开 Google 授权窗口；可使用 iPhone「文件」导入：'+(e?.message||'未知错误')))}
  });
 }
