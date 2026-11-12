@@ -18,7 +18,11 @@ test('Google OAuth/Picker/Gmail CSP allows required providers but keeps a strict
  assert.ok(directives['frame-src'].includes('https://docs.google.com'));
  assert.ok(directives['frame-src'].includes('https://accounts.google.com'));
  assert.ok(!directives['script-src'].includes("'unsafe-inline'"));
- assert.ok(!directives['script-src'].includes("'unsafe-eval'"));
+ // Safari/ONNX JS glue uses Function-generated code in addition to WASM.
+ // We still forbid inline scripts and wildcard script hosts.
+ assert.ok(directives['script-src'].includes("'unsafe-eval'"));
+ assert.ok(!directives['script-src'].includes("'unsafe-inline'"));
+ assert.ok(!directives['script-src'].includes('*'));
  assert.ok(!directives['script-src'].includes('*'));
  assert.ok(!directives['connect-src'].includes('*'));
 });
