@@ -57,8 +57,11 @@ function validatedPayload(target,item,approved,body){
   }
   if(target==='zhixue'){
     if(item.candidate_kind==='sentence'){
-      if(!trim(body.redacted_sentence,220))bad('请确认脱敏后的句子');
-      return {operation:'sentence',language:'ja',sentence:trim(body.redacted_sentence,220),meaning_zh:trim(x.translation_zh,400)};
+      const redacted=trim(body.redacted_sentence,220);
+      if(!redacted||!trim(x.translation_zh,400))bad('请确认完整的脱敏日文句子和中文翻译','INVALID_SENTENCE',400);
+      if(body.privacy_confirmed!==true)bad('请确认句子不包含个人资料','PRIVACY_CONFIRM_REQUIRED',409);
+      if(/[\\d０-９]{5,}|@|〒|\\n/.test(redacted))bad('句子疑似包含私人信息，请先脱敏','PII_WARNING',409);
+      return {operation:'sentence',language:'ja',sentence:redacted,meaning_zh:trim(x.translation_zh,400),privacy_confirmed:true,skip_existing:true};
     }
     if(!trim(x.term,100)||!trim(x.meaning_zh,200))bad('不完整的词条不可同步');
     if(body.privacy_confirmed!==true)bad('请确认学习内容不包含个人资料','PRIVACY_CONFIRM_REQUIRED',409);
@@ -77,21 +80,16 @@ export async function candidatePreview(request,env,p,id){
   const target=TARGETS[item.candidate_kind];
   const fields=await checkedFields(env,item.document_id);
   const link=await first(env.DB,'SELECT state,remote_id,attempt_count,last_error_code FROM integration_links WHERE candidate_id=?',id);
-  const sentenceUnsupported=item.candidate_kind==='sentence';
   return json({candidate_id:id,target,kind:item.candidate_kind,payload:JSON.parse(item.payload_json),
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
-    integration:link||null,available:!sentenceUnsupported&&!!config(env,target),
+    integration:link||null,available:!!config(env,target),
     account_mapping_ready:!!authorizedMapping(env,p.user_id,target),
-    note:sentenceUnsupported?
-      '知学现有安全桥接仅支持生词；私人句卡的双人账户模型未完成，禁止发送私人句子。请人工复制脱敏句子，正式联动待安全审查。':
-      '请对照原文和目标 App 账号确认。任何金额都不会因识别成功而自动记账。'});
+    note:'请对照原文及目标 App 的账号完成二次确认。生词和句子必须先脱敏，财务内容不能直接视为已付款。'});
 }
 export async function commitCandidate(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
   const target=TARGETS[item.candidate_kind];
-  if(item.candidate_kind==='sentence')
-    return failure('STUDY_SENTENCE_NOT_READY','知学目前没有满足双人私密句卡要求的独立授权接收端；未发送任何私人句子',503);
   const data=await readJson(request,9000);
   if(data.confirm!==CONFIRMATIONS[item.candidate_kind])bad('需要明确二次确认','CONFIRM_REQUIRED',409);
   const supplied=request.headers.get('Idempotency-Key');

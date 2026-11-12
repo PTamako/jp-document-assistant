@@ -12,6 +12,8 @@ OCR_ATTEMPTS = (ROOT / 'migrations' / '0007_ocr_attempts.sql').read_text()
 BRIDGE_FINGERPRINT = (ROOT / 'migrations' / '0008_bridge_fingerprint.sql').read_text()
 CALENDAR_SUBSCRIPTIONS = (ROOT / 'migrations' / '0009_calendar_subscriptions.sql').read_text()
 OCR_UTC_BUDGET = (ROOT / 'migrations' / '0010_ocr_utc_budget.sql').read_text()
+AI_PROVIDER = (ROOT / 'migrations' / '0011_document_ai_provider.sql').read_text()
+AI_ANALYSIS = (ROOT / 'migrations' / '0012_document_ai_analysis.sql').read_text()
 NOW = '2026-11-11T00:00:00Z'
 
 
@@ -26,6 +28,8 @@ def conn():
     db.executescript(BRIDGE_FINGERPRINT)
     db.executescript(CALENDAR_SUBSCRIPTIONS)
     db.executescript(OCR_UTC_BUDGET)
+    db.executescript(AI_PROVIDER)
+    db.executescript(AI_ANALYSIS)
     return db
 
 
@@ -43,6 +47,13 @@ class SchemaTests(unittest.TestCase):
         seed(self.db)
     def tearDown(self):
         self.db.close()
+    def test_ai_provider_is_document_specific(self):
+        self.assertEqual(self.db.execute("SELECT ai_provider FROM documents WHERE id='d1'").fetchone()[0],"none")
+        self.db.execute("UPDATE documents SET ai_provider='cloudflare' WHERE id='d1'")
+        self.assertEqual(self.db.execute("SELECT ai_provider FROM documents WHERE id='d2'").fetchone()[0],"none")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE documents SET ai_provider='invalid' WHERE id='d1'")
+
     def test_document_source_date_does_not_imply_official_verification(self):
         before=self.db.execute("SELECT source_document_date,official_current_verified_at FROM documents WHERE id='d1'").fetchone()
         self.assertEqual(before,(None,None))

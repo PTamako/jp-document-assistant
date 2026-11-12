@@ -27,7 +27,8 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes all
  assert.doesNotMatch(JSON.stringify(wrangler),/JPDA_BRIDGE_ALLOWED_USER|JPDA_BRIDGE_STUDY_ACTOR_ID|BRIDGE_USER_MAP/);
  assert.equal(wrangler.vars?.R2_BUCKET_NAME,'jp-document-assistant-private');
  assert.equal(wrangler.ai?.binding,'AI');
- assert.equal(wrangler.vars?.ENABLE_EXPERIMENTAL_OCR,'true');
+ assert.equal(wrangler.vars?.ENABLE_EXPERIMENTAL_OCR,'false');
+ assert.equal(wrangler.vars?.ENABLE_DOCUMENT_AI,'true');
  assert.equal(wrangler.vars?.OCR_CALLS_PER_USER_DAY,'1');
  assert.equal(wrangler.vars?.OCR_APP_UTC_DAILY_LIMIT,'1');
  assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.

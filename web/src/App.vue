@@ -28,9 +28,11 @@ const categoryIcon=kind=>({salary:'wallet',card_spend:'wallet',bank:'wallet',top
 const candidateIcon=kind=>({finance:'wallet',homeflow_task:'today',vocabulary:'book',sentence:'book'}[kind]||'links');
 const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',failed:'同步失败',pending:'待确认'}[state]||'待确认');
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
+const aiAnalysis=computed(()=>current.value?.ai_analysis?.result||null);
+const aiStatusLabel={success:'AI 已分析',pending:'AI 处理中',failed:'AI 上次分析失败'};
 const swipeOpenId=ref(''),swipeTrashTarget=ref(null);
 const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),localTextInput=ref(null),localImportNote=ref(''),inputMode=ref('text');
-const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original'),fileSource=ref('local_file');
+const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original'),fileSource=ref('local_file'),ocrProgress=ref('');
 const drivePickerAvailable=!!drivePickerConfig();
 const iosStandalonePwa=isIosStandalonePwa();
 const mainSiteUrl=typeof window==='undefined'?'':window.location.origin+'/';
@@ -45,8 +47,10 @@ let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
-const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
+const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
+// Selection belongs to THIS import only; never stored as a global/device default.
+const aiProvider=ref(''),geminiConsent=ref(false),docAiProvider=ref('none'),docGeminiConsent=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
 
 const fieldLabel={merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
@@ -87,6 +91,8 @@ const choices={
  visibility:{title:'可见范围',items:[{value:'all',label:'全部'},{value:'mine',label:'我拥有的'},{value:'shared',label:'家庭共享'}]},
  archived:{title:'归档状态',items:[{value:'active',label:'未归档'},{value:'archived',label:'已归档'},{value:'all',label:'全部'}]},
  favorite:{title:'收藏',items:[{value:'all',label:'全部'},{value:'yes',label:'仅收藏'}]},
+ aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则分析（不调用 AI）'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 免费 API'}]},
+ docAiProvider:{title:'当前文书 AI 引擎',items:[{value:'none',label:'仅规则分析（不调用 AI）'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 免费 API'}]},
  textSource:{title:'文书来源',items:[{value:'text',label:'粘贴文本'},{value:'mail_forward',label:'苹果邮件复制 / 转发'},{value:'gmail',label:'Gmail 逐封选择'},{value:'google_drive',label:'Google Drive 复制'},{value:'local_file',label:'本地文档文本'}]},
  textRetention:{title:'保存方式',items:[{value:'summary',label:'保存文字和分析结果'},{value:'analyze_only',label:'仅分析，不保存'}]},
  fileRetention:{title:'保存方式',items:[{value:'analyze_only',label:'仅分析，不保存'},{value:'summary',label:'仅保存文字，不上传 R2'},{value:'original',label:'保存私有原件到 R2'}]},
@@ -100,6 +106,8 @@ function choiceValue(field){
   case 'visibility':return visibilityFilter.value;
   case 'archived':return archivedFilter.value;
   case 'favorite':return favoriteFilter.value;
+  case 'aiProvider':return aiProvider.value;
+  case 'docAiProvider':return docAiProvider.value;
   case 'textSource':return textDraft.source_type;
   case 'textRetention':return textDraft.retention;
   case 'fileRetention':return fileRetention.value;
@@ -133,6 +141,8 @@ function selectChoice(value){
   case 'visibility':visibilityFilter.value=value;break;
   case 'archived':archivedFilter.value=value;break;
   case 'favorite':favoriteFilter.value=value;break;
+  case 'aiProvider':aiProvider.value=value;geminiConsent.value=false;break;
+  case 'docAiProvider':docAiProvider.value=value;docGeminiConsent.value=false;break;
   case 'textSource':textDraft.source_type=value;break;
   case 'textRetention':textDraft.retention=value;break;
   case 'fileRetention':fileRetention.value=value;break;
@@ -229,6 +239,7 @@ async function selectGmailMessage(id){
   try{
     const doc=await gmailReadOne(id);
     if(serial!==gmailGeneration||!user.value)return;
+    aiProvider.value='';geminiConsent.value=false;
     textDraft.title=doc.title;textDraft.text=doc.text;
     textDraft.source_type='gmail';textDraft.retention='summary';
     localImportNote.value=doc.warning;inputMode.value='text';
@@ -378,7 +389,25 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+async function runAiForCurrent(){
+ if(!current.value||busy.value||current.value.ai_provider==='none')return;
+ const id=current.value.id;busy.value=true;
+ try{
+  const result=await api('/api/documents/'+id+'/ai/analyze',{method:'POST',body:{confirm:true}});
+  await openDoc(id);
+  const labels={success:'AI 已生成中文解读和学习建议',cached:'已使用缓存的 AI 分析',disabled:'AI 服务当前未启用（规则讲解仍可使用）',not_configured:'所选 AI 尚未完成安全配置',budget_exhausted:'本应用今日 AI 请求额度已达上限',budget_disabled:'AI 预算尚未开放',provider_failed:'AI 返回无效或服务暂不可用，原有数据不受影响',awaiting_text:'请先完成 OCR 或补充原文',privacy_blocked:'存在隐私风险，已阻止 Gemini 免费 API',too_long:'原文过长，请拆分后重试',cooldown:'为节省额度，失败后需间隔至少 1 小时再重试',in_progress:'本份文书的 AI 请求正在执行'};
+  flash(labels[result.ai_status]||'AI 尚未产生新结果');
+ }catch(e){problem(e);}finally{busy.value=false;}
+}
+function openDocAiProvider(){if(!current.value)return;docAiProvider.value=current.value.ai_provider||'none';docGeminiConsent.value=false;sheet.value='docAiProvider';}
+async function saveDocAiProvider(){
+ if(!current.value||busy.value)return;
+ if(docAiProvider.value==='gemini'&&!docGeminiConsent.value){problem(new Error('请确认这份文书不包含私人或机密信息'));return;}
+ busy.value=true;const id=current.value.id;
+ try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
+ closeSheet();await openDoc(id);flash('已保存这份文书的 AI 选择，尚未调用 AI');}catch(e){problem(e);}finally{busy.value=false;}
+}
+function closeSheet(){ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function primeGooglePicker(){
   if(!drivePickerAvailable||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
   drivePickerLoadingUi.value=true;
@@ -402,18 +431,49 @@ async function copySafariSite(){
   try{await navigator.clipboard.writeText(mainSiteUrl);flash('网址已复制，请打开 Safari 地址栏粘贴访问');}
   catch{problem(new Error('无法自动复制，请长按页面显示的网址，在 Safari 地址栏打开'));}
 }
+
+async function parseSelectedFileWithOcr(file,epoch){
+  const unchanged=()=>accountEpoch.isCurrent(epoch)&&fileDraft.value===file;
+  const isPdf=/\.pdf$/i.test(file.name)||file.type==='application/pdf';
+  const isImage=/^image\/(?:jpeg|png|webp)$/.test(file.type);
+  const ocr=async blob=>{
+    const {recognizeJapaneseImage}=await import('./local-ocr.js');
+    ocrProgress.value='本机日文 OCR 识别中（首次使用需要下载模型）…';
+    return recognizeJapaneseImage(blob);
+  };
+  let result;
+  try{
+    if(isPdf){
+      result=await extractDocumentText(file,{ocrPage:ocr,maxOcrPages:10,onProgress:message=>{if(unchanged())ocrProgress.value=message;}});
+    }else if(isImage){
+      result=await ocr(file);
+    }else{
+      result=await extractDocumentText(file);
+    }
+    if(!unchanged())return;
+    fileText.value=result.text||'';
+    fileWarning.value=result.warning||(
+      isImage?'已由本机 PaddleOCR 提取候选文字，请核对姓名、金额、日期和漏行。':'');
+    if(isPdf&&(result.ocr_pages_attempted||result.pages_without_text?.length)){
+      // Keep scanned originals available for source verification.
+      fileRetention.value='original';
+    }
+  }catch(e){
+    if(unchanged()){
+      fileWarning.value='自动识别未完成：'+String(e?.message||'未知错误')+'。可保留原件并稍后重试。';
+      if(isPdf||isImage)fileRetention.value='original';
+    }
+  }finally{if(unchanged())ocrProgress.value='';}
+}
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;
-  fileDraft.value=file;fileSource.value='local_file';sheet.value='import';inputMode.value='file';fileText.value='';fileWarning.value='';
-  const hasTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
-  fileRetention.value=hasTextLayer?'summary':'original';
-  if(!hasTextLayer)return;
+  fileDraft.value=file;fileSource.value='local_file';sheet.value='import';inputMode.value='file';
+  fileText.value='';fileWarning.value='';ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;
+  const supported=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name)||/^image\/(?:jpeg|png|webp)$/.test(file.type);
+  fileRetention.value=/(?:\.pdf$)/i.test(file.name)||/^image\//.test(file.type)?'original':'summary';
+  if(!supported)return;
   const epoch=accountEpoch.snapshot();busy.value=true;
-  try{
-    const parsed=await extractDocumentText(file);
-    if(!accountEpoch.isCurrent(epoch)||fileDraft.value!==file)return;
-    fileText.value=parsed.text;fileWarning.value=parsed.warning;
-  }catch(e){problem(e);fileWarning.value=e.message;}
+  try{await parseSelectedFileWithOcr(file,epoch);}
   finally{busy.value=false;if(fileInput.value)fileInput.value.value='';}
 }
 
@@ -427,6 +487,7 @@ async function importFromGoogleDrive(){
     const file=await pickGoogleDriveFile();
     accountEpoch.assertCurrent(epoch);
     if(!file)return; // Canceling Google Picker does not request an R2 upload or import.
+    aiProvider.value='';geminiConsent.value=false;
     if(/\.(?:eml|txt)$/i.test(file.name)){
       const parsed=await readLocalText(file);
       accountEpoch.assertCurrent(epoch);
@@ -438,13 +499,9 @@ async function importFromGoogleDrive(){
       fileDraft.value=file;fileSource.value='google_drive';inputMode.value='file';
       fileText.value='';fileWarning.value='';
       const isTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
-      fileRetention.value=isTextLayer?'summary':'original';
-      if(isTextLayer){
-        const parsed=await extractDocumentText(file);
-        if(!accountEpoch.isCurrent(epoch)||fileDraft.value!==file)return;
-        fileText.value=parsed.text;
-        fileWarning.value=parsed.warning||'';
-      }
+      fileRetention.value=/\.pdf$/i.test(file.name)||/^image\//.test(file.type)?'original':isTextLayer?'summary':'original';
+      if(isTextLayer||/^image\/(?:jpeg|png|webp)$/.test(file.type))
+        await parseSelectedFileWithOcr(file,epoch);
     }
     sheet.value='import';
   }catch(e){problem(e)}
@@ -456,26 +513,35 @@ async function importLocalText(event){
   const epoch=accountEpoch.snapshot();busy.value=true;try{
     const result=await readLocalText(file);
     accountEpoch.assertCurrent(epoch);
+    aiProvider.value='';geminiConsent.value=false;
     textDraft.text=result.text;textDraft.title=result.title;textDraft.source_type=result.source_type;
     inputMode.value='text';localImportNote.value=result.warning;sheet.value='import';
   }catch(e){problem(e);}finally{busy.value=false;if(localTextInput.value)localTextInput.value.value='';}
 }
+async function retryLocalOcr(){
+ if(!fileDraft.value||busy.value)return;
+ const file=fileDraft.value,epoch=accountEpoch.snapshot();busy.value=true;
+ try{await parseSelectedFileWithOcr(file,epoch);}
+ finally{busy.value=false;}
+}
 async function importDocument(){
+  if(!aiProvider.value){problem(new Error('请为这份文书选择 AI 引擎，或明确选择仅规则分析'));return;}
+  if(aiProvider.value==='gemini'&&!geminiConsent.value){problem(new Error('使用 Gemini 免费 API 前请确认隐私提示'));return;}
   busy.value=true;error.value='';
   try{
     let result;
     if(inputMode.value==='text'){
       if(!textDraft.text.trim())throw new Error('请先粘贴或输入日文内容');
-      result=await api('/api/documents/import/text',{method:'POST',body:{title:textDraft.title,text:textDraft.text,source_type:textDraft.source_type,retention:textDraft.retention}});
+      result=await api('/api/documents/import/text',{method:'POST',body:{title:textDraft.title,text:textDraft.text,source_type:textDraft.source_type,retention:textDraft.retention,ai_provider:aiProvider.value,gemini_consent:geminiConsent.value}});
     }else{
       if(!fileDraft.value)throw new Error('请先选择 PDF、Word、Excel、PowerPoint 或照片');
       if(fileRetention.value!=='original'){
         if(!fileText.value.trim())throw new Error('没有文字层，请人工填写或明确选择保留原件');
         result=await api('/api/documents/import/text',{method:'POST',body:{title:fileDraft.value.name,text:fileText.value,
-          source_type:fileSource.value,retention:fileRetention.value}});
+          source_type:fileSource.value,retention:fileRetention.value,ai_provider:aiProvider.value,gemini_consent:geminiConsent.value}});
       }else{
         const compressed=await compressImage(fileDraft.value);
-        const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');form.append('source_type',fileSource.value);
+        const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');form.append('source_type',fileSource.value);form.append('ai_provider',aiProvider.value);form.append('gemini_consent',String(geminiConsent.value));
         if(fileText.value.trim())form.append('extracted_text',fileText.value);
         result=await api('/api/documents/import/file',{method:'POST',body:form,form:true});
       }
@@ -586,6 +652,17 @@ async function refreshInterpretation(){
 }
 function editText(){editTextDraft.value=current.value?.extracted_text_ja||'';sheet.value='editText';}
 async function saveSourceText(){busy.value=true;try{await api(`/api/documents/${current.value.id}/source-text`,{method:'PATCH',body:{text:editTextDraft.value,confirm_reset_review:true}});const id=current.value.id;sheet.value='';editTextDraft.value='';await openDoc(id);flash('文字已保存并重新生成待核验字段');}catch(e){problem(e);}finally{busy.value=false;}}
+function openOcrSpace(a){ocrAttachmentPending.value=a;ocrSpaceConsent.value=false;sheet.value='ocrSpaceConfirm';}
+async function confirmOcrSpace(){
+ if(!current.value||!ocrAttachmentPending.value||!ocrSpaceConsent.value)return;
+ busy.value=true;
+ try{
+  const result=await api('/api/documents/'+current.value.id+'/ocr-space',{method:'POST',body:{attachment_id:ocrAttachmentPending.value.id,confirm_ocr_space:true,confirm_private_upload:true}});
+  editTextDraft.value=result.text;
+  ocrAttachmentPending.value=null;sheet.value='editText';
+  flash(result.cached?'已使用以前的云端识别结果':'OCR.space 返回候选文字，请逐项核对后再保存');
+ }catch(e){problem(e);}finally{busy.value=false;}
+}
 function runOcr(a){ocrAttachmentPending.value=a;ocrRetryStale.value=false;ocrRetryEmpty.value=false;sheet.value='ocrConfirm';}
 async function confirmRunOcr(){
   if(!ocrAttachmentPending.value)return;
@@ -635,7 +712,7 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  candidateDraft.date=d.confirmed_fields?.[item.payload?.date_field_key||'due_date']||item.payload?.transaction_date||new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});
  candidateDraft.category='';candidateDraft.payment_source='';candidateDraft.note=item.payload?.note||'';candidateDraft.title=item.payload?.title||current.value.title;
  candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;
- candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||'';
+ candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||item.payload?.sentence||'';
  sheet.value='candidate';integrationConfigured.value=d.available;
  }catch(e){problem(e);}}
 async function commitApprovedCandidate(){busy.value=true;try{const id=candidateDraft.id;
@@ -760,7 +837,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="loadUsage">刷新服务用量 <UiIcon name="refresh-cw" :size="17"/></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
-        <div class="info-note" v-if="usage">Cloudflare 全账号免费额度：<strong>未确认</strong>。本地统计 AI 调用 {{usage.local_today.ai_calls}} 次，不代表全账号剩余额度。</div>
+        <div class="info-note" v-if="usage">Cloudflare / Gemini 账户级免费额度：<strong>无法确认</strong>。本应用今日文书 AI 请求 {{usage.document_ai_utc_day?.calls??0}} / {{usage.document_ai_utc_day?.limit??0}} 次；OCR 云端尝试 {{usage.app_utc_day?.calls??0}} / {{usage.app_utc_day?.limit??0}} 次。以上仅为本应用限额，不代表提供商剩余额度或是否收费。</div>
         <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
@@ -783,7 +860,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       <h2>{{current.title}}</h2>
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
       <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
-      <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>文件日期与官方核验</h3><p>文件日期线索：{{current.source_document_date||'未能确定（请核对文件）'}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文讲解</h3><p class="multiline">{{chineseExplanation(current.explanation_zh)||'目前没有可供讲解的文字内容，请检查识别结果。'}}</p><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解并补充字段</button><p class="fine-print">只补充缺失字段，不覆盖已核验的数据，也不会修改其他 App 的记录。</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
+      <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>文件日期与官方核验</h3><p>文件日期线索：{{current.source_document_date||'未能确定（请核对文件）'}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文讲解</h3><p class="fine-print">本份文书 AI 引擎：{{({cloudflare:'Cloudflare AI',gemini:'Gemini 免费 API',none:'仅规则分析'})[current.ai_provider]||'仅规则分析'}} · {{current.ai_analysis?.status ? (aiStatusLabel[current.ai_analysis.status]||'等待核对') : '规则讲解可用'}}</p><button class="secondary full" type="button" @click="openDocAiProvider">为这份文书选择 AI</button><button v-if="current.ai_provider!=='none'" class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 智能解读 / 使用缓存</button><p class="multiline">{{chineseExplanation(aiAnalysis?.explanation_zh||current.explanation_zh)||'目前没有可供讲解的文字内容，请检查识别结果。'}}</p><div v-if="aiAnalysis?.important_points_zh?.length" class="stack"><h3>AI 提炼重点（需核对原文）</h3><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">• {{line}}</p></div><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解并补充字段</button><p class="fine-print">只补充缺失字段，不覆盖已核验的数据，也不会修改其他 App 的记录。</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
       <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div v-if="canManualSalary" class="content-card"><p>已识别工资入账通知，但邮件没有金额。</p><button class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写到账金额，生成家計簿收入建议</button></div>
         <div v-if="topupAdvice" class="content-card">
@@ -798,20 +875,29 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         </div>
         <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p><p v-if="item.payload.task_type==='delivery'" class="fine-print">{{item.payload.note}}；请先核验「字段」中的配送日期，再手动确认同步到 HomeFlow。</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div>
         <p v-if="!topupAdvice&&!detailCandidates.some(c=>['finance','homeflow_task'].includes(c.candidate_kind))" class="muted">暂无待办或财务建议。这不代表邮件识别失败；可在「字段」中核对已提取的信息。</p>
+        <div v-if="aiAnalysis?.homeflow_suggestions?.length" class="content-card"><h3>AI · HomeFlow 待办建议</h3><p v-for="(item,i) in aiAnalysis.homeflow_suggestions" :key="i">{{item.description_zh}}（{{item.date||'日期待确认'}}）</p><p class="fine-print">这只是 AI 建议，尚未生成可同步任务。请以人工核验日期为准。</p></div>
+        <div v-if="aiAnalysis?.finance_suggestions?.length" class="content-card"><h3>AI · 家計簿建议</h3><p v-for="(item,i) in aiAnalysis.finance_suggestions" :key="i">{{item.description_zh}}</p><p class="fine-print">此处没有新增账目；实际到账或消费必须经你确认。</p></div>
         <p v-else-if="!topupAdvice" class="fine-print">确认后才写入目标 App。</p>
       </section>
-      <section v-if="detailTab==='study'"><h3 class="section-title">值得记住的日文词语</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id"><strong>{{item.payload.term}}</strong><p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入</button></div><div v-if="!detailCandidates.some(c=>c.candidate_kind==='vocabulary')" class="empty">尚未找到可复用词语。</div></section>
-      <section v-if="detailTab==='original'"><div class="content-card"><h3>原文与原件</h3><p class="multiline" v-if="current.extracted_text_ja">{{current.extracted_text_ja}}</p><p v-else class="muted">原文尚未提取，可查看附件。</p><button class="secondary full" @click="editText">人工输入 / 修正 OCR 文字</button><button class="secondary full icon-label" @click="extraFileInput?.click()"><UiIcon name="plus" :size="18"/>添加扫描页或附件</button><input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" /><div class="attachment-row" v-for="(a,i) in current.attachments" :key="a.id"><button class="secondary" @click="showOriginal(a)">查看 · {{a.file_label}}</button><button class="secondary small" :disabled="busy||i===0" :aria-label="`将${a.file_label}上移一页`" @click="moveAttachment(a,-1)"><UiIcon name="arrow-up" :size="16"/></button><button class="secondary small" :disabled="busy||i===current.attachments.length-1" :aria-label="`将${a.file_label}下移一页`" @click="moveAttachment(a,1)"><UiIcon name="arrow-down" :size="16"/></button><button class="secondary small" @click="runOcr(a)"><UiIcon name="scan" :size="16"/>识别文字</button><button class="secondary small danger-text" @click="trashAttachment(a)"><UiIcon name="trash" :size="16"/>移入回收站</button></div></div><p class="fine-print">原件仅在查看时加载。</p></section>
+      <section v-if="detailTab==='study'"><h3 class="section-title">从生活文书中学习日语</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id"><strong>{{item.payload.term}}</strong><p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入</button></div><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='sentence')" :key="item.id"><h3>实用句子</h3><p>{{item.payload.sentence}}</p><p class="muted">{{item.payload.translation_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入知学</button><p class="fine-print">通过授权账户的签名接口同步至知学生词本中的「文书例句」，不会自动覆盖已有词条。</p></div><div v-if="!detailCandidates.some(c=>['vocabulary','sentence'].includes(c.candidate_kind))" class="empty">尚未找到可复用的生词或句子。</div></section>
+      <section v-if="detailTab==='original'"><div class="content-card"><h3>原文与原件</h3><p class="multiline" v-if="current.extracted_text_ja">{{current.extracted_text_ja}}</p><p v-else class="muted">原文尚未提取，可查看附件。</p><button class="secondary full" @click="editText">人工输入 / 修正 OCR 文字</button><button class="secondary full icon-label" @click="extraFileInput?.click()"><UiIcon name="plus" :size="18"/>添加扫描页或附件</button><input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" /><div class="attachment-row" v-for="(a,i) in current.attachments" :key="a.id"><button class="secondary" @click="showOriginal(a)">查看 · {{a.file_label}}</button><button class="secondary small" :disabled="busy||i===0" :aria-label="`将${a.file_label}上移一页`" @click="moveAttachment(a,-1)"><UiIcon name="arrow-up" :size="16"/></button><button class="secondary small" :disabled="busy||i===current.attachments.length-1" :aria-label="`将${a.file_label}下移一页`" @click="moveAttachment(a,1)"><UiIcon name="arrow-down" :size="16"/></button><button class="secondary small" @click="openOcrSpace(a)"><UiIcon name="scan" :size="16"/>OCR.space 备用识别</button><button class="secondary small danger-text" @click="trashAttachment(a)"><UiIcon name="trash" :size="16"/>移入回收站</button></div></div><p class="fine-print">原件仅在查看时加载。</p></section>
     </div>
   </div>
 
   <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeNestedSheet()">
     <section class="bottom-sheet" role="dialog" aria-modal="true" :aria-label="sheet">
       <div class="grabber"></div>
-      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2><div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div>
-  <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')" class="form-label">文件文字层（可核对修改）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="扫描页请人工输入原文"></textarea></label><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+      <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2>
+  <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
+  <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button>
+  <div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+
+        <div class="choice-form-field"><span class="choice-field-label">这份文书使用的 AI</span><button type="button" class="choice-field-control" @click="openChoice('aiProvider')"><span>{{choiceLabel('aiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <p class="fine-print">每份文书单独选择，不保存全局偏好。首次导入在服务已启用时尝试 AI 分析，同版本命中缓存不会重复调用。</p>
+        <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>我已确认这份文书不含私人或机密信息，并同意今后启用时发送给 Gemini 免费 API。只有启用并执行所选 Gemini 分析时才发送。</label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
+      <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">只影响当前文书。保存后可点「AI 智能解读」，同版本命中缓存时不会再次调用。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>我确认这份文书不含个人或机密资料，同意未来启用时发送给 Gemini 免费 API。只有启用并执行所选 Gemini 分析时才发送。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
   <p class="fine-print">只读取你主动选择的文件或邮件。iPhone PWA 可直接尝试 Gmail／Google Drive；若 Google 弹窗受限，可在「文件」App 的 Google Drive 位置选择文件。Google Docs 原生格式通过下方在线选择器导出。</p>
@@ -924,6 +1010,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <label class="form-label">确认新密码<input v-model="passwordDraft.confirm_password" type="password" autocomplete="new-password" /></label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!passwordDraft.current_password||passwordDraft.new_password.length<12||passwordDraft.new_password!==passwordDraft.confirm_password" @click="changePassword">修改并退出旧会话</button></div></template>
       <template v-else-if="sheet==='invite'"><h2>邀请家人</h2><p class="muted">仅指定邮箱可使用邀请。</p><label class="form-label">对方邮箱<input v-model="inviteEmail" type="email" placeholder="family@example.com" /></label><button class="primary full" @click="issueInvite" :disabled="busy">生成 48 小时邀请码</button><label v-if="inviteToken" class="form-label">仅复制给家人使用<input :value="inviteToken" readonly @focus="$event.target.select()" /></label><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+      <template v-else-if="sheet==='ocrSpaceConfirm'"><h2>OCR.space 免费云端识别</h2><p class="fine-print">只有你确认后，才把此附件发送至 OCR.space Engine 3。免费 API 每份文件最多 1MB、PDF 最多三页；识别结果需人工核对。私人敏感文件建议优先使用本机 OCR。</p><label class="check-row"><input type="checkbox" v-model="ocrSpaceConsent"/>我确认愿意将这份原件发送至 OCR.space（第三方服务器）。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!ocrSpaceConsent" @click="confirmOcrSpace">同意并开始识别</button></div></template>
       <template v-else-if="sheet==='ocrConfirm'"><h2>确认本次图片识别</h2><p>仅将这张私有图片发送至 Cloudflare Workers AI。可能消耗与其他应用共用的免费额度，账户余额仍未确认；此功能默认关闭，只有管理员启用后可用。</p><p class="fine-print">相同图片会复用已完成的识别候选。结果不能作为账单付款、实际收入或政策现行有效性的证明；须对照原图核对。</p><label class="check-row"><input type="checkbox" v-model="ocrRetryStale" />上次任务卡住超过24小时时允许重新调用模型（可能再次消耗额度）</label><label class="check-row"><input type="checkbox" v-model="ocrRetryEmpty" />上次结果为空且已过24小时：再次识别一次（同样消耗免费预算）</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="confirmRunOcr">确认尝试 OCR</button></div></template>
       <template v-else-if="sheet==='editText'"><h2>人工核对日文原文</h2><p class="fine-print">请对照原图确认。修改文字将重新生成全部候选字段，先前审核的字段会被重置，不会自动记账或创建任务。</p><textarea v-model="editTextDraft" rows="10" placeholder="请输入或粘贴日文内容"></textarea><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!editTextDraft.trim()" @click="saveSourceText">保存并重新分析</button></div></template>
       <template v-else-if="sheet==='backup'"><h2>备份与恢复</h2><p class="fine-print">一次最多 5 份、ZIP 不超过 32 MB。请保存到你选择的 iCloud Drive/电脑，不在本 App 长期保存。仅 JSON 无法恢复永久删除后的原件。</p>

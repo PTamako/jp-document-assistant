@@ -430,6 +430,13 @@ paths:
                   enum:
                   - summary
                   - analyze_only
+                ai_provider:
+                  type: string
+                  enum: [none, cloudflare, gemini]
+                  description: Per-file preference, not a global setting. No AI invocation yet.
+                gemini_consent:
+                  type: boolean
+                  description: Required when selecting Gemini, limited to nonsensitive documents.
               required:
               - text
               - source_type
@@ -479,6 +486,14 @@ paths:
                   type: string
                   enum: [local_file, image, google_drive]
                   description: 用户声明的文件来源，不能作为官方真实性证明
+                ai_provider:
+                  type: string
+                  enum: [none, cloudflare, gemini]
+                  description: 仅为这一份文件保存 AI 选择；不会在上传时发起 AI 推理
+                gemini_consent:
+                  type: string
+                  enum: ['true', 'false']
+                  description: 选择 Gemini 时必须明确确认；仅保存同意状态，当前不上传 Gemini
               required:
               - file
               - retention
@@ -858,6 +873,98 @@ paths:
         required: true
         schema:
           type: string
+  /api/documents/{documentId}/ai/analyze:
+    post:
+      tags: [Documents]
+      operationId: analyzeSelectedDocumentOnce
+      summary: 按当前文书所选引擎运行一次 AI 分析；缓存命中不再调用，预算与隐私保护
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: {type: string}
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm: {type: boolean, const: true}
+              required: [confirm]
+      responses:
+        '200': {description: AI 状态或受约束的候选解读；不会直接写三个目标 App}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/ocr-space:
+    post:
+      tags: [Documents]
+      operationId: explicitlyRunOcrSpaceBackup
+      summary: 经明确隐私确认后使用免费 OCR.space Engine 3 对 R2 附件识别
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: {type: string}
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                attachment_id: {type: string}
+                confirm_ocr_space: {type: boolean, const: true}
+                confirm_private_upload: {type: boolean, const: true}
+              required: [attachment_id, confirm_ocr_space, confirm_private_upload]
+      responses:
+        '200': {description: 仅返回未经人工确认的 OCR 候选文字}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /api/documents/{documentId}/ai-provider:
+    patch:
+      tags: [Documents]
+      summary: 为当前文书单独记录 AI 引擎选择；目前不触发推理
+      operationId: updateDocumentAiProvider
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: {type: string}
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ai_provider:
+                  type: string
+                  enum: [none, cloudflare, gemini]
+                gemini_consent:
+                  type: boolean
+              required: [ai_provider]
+      responses:
+        '200': {description: 本份文书 AI 选择已保存，不代表 AI 已调用}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
   /api/documents/{documentId}/ocr:
     post:
       tags:

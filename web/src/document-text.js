@@ -208,12 +208,12 @@ export async function extractOfficeFile(file){
  if(result.text.length>MAX_TEXT)invalid('文字超过 10 万字符');
  return {kind,title:name.replace(/\.[^.]+$/,''),source_type:'local_file',needs_manual:!result.text.trim(),...result};
 }
-export async function extractDocumentText(file){
+export async function extractDocumentText(file,options={}){
  if(!file||file.size<1||file.size>LIMIT)invalid('文件必须小于 8 MB');
  const name=String(file.name||'').toLowerCase();
  if(name.endsWith('.docx')||name.endsWith('.xlsx')||name.endsWith('.pptx'))return extractOfficeFile(file);
  if(name.endsWith('.pdf')||file.type==='application/pdf'){
-  const {extractPdfText}=await import('./pdf-text.js');return extractPdfText(file,{maxPages:30,maxChars:MAX_TEXT});
+  const {extractPdfText}=await import('./pdf-text.js');return extractPdfText(file,{maxPages:30,maxChars:MAX_TEXT,...options});
  }
  invalid('仅支持 PDF、DOCX、XLSX、PPTX；邮件请走 .eml / .txt 入口');
 }

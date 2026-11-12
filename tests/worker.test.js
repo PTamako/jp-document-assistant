@@ -13,7 +13,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -56,6 +56,76 @@ async function boot(env){
   return {cookie:r.response.headers.get('set-cookie').split(';')[0],csrf:r.data.csrf_token,user:r.data.user};
 }
 function auth(p){return {cookie:p.cookie,csrf:p.csrf};}
+
+test('selected Cloudflare AI analyzes a source once and caches grounded study candidates without cross-app writes',async()=>{
+ const env=makeEnv(),u=await boot(env);
+ const source='営業時間を確認してください。ご不明な点は窓口へご連絡ください。';
+ let calls=0;
+ env.ENABLE_DOCUMENT_AI='true';
+ env.AI_ANALYSIS_DAILY_LIMIT='2';
+ env.AI={run:async(model,opts)=>{
+  calls++;
+  assert.equal(model,'@cf/qwen/qwen3.8-27b');
+  assert.ok(opts.messages.length);
+  return {response:JSON.stringify({
+   summary_zh:'这是一份营业时间说明，请自行核对。',
+   explanation_zh:'建议先确认营业时间，有不明事项可联系窗口。',
+   important_points_zh:['确认营业时间'],
+   vocabulary:[{term:'営業時間',reading:'えいぎょうじかん',meaning_zh:'营业时间',source_quote:'営業時間'}],
+   sentences:[{sentence:'営業時間を確認してください。',translation_zh:'请确认营业时间。',source_quote:'営業時間を確認してください。'}],
+   homeflow_suggestions:[],finance_suggestions:[]
+  })};
+ }};
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+  source_type:'text',retention:'summary',text:source,ai_provider:'cloudflare'
+ }});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ assert.equal(imported.data.ai_status,'success');
+ assert.equal(calls,1);
+ const id=imported.data.document_id;
+ const detail=await req(env,'/api/documents/'+id,auth(u));
+ assert.equal(detail.data.document.ai_analysis.status,'success');
+ assert.match(detail.data.document.ai_analysis.result.explanation_zh,/营业/);
+ const candidates=await req(env,'/api/documents/'+id+'/candidates',auth(u));
+ assert.equal(candidates.data.items.filter(x=>x.candidate_kind==='sentence').length,1);
+ assert.equal(candidates.data.items.filter(x=>x.candidate_kind==='vocabulary').length,1);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+ const cached=await req(env,'/api/documents/'+id+'/ai/analyze',{method:'POST',...auth(u),data:{confirm:true}});
+ assert.equal(cached.data.ai_status,'cached');
+ assert.equal(calls,1);
+ assert.equal(env.DB.sql.prepare('SELECT calls FROM ai_analysis_daily').get().calls,1);
+});
+
+test('AI engine is chosen and consented per document, never globally or invoked on import',async()=>{
+ const env=makeEnv(),u=await boot(env);
+ const first=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+   title:'句子',text:'今日は良い天気です。散歩に行きます。',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+ }});
+ assert.equal(first.response.status,201,JSON.stringify(first.data));
+ const second=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+   title:'お知らせ',text:'お知らせの内容を確認してください。',source_type:'text',retention:'summary',ai_provider:'cloudflare'
+ }});
+ assert.equal(second.response.status,201,JSON.stringify(second.data));
+ const doc=async id=>(await req(env,'/api/documents/'+id,auth(u))).data.document;
+ assert.equal((await doc(first.data.document_id)).ai_provider,'gemini');
+ assert.equal((await doc(second.data.document_id)).ai_provider,'cloudflare');
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM ocr_attempts').get().n,0);
+ const denied=await req(env,'/api/documents/'+first.data.document_id+'/ai-provider',{
+   method:'PATCH',...auth(u),data:{ai_provider:'gemini'}
+ });
+ assert.equal(denied.response.status,400);
+ const changed=await req(env,'/api/documents/'+first.data.document_id+'/ai-provider',{
+   method:'PATCH',...auth(u),data:{ai_provider:'none'}
+ });
+ assert.equal(changed.response.status,200,JSON.stringify(changed.data));
+ assert.equal(changed.data.ai_invoked,false);
+ assert.equal((await doc(first.data.document_id)).ai_provider,'none');
+ assert.equal((await doc(second.data.document_id)).ai_provider,'cloudflare');
+ const sensitive=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+   title:'工资',text:'給与明細 差引支給額 120000円',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+ }});
+ assert.equal(sensitive.response.status,422,JSON.stringify(sensitive.data));
+});
 
 test('top-up email is private, exposes reviewed candidates, never generates a finance write candidate',async()=>{
  const env=makeEnv(),p=await boot(env);
@@ -941,7 +1011,7 @@ test('direct reanalysis cannot destroy remote attempts or regenerate idempotency
 });
 
 
-test('private Japanese sentences cannot be sent to vocabulary-only study bridge or misleadingly marked ready',async()=>{
+test('signed Japanese sentence sync requires explicit privacy review and stays idempotent',async()=>{
  const env=makeEnv(),owner=await boot(env);
  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
   retention:'summary',source_type:'text',text:'ご請求金額：1200円\n納付期限：令和8年11月30日（月)'
@@ -954,23 +1024,33 @@ test('private Japanese sentences cannot be sent to vocabulary-only study bridge 
  const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
  env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{zhixue:'single-study-owner'}});
  env.ZHIXUE_BRIDGE_SECRET='signed-study-secret-long-enough-to-test';
- let networkRequests=0;
- env.ZHIXUE_BRIDGE_SERVICE={async fetch(){networkRequests++;return Response.json({ok:true,remote_id:'incorrect'})}};
+ let networkRequests=0,bodySent;
+ env.ZHIXUE_BRIDGE_SERVICE={async fetch(r){networkRequests++;bodySent=await r.json();return Response.json({ok:true,remote_id:'ja:期限までに支払います。'})}};
  const preview=await req(env,`/api/candidates/${candidateId}/preview`,auth(owner));
  assert.equal(preview.response.status,200,JSON.stringify(preview.data));
- assert.equal(preview.data.available,false);
- assert.match(preview.data.note,/私人句卡/);
- const commit=await req(env,`/api/candidates/${candidateId}/commit`,{
+ assert.equal(preview.data.available,true);
+ const missingConsent=await req(env,`/api/candidates/${candidateId}/commit`,{
+   method:'POST',...auth(owner),data:{confirm:'CONFIRM_STUDY',redacted_sentence:'期限までに支払います。'},
+   extraHeaders:{'Idempotency-Key':'explicit-sentence-request'}
+ });
+ assert.equal(missingConsent.response.status,409,JSON.stringify(missingConsent.data));
+ assert.equal(networkRequests,0);
+ const commit=()=>req(env,`/api/candidates/${candidateId}/commit`,{
    method:'POST',...auth(owner),data:{confirm:'CONFIRM_STUDY',privacy_confirmed:true,
      redacted_sentence:'期限までに支払います。'},
    extraHeaders:{'Idempotency-Key':'explicit-sentence-request'}
  });
- assert.equal(commit.response.status,503,JSON.stringify(commit.data));
- assert.equal(commit.data.code,'STUDY_SENTENCE_NOT_READY');
- assert.equal(networkRequests,0);
- assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+ const first=await commit();
+ assert.equal(first.response.status,200,JSON.stringify(first.data));
+ assert.equal(bodySent.payload.operation,'sentence');
+ assert.equal(bodySent.payload.privacy_confirmed,true);
+ assert.equal(bodySent.payload.skip_existing,true);
+ const again=await commit();
+ assert.equal(again.response.status,200,JSON.stringify(again.data));
+ assert.equal(again.data.already_synced,true);
+ assert.equal(networkRequests,1);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links WHERE state=\'synced\'').get().n,1);
 });
-
 
 test('missing owner-scoped object is re-uploaded before reuse; failed repair creates no reference',async()=>{
   const env=makeEnv(),owner=await boot(env),bytes=new Uint8Array([255,216,255,224,41,42,43,44]);
@@ -1030,12 +1110,12 @@ test('Google Picker CSP allows only explicitly trusted Google origins',async()=>
   assert.equal(page.response.status,200);
   const csp=page.response.headers.get('Content-Security-Policy');
   assert.ok(csp);
-  assert.match(csp,/script-src 'self' https:\/\/accounts\.google\.com https:\/\/apis\.google\.com;/);
-  assert.match(csp,/connect-src 'self' https:\/\/gmail\.googleapis\.com https:\/\/www\.googleapis\.com https:\/\/accounts\.google\.com https:\/\/oauth2\.googleapis\.com https:\/\/apis\.google\.com;/);
+  assert.match(csp,/script-src 'self' 'wasm-unsafe-eval' https:\/\/accounts\.google\.com https:\/\/apis\.google\.com;/);
+  assert.match(csp,/connect-src 'self' https:\/\/gmail\.googleapis\.com https:\/\/www\.googleapis\.com https:\/\/accounts\.google\.com https:\/\/oauth2\.googleapis\.com https:\/\/apis\.google\.com https:\/\/cdn\.jsdelivr\.net https:\/\/paddle-model-ecology\.bj\.bcebos\.com;/);
   assert.match(csp,/frame-src 'self' blob: https:\/\/accounts\.google\.com https:\/\/docs\.google\.com https:\/\/drive\.google\.com;/);
   assert.match(csp,/object-src 'none'/);
   assert.match(csp,/frame-ancestors 'none'/);
-  assert.doesNotMatch(csp,/unsafe-eval|\*/);
+  assert.doesNotMatch(csp,/(?<!wasm-)unsafe-eval|\*/);
   const unauthorized=await req(env,'/api/health');
   assert.equal(unauthorized.response.status,200);
   assert.equal(unauthorized.response.headers.get('Cache-Control'),'no-store');

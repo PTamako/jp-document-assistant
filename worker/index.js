@@ -8,6 +8,8 @@ import { planBackup, exportBackup, previewImport, confirmImport } from './backup
 import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
 import { ocrAttachment } from './ocr.js';
+import { ocrSpaceAttachment } from './ocr-space.js';
+import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
 import { validateOfficeBytes } from '../web/src/document-text.js';
@@ -38,7 +40,7 @@ function protectedResponse(resp,request){
   h.set('X-Content-Type-Options','nosniff');
   h.set('X-Frame-Options','DENY');
   h.set('Permissions-Policy','camera=(self), microphone=(), geolocation=()');
-  if(!h.has('Content-Security-Policy'))h.set('Content-Security-Policy',"default-src 'self'; img-src 'self' blob: data:; script-src 'self' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://gmail.googleapis.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://apis.google.com; font-src 'self'; object-src 'none'; frame-src 'self' blob: https://accounts.google.com https://docs.google.com https://drive.google.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  if(!h.has('Content-Security-Policy'))h.set('Content-Security-Policy',"default-src 'self'; img-src 'self' blob: data:; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://gmail.googleapis.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://apis.google.com https://cdn.jsdelivr.net https://paddle-model-ecology.bj.bcebos.com; font-src 'self'; object-src 'none'; frame-src 'self' blob: https://accounts.google.com https://docs.google.com https://drive.google.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
   return new Response(resp.body,{status:resp.status,statusText:resp.statusText,headers:h});
 }
 function requireBinding(env,key){ if(!env[key]) bad(`尚未配置 ${key}，操作不可用`,'NOT_CONFIGURED',503); }
@@ -179,11 +181,24 @@ async function analyzeStored(env,doc,force=false){
   await batch(env.DB,stmts);
   return {cached:false,result};
 }
+async function analyzeIfEnabled(env,doc){
+  try{return await analyzeDocumentAi(env,doc,{sensitive:requiresPrivateDefault(doc.category,doc.extracted_text_ja||'')});}
+  catch{return {ai_status:'failed_safe'};}
+}
+function verifyDocumentAiChoice(provider,geminiConsent){
+  // Backwards-compatible API: legacy clients without AI field remain rules-only.
+  const selected=provider===null||provider===undefined?'none':provider;
+  if(!['none','cloudflare','gemini'].includes(selected))bad('请为本份文书选择 AI 引擎或仅规则分析','INVALID_AI_PROVIDER',400);
+  if(selected==='gemini'&&geminiConsent!==true)bad('Gemini 免费 API 需针对本份文书明确授权','AI_PRIVACY_CONFIRM_REQUIRED',400);
+  return selected;
+}
 async function handleImportText(request,env,p){
   const data=await readJson(request);
+  const provider=verifyDocumentAiChoice(data.ai_provider,data.gemini_consent);
   if(!validString(data?.text,100000)||!['text','mail_forward','gmail','google_drive','local_file'].includes(data.source_type)||!['analyze_only','summary'].includes(data.retention))bad('文字、来源或保存方式无效');
   if(data.visibility && !['private','shared'].includes(data.visibility))bad('可见范围无效');
   const raw=data.text.trim(),parsed=parseJapaneseText(raw);
+  if(provider==='gemini'&&requiresPrivateDefault(parsed.category,raw))bad('私人或敏感文书不能使用 Gemini 免费 API，请为此文件选择 Cloudflare 或仅规则分析','SENSITIVE_GEMINI_BLOCKED',422);
   if(data.retention==='analyze_only')return json({ok:true,saved:false,analysis:parsed});
   const sha=await hashString(raw), now=isoNow();
   const previous=await dbFirst(env.DB,`SELECT id FROM documents WHERE owner_id=? AND content_sha256=? AND lifecycle='active'`,p.user_id,sha);
@@ -194,11 +209,13 @@ async function handleImportText(request,env,p){
   const visibility=(data.visibility==='shared'&&!sensitive)?'shared':'private';
   await batch(env.DB,[
     ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,extracted_text_ja,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,visibility,parsed.category,title,raw,'summary',sha,'draft',now,now],
-    ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,data.source_type,sha,now]
+    ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,data.source_type,sha,now],
+    ['UPDATE documents SET ai_provider=?,ai_consent_at=? WHERE id=?',provider,provider==='gemini'?now:null,id]
   ]);
   const doc=await ownedDocument(env.DB,id,p);
   await analyzeStored(env,doc);
-  return json({ok:true,saved:true,reused:false,document_id:id},201);
+  const ai=await analyzeIfEnabled(env,await ownedDocument(env.DB,id,p,'active'));
+  return json({ok:true,saved:true,reused:false,document_id:id,ai_status:ai.ai_status},201);
 }
 function fileSignature(mime,bytes){
   if(mime==='image/jpeg')return bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff;
@@ -216,6 +233,7 @@ async function handleFileImport(request,env,p){
   const len=Number(request.headers.get('Content-Length')||0);
   if(len>MAX_FILE_BYTES+10000)bad('文件超出 8MB 限制','FILE_TOO_LARGE',413);
   const form=await request.formData(),file=form.get('file');
+  const provider=verifyDocumentAiChoice(form.get('ai_provider'),form.get('gemini_consent')==='true');
   if(!file||typeof file.arrayBuffer!=='function'||file.size<=0||file.size>MAX_FILE_BYTES)bad('请选择不超过 8MB 的文件');
   if(form.get('retention')!=='original')bad('文件上传仅支持明确选择保存原件，普通分析请粘贴可复制文字');
   const ext=String(file.name||'').toLowerCase();
@@ -273,20 +291,22 @@ async function handleFileImport(request,env,p){
   try{await batch(env.DB,[
     ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,extracted_text_ja,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,'private','other',label,extracted||null,'original',sha,extracted?'draft':'needs_review',now,now],
     ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,sourceKind,sha,now],
-    ['INSERT INTO attachments(id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',randomToken(16),id,oid,label,0,sha,now,now]
+    ['INSERT INTO attachments(id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',randomToken(16),id,oid,label,0,sha,now,now],
+    ['UPDATE documents SET ai_provider=?,ai_consent_at=? WHERE id=?',provider,provider==='gemini'?now:null,id]
   ]);}catch{
     // If a transient D1 failure follows a successful PUT, storage_objects is retained for compensating cleanup.
     bad('已上传但保存索引失败，请联系管理员检查存储清理','METADATA_FAILED',503);
   }
   if(extracted)await analyzeStored(env,await ownedDocument(env.DB,id,p));
-  return json({ok:true,saved:true,document_id:id,text_layer_used:!!extracted,ocr_status:'not_available',
+  const ai=extracted?await analyzeIfEnabled(env,await ownedDocument(env.DB,id,p,'active')):{ai_status:'awaiting_text'};
+  return json({ok:true,saved:true,document_id:id,ai_status:ai.ai_status,text_layer_used:!!extracted,ocr_status:extracted?'text_extracted':'awaiting_text',
     message:extracted?'已使用文件文字层生成待核对字段':'没有可复制文字，需人工输入或手动 OCR'},201);
 }
 async function hashStringBytes(bytes){const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');}
 async function getDocDetail(db,doc){
   const fields=await dbAll(db,`SELECT id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,review_state,source_page FROM document_fields WHERE document_id=? ORDER BY field_key`,doc.id);
   const attachments=await dbAll(db,`SELECT id,file_label,page_no,state FROM attachments WHERE document_id=? AND state='active' ORDER BY sort_order`,doc.id);
-  return {...listShape(doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
+  return {...listShape(doc),ai_provider:doc.ai_provider||'none',ai_analysis:await getDocumentAiCache(db,doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
     source_document_date:doc.source_document_date||null,source_date_quote:doc.source_date_quote||null,
     official_current_verified_at:doc.official_current_verified_at||null,
     fields,attachments,confirmed_at:doc.confirmed_at};
@@ -633,10 +653,14 @@ ELSE 'unreviewed' END review_status,
     const summary=await dbFirst(env.DB,'SELECT calls,reserved FROM ocr_app_utc_daily WHERE day_utc=?',dayUtc);
     const rawLimit=Number(env.OCR_APP_UTC_DAILY_LIMIT??1);
     const appLimit=Number.isSafeInteger(rawLimit)?Math.min(4,Math.max(0,rawLimit)):0;
+    const aiUsage=await dbFirst(env.DB,'SELECT calls FROM ai_analysis_daily WHERE day_utc=?',dayUtc);
+    const analysisLimitRaw=Number(env.AI_ANALYSIS_DAILY_LIMIT??2);
+    const analysisLimit=Number.isSafeInteger(analysisLimitRaw)?Math.max(0,Math.min(5,analysisLimitRaw)):0;
     return json({local_today:usage||{ai_calls:0,imported_files:0},
       app_utc_day:{day_utc:dayUtc,calls:summary?.calls||0,reserved:summary?.reserved||0,limit:appLimit},
+      document_ai_utc_day:{day_utc:dayUtc,calls:aiUsage?.calls||0,limit:analysisLimit},
       cloudflare_account_remaining:null,cloudflare_account_remaining_status:'unknown',
-      note:'本应用 UTC 调用预算不等于全账号剩余 Neurons；其他 Apps 的 AI 用量未确认'});
+      note:'OCR 与文书 AI 的本应用 UTC 用量单独统计；不代表 Cloudflare 全账号或 Gemini 免费层的剩余额度'});
   }
   const exportOriginal=path.match(/^\/api\/backups\/original\/([a-f0-9]{32})\/([a-f0-9]{32})$/i);
   if(method==='GET'&&exportOriginal)return backupOriginal(env,p,exportOriginal[1],exportOriginal[2]);
@@ -650,6 +674,23 @@ ELSE 'unreviewed' END review_status,
       if(method==='PATCH')return updateDoc(request,env,p,doc);
     }
     if(method==='POST'&&rest==='ocr')return ocrAttachment(request,env,p,id);
+    if(method==='POST'&&rest==='ocr-space')return ocrSpaceAttachment(request,env,p,id);
+    if(method==='POST'&&rest==='ai/analyze'){
+      const doc=await ownedDocument(env.DB,id,p,'active');
+      const body=await readJson(request,900);
+      if(body.confirm!==true)bad('请确认对当前文书执行所选 AI 分析','AI_CONFIRM_REQUIRED',409);
+      const result=await analyzeIfEnabled(env,doc);
+      return json({ok:true,...result});
+    }
+    if(method==='PATCH'&&rest==='ai-provider'){
+      const doc=await ownedDocument(env.DB,id,p,'active'),body=await readJson(request,1200);
+      const provider=verifyDocumentAiChoice(body.ai_provider,body.gemini_consent);
+      if(provider==='gemini'&&doc.extracted_text_ja&&requiresPrivateDefault(doc.category,doc.extracted_text_ja))
+        bad('私人或敏感文书不能使用 Gemini 免费 API','SENSITIVE_GEMINI_BLOCKED',422);
+      const now=isoNow();
+      await dbRun(env.DB,'UPDATE documents SET ai_provider=?,ai_consent_at=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=?',provider,provider==='gemini'?now:null,now,id,p.user_id);
+      return json({ok:true,document_id:id,ai_provider:provider,ai_invoked:false});
+    }
     if(method==='PATCH'&&rest==='source-text'){
       const d=await ownedDocument(env.DB,id,p,'active');
       const body=await readJson(request,110000);
