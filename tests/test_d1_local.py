@@ -14,6 +14,7 @@ CALENDAR_SUBSCRIPTIONS = (ROOT / 'migrations' / '0009_calendar_subscriptions.sql
 OCR_UTC_BUDGET = (ROOT / 'migrations' / '0010_ocr_utc_budget.sql').read_text()
 AI_PROVIDER = (ROOT / 'migrations' / '0011_document_ai_provider.sql').read_text()
 AI_ANALYSIS = (ROOT / 'migrations' / '0012_document_ai_analysis.sql').read_text()
+OCR_SPACE = (ROOT / 'migrations' / '0015_ocr_space_utc_budget.sql').read_text()
 NOW = '2026-11-11T00:00:00Z'
 
 
@@ -30,6 +31,7 @@ def conn():
     db.executescript(OCR_UTC_BUDGET)
     db.executescript(AI_PROVIDER)
     db.executescript(AI_ANALYSIS)
+    db.executescript(OCR_SPACE)
     return db
 
 
