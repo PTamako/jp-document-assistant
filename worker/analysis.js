@@ -196,7 +196,7 @@ function extractElectricityFields(text) {
 // never be promoted to a schedulable YYYY-MM-DD deadline without a year.
 // This also works when an AI summary exists but is not part of document_fields.
 export const currentJapanYear=()=>Number(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Tokyo',year:'numeric'}).format(new Date()));
-export function extractActionableTextFields(text,hasFullDueDate=false,{defaultYear=currentJapanYear()}={}) {
+export function extractActionableTextFields(text,hasFullDueDate=false,{defaultYear=currentJapanYear(),category='other'}={}) {
   const result=[];
   const add=(field_key,normalized_value,source_quote)=>{
     if(result.some(f=>f.field_key===field_key)||!normalized_value||!source_quote.includes(normalized_value))return;
@@ -230,6 +230,27 @@ export function extractActionableTextFields(text,hasFullDueDate=false,{defaultYe
       break;
     }
   }
+  // Promotional emails often write 11/15(日)まで, not 11月15日.
+  // This is an offer end, NOT a confirmed requirement to purchase anything.
+  if(category==='campaign'&&!hasFullDueDate&&!result.some(f=>f.field_key==='due_date_partial')){
+    const slash=/(?<![0-9０-９/／])([0-9０-９]{1,2})\s*[\/／]\s*([0-9０-９]{1,2})(?:\s*[(（]([日月火水木金土])(?:曜(?:日)?)?[)）])?(?![0-9０-９/／])/g;
+    for(const m of text.matchAll(slash)){
+      const month=Number(normDigits(m[1])),day=Number(normDigits(m[2]));
+      if(!validDate(2000,month,day))continue;
+      const nearby=text.slice(m.index,m.index+65);
+      if(!/(?:まで|期間限定|有効期限|終了|締切)/.test(nearby))continue;
+      const wholeLine=lineFor(m.index);
+      const quote=wholeLine.includes(m[0])?wholeLine:m[0];
+      add('due_date_partial',m[0],quote);
+      const candidate=validDate(defaultYear,month,day,m[3]);
+      // A weekday mismatch is NOT safe evidence for an automatically filled year.
+      if(candidate&&!candidate.weekday_mismatch){
+        result.push({field_key:'due_date',value_type:'date',normalized_value:candidate.date,
+          source_quote:'年份自动补全（日本当前年 '+defaultYear+'，待确认）：'+quote.slice(0,125),review_state:'unreviewed'});
+      }
+      break;
+    }
+  }
   const task=/((?:申請書|届出書|必要書類|申込書|書類|資料|証明書)[ \t　]*(?:を|は)?[ \t　]*(?:提出|送付|郵送|持参|アップロード)(?:してください|願います|すること)?)/g;
   for(const m of text.matchAll(task)){add('required_action',m[0],lineFor(m.index)||m[0]);break;}
   const review=/((?:内容|記載事項|申請内容|入力内容)[ \t　]*(?:を|は)?[ \t　]*ご?確認(?:ください|願います|すること)?)/g;
@@ -237,6 +258,20 @@ export function extractActionableTextFields(text,hasFullDueDate=false,{defaultYe
   return result;
 }
 
+// Optional coupon actions are informational suggestions only: never purchases,
+// income or an executable HomeFlow sync without further user confirmation.
+export function extractCampaignActionHints(text){
+  const lines=String(text||'').split(/\r?\n/);
+  for(const line of lines){
+    if(!/LINE\s*ID\s*連携/i.test(line)||!/(?:クーポン|円\s*OFF)/i.test(line))continue;
+    const amount=/([0-9０-９,，]{1,7})\s*円\s*OFF/i.exec(line);
+    const digits=amount?normDigits(amount[1]).replace(/[,，]/g,''):'';
+    return [{kind:'coupon',title:'LINE 优惠券',
+      description_zh:digits?'邮件称绑定 LINE ID 可领取 '+digits+' 日元优惠券，领取条件需要核对':'邮件称绑定 LINE ID 可领取优惠券，领取条件需要核对',
+      source_quote:line.slice(0,180),requires_confirmation:true}];
+  }
+  return [];
+}
 export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   const text = String(raw || '').slice(0,100000);
   const category = classifyText(text);
@@ -246,7 +281,7 @@ export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):category==='card_spend'?extractCardPurchaseFields(text):category==='salary'&&isSalaryDepositNotice(text)?extractSalaryDepositFields(text):[];
   const due=dates.find(d=>d.due_hint && !/(?:お届け予定|配達予定|配送予定|口座引落|引き落とし予定|受取完了)/.test(d.source_quote));
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
-  for(const item of extractActionableTextFields(text,!!due,{defaultYear:referenceYear}))fields.push(item);
+  for(const item of extractActionableTextFields(text,!!due,{defaultYear:referenceYear,category}))fields.push(item);
   // Scheduled debit and delivery dates are events, NOT actionable deadlines.
   // Restrict event extraction to those notice categories so receipts cannot make tasks.
   if (category==='bank'||category==='delivery'){
