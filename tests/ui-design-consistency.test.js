@@ -44,3 +44,16 @@ test('critical privacy and deletion guarantees remain visible in simplified copy
  assert.match(app,/<h2>Gmail<\/h2>/);
  assert.match(app,/<h2>Google Drive<\/h2>/);
 });
+
+test('all main iPhone surfaces use shared glass tokens with dark and reduced transparency fallbacks',()=>{
+ for(const token of ['--glass-card','--glass-header','--glass-sheet','--glass-outline','--glass-rim','--glass-input'])
+  assert.ok(css.includes(token),'missing shared theme token: '+token);
+ for(const selector of ['.topbar,.top-bar,.detail-top','.bottom-nav{','.bottom-sheet{','.segments{','.sheet-overlay{'])
+  assert.ok(css.includes(selector),'missing frosted app surface: '+selector);
+ assert.match(css,/-webkit-backdrop-filter:blur\(30px\) saturate\(170%\)/);
+ assert.match(css,/@media\(prefers-color-scheme:dark\)/);
+ assert.match(css,/@media\(prefers-reduced-transparency:reduce\)/);
+ assert.match(css,/@supports not \(backdrop-filter:blur\(1px\)\)/);
+ assert.match(css,/\.recycle-sheet\{max-height:min\(82dvh,780px\)/);
+ assert.match(css,/\.recycle-clear-button\{[^}]*min-height:42px/);
+});
