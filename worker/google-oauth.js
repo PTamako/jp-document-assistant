@@ -1,4 +1,4 @@
-import {json,bad} from './http.js';
+import {json,bad,readJson} from './http.js';
 
 // Code-model OAuth only. Google refresh tokens live encrypted in the existing
 // private D1; never in the PWA, logs, HTML, R2, or API responses.
@@ -63,7 +63,8 @@ async function tokenRequest(env,params){
 }
 async function gmailGet(env,accessToken,path){
   const u=new URL(GMAIL+path);
-  if(u.origin!=='https://gmail.googleapis.com'||!u.pathname.startsWith(GMAIL+'/')&&u.pathname!==GMAIL)
+  const root=new URL(GMAIL).pathname;
+  if(u.origin!=='https://gmail.googleapis.com'||!(u.pathname===root||u.pathname.startsWith(root+'/')))
     bad('Gmail API 请求地址无效','INVALID_PATH',400);
   const response=await googleFetch(env,u.toString(),{method:'GET',
     headers:{Authorization:'Bearer '+accessToken,Accept:'application/json'}});
@@ -106,7 +107,7 @@ export async function handleGoogleGmail(request,env,p,path,url){
   }
   if(!enabled(env))bad('Google 长期授权尚未配置完成','GOOGLE_NOT_CONFIGURED',503);
   if(path==='/api/google/gmail/connect'&&request.method==='POST'){
-    const data=await request.json().catch(()=>null);
+    const data=await readJson(request,5200).catch(e=>{if(e?.status)throw e;return null;});
     const code=data?.code;
     if(typeof code!=='string'||code.length<12||code.length>4096||!/^[A-Za-z0-9_./-]+$/.test(code))
       bad('Google 授权码无效','GOOGLE_BAD_CODE',400);
