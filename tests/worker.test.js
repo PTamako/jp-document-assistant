@@ -634,6 +634,51 @@ test('signed ledger integration requires reviewed fields, uses fixed key and saf
 });
 
 
+test('known ledger target rejections show safe causes and unknown outcomes stay unknown',async()=>{
+ const {classifyBridgeRejection}=await import('../worker/bridge.js');
+ const cases=[
+  [404,'bridge_disabled','TARGET_BRIDGE_DISABLED'],
+  [401,'invalid_signature','TARGET_INVALID_SIGNATURE'],
+  [403,'actor_not_allowed','TARGET_ACTOR_NOT_ALLOWED'],
+  [400,'payment_source_missing','TARGET_PAYMENT_SOURCE_MISSING'],
+  [409,'duplicate_candidate','TARGET_DUPLICATE_CANDIDATE']
+ ];
+ for(const [status,error,code] of cases){
+  const d=classifyBridgeRejection('kakebo',status,{error});
+  assert.equal(d.code,code);
+  assert.ok(d.message.includes('家計簿'));
+ }
+ assert.equal(classifyBridgeRejection('kakebo',503,{error:'ledger_write_failed'}),null);
+ assert.equal(classifyBridgeRejection('homeflow',404,{error:'bridge_disabled'}),null);
+ assert.equal(classifyBridgeRejection('kakebo',403,{error:'private-secret'}).code,'TARGET_FORBIDDEN');
+});
+test('explicit ledger signature rejection is persisted without changing the replay identity',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+  retention:'summary',source_type:'text',text:'ご請求金額：1,200円\n納付期限：令和8年11月30日（月)'
+ }});
+ const doc=imported.data.document_id;
+ const field=(await req(env,'/api/documents/'+doc,auth(owner))).data.document.fields.find(f=>f.field_key==='amount_jpy');
+ await req(env,'/api/fields/'+field.id,{method:'PATCH',...auth(owner),data:{review_state:'confirmed',normalized_value:'1200'}});
+ const candidate=(await req(env,'/api/documents/'+doc+'/candidates',auth(owner))).data.items.find(x=>x.candidate_kind==='finance');
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'mapped-user'}});
+ env.KAKEBO_BRIDGE_SECRET='some-long-secret-for-bridge-tests-123456';
+ let called=0;
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(){called++;return Response.json({ok:false,error:'invalid_signature'},{status:401});}};
+ const options={method:'POST',...auth(owner),data:{
+  confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true,date:'2026-11-12',category:'税金',payment_source:'現金'
+ },extraHeaders:{'Idempotency-Key':'confirmed_save_12345'}};
+ for(let n=0;n<2;n++){
+  const result=await req(env,'/api/candidates/'+candidate.id+'/commit',options);
+  assert.equal(result.response.status,401);
+  assert.equal(result.data.code,'TARGET_INVALID_SIGNATURE');
+  assert.equal(env.DB.sql.prepare('SELECT last_error_code FROM integration_links').get().last_error_code,'TARGET_INVALID_SIGNATURE');
+ }
+ assert.equal(called,2);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM integration_links').get().n),1);
+});
+
 test('invalid calendar dates are rejected during manual verification',async()=>{
   const env=makeEnv(),user=await boot(env);
   const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(user),data:{

@@ -26,6 +26,38 @@ function config(env,target){
   if(url.username||url.password||url.hash||url.search||url.protocol!=='https:'||url.pathname!=='/api/bridge/document-assistant')return null;
   return {secret,url:url.href,fetcher:service?.fetch?.bind(service)||fetch};
 }
+// Only show safe, predefined error categories returned by the target.
+// 5xx and network failures are still unknown-outcome writes.
+const KAKEBO_REJECTIONS={
+ bridge_disabled:['TARGET_BRIDGE_DISABLED','家計簿未开启文书助手联动，本次没有记账'],
+ bridge_not_configured:['TARGET_BRIDGE_NOT_CONFIGURED','家計簿联动密钥未配置，本次没有记账'],
+ invalid_signature:['TARGET_INVALID_SIGNATURE','家計簿拒绝签名，请核对两端密钥，本次没有记账'],
+ expired_signature:['TARGET_EXPIRED_SIGNATURE','家計簿拒绝过期请求，本次没有记账'],
+ actor_not_allowed:['TARGET_ACTOR_NOT_ALLOWED','家計簿未授权当前账号映射，本次没有记账'],
+ invalid_source:['TARGET_INVALID_SOURCE','家計簿拒绝联动来源或幂等键，本次没有记账'],
+ invalid_entry:['TARGET_INVALID_ENTRY','家計簿拒绝日期、金额或分类，本次没有记账'],
+ invalid_text:['TARGET_INVALID_TEXT','家計簿拒绝了文字字段，本次没有记账'],
+ payment_source_missing:['TARGET_PAYMENT_SOURCE_MISSING','家計簿没有登记该支付方式，本次没有记账'],
+ payment_source_invalid:['TARGET_PAYMENT_SOURCE_INVALID','家計簿支付方式无效，本次没有记账'],
+ payment_source_archived:['TARGET_PAYMENT_SOURCE_ARCHIVED','家計簿支付方式已归档，本次没有记账'],
+ duplicate_candidate:['TARGET_DUPLICATE_CANDIDATE','家計簿可能已有同日、同金额、同卡的支出；未重复写入，请核对明细']
+};
+export function classifyBridgeRejection(target,status,body){
+ if(target!=='kakebo'||!Number.isInteger(status)||status<400||status>=500)return null;
+ const code=typeof body?.error==='string'?body.error:'';
+ const known=Object.prototype.hasOwnProperty.call(KAKEBO_REJECTIONS,code)?KAKEBO_REJECTIONS[code]:null;
+ const fallback={
+  400:['TARGET_BAD_REQUEST','家計簿拒绝了请求，本次没有记账'],
+  401:['TARGET_AUTH_FAILED','家計簿身份验证失败，本次没有记账'],
+  403:['TARGET_FORBIDDEN','家計簿拒绝当前账号权限，本次没有记账'],
+  404:['TARGET_ENDPOINT_DISABLED','家計簿联动接口不存在或尚未启用，本次没有记账'],
+  409:['TARGET_CONFLICT','家計簿拒绝了重复或冲突记录，请核对明细'],
+  429:['TARGET_RATE_LIMITED','家計簿联动频率受限，本次没有记账']
+ };
+ const value=known||fallback[status]||['TARGET_REJECTED','家計簿拒绝此次请求，本次没有记账'];
+ return {code:value[0],message:value[1],status};
+}
+
 async function checkedFields(env,docId){
   const rs=(await env.DB.prepare('SELECT field_key,normalized_value,review_state FROM document_fields WHERE document_id=?').bind(docId).all()).results||[];
   return new Map(rs.filter(x=>['confirmed','corrected'].includes(x.review_state)).map(x=>[x.field_key,x.normalized_value]));
@@ -138,6 +170,14 @@ export async function commitCandidate(request,env,p,id){
   try{
     const response=await dest.fetcher(new Request(dest.url,{method:'POST',headers:{'Content-Type':'application/json','X-DA-Timestamp':timestamp,'X-DA-Signature':signature,'Idempotency-Key':key},body:raw}));
     answer=await response.json().catch(()=>({}));
+    // A known 4xx is a definitive no-write outcome; expose only a safe code.
+    const rejected=classifyBridgeRejection(target,response.status,answer);
+    if(rejected){
+      await run(env.DB,`UPDATE integration_links SET state='failed',last_error_code=?,updated_at=?
+        WHERE candidate_id=? AND target=? AND state='sending' AND updated_at=? AND request_fingerprint=?`,
+        rejected.code,isoNow(),id,target,now,fingerprint);
+      return failure(rejected.code,rejected.message,rejected.status);
+    }
     if(!response.ok||!answer?.ok||typeof answer.remote_id!=='string'||!answer.remote_id)throw new Error('BRIDGE_RESPONSE_FAILED');
   }catch{
     // The target may have committed while the reply was lost; always retry with the SAME key.
