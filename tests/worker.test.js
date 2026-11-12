@@ -57,6 +57,27 @@ async function boot(env){
 }
 function auth(p){return {cookie:p.cookie,csrf:p.csrf};}
 
+test('top-up email is private, exposes reviewed candidates, never generates a finance write candidate',async()=>{
+ const env=makeEnv(),p=await boot(env);
+ const email=[
+  'Suicaポケット受取完了：モバイルSuica',
+  'ポケット受取カードに設定したSuicaへの入金（チャージ）が完了しました。',
+  '□サービス名', '楽天ペイSuicaチャージ', '□受取額', '1,000円',
+  '□受取完了日時', '2026/11/08 13:04'
+ ].join('\n');
+ const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(p),data:{title:'Suicaチャージ完了',source_type:'mail_forward',retention:'summary',text:email,visibility:'shared'}});
+ assert.equal(imp.response.status,201,JSON.stringify(imp.data));
+ const doc=await req(env,`${'/api/documents/${imp.data.document_id}'}`,auth(p));
+ assert.equal(doc.data.document.category,'topup');
+ assert.equal(doc.data.document.visibility,'private');
+ assert.equal(doc.data.document.fields.find(f=>f.field_key==='amount_jpy').normalized_value,'1000');
+ assert.equal(doc.data.document.fields.find(f=>f.field_key==='transaction_at').normalized_value,'2026-11-08 13:04');
+ const candidates=await req(env,`${'/api/documents/${imp.data.document_id}/candidates'}`,auth(p));
+ assert.equal(candidates.response.status,200);
+ assert.equal(candidates.data.items.some(c=>c.candidate_kind==='finance'),false);
+ assert.equal(candidates.data.items.some(c=>c.candidate_kind==='homeflow_task'),false);
+});
+
 test('bootstrap is one-time, default private and text import needs review',async()=>{
   const env=makeEnv(),p=await boot(env);
   const second=await req(env,'/api/auth/bootstrap',{method:'POST',data:{setup_token:env.BOOTSTRAP_ADMIN_TOKEN,email:'x@example.com',password:'some-long-password'}});
