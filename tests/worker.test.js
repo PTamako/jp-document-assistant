@@ -1011,7 +1011,7 @@ test('direct reanalysis cannot destroy remote attempts or regenerate idempotency
 });
 
 
-test('private Japanese sentences cannot be sent to vocabulary-only study bridge or misleadingly marked ready',async()=>{
+test('signed Japanese sentence sync requires explicit privacy review and stays idempotent',async()=>{
  const env=makeEnv(),owner=await boot(env);
  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
   retention:'summary',source_type:'text',text:'ご請求金額：1200円\n納付期限：令和8年11月30日（月)'
@@ -1024,23 +1024,33 @@ test('private Japanese sentences cannot be sent to vocabulary-only study bridge 
  const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
  env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{zhixue:'single-study-owner'}});
  env.ZHIXUE_BRIDGE_SECRET='signed-study-secret-long-enough-to-test';
- let networkRequests=0;
- env.ZHIXUE_BRIDGE_SERVICE={async fetch(){networkRequests++;return Response.json({ok:true,remote_id:'incorrect'})}};
+ let networkRequests=0,bodySent;
+ env.ZHIXUE_BRIDGE_SERVICE={async fetch(r){networkRequests++;bodySent=await r.json();return Response.json({ok:true,remote_id:'ja:期限までに支払います。'})}};
  const preview=await req(env,`/api/candidates/${candidateId}/preview`,auth(owner));
  assert.equal(preview.response.status,200,JSON.stringify(preview.data));
- assert.equal(preview.data.available,false);
- assert.match(preview.data.note,/私人句卡/);
- const commit=await req(env,`/api/candidates/${candidateId}/commit`,{
+ assert.equal(preview.data.available,true);
+ const missingConsent=await req(env,`/api/candidates/${candidateId}/commit`,{
+   method:'POST',...auth(owner),data:{confirm:'CONFIRM_STUDY',redacted_sentence:'期限までに支払います。'},
+   extraHeaders:{'Idempotency-Key':'explicit-sentence-request'}
+ });
+ assert.equal(missingConsent.response.status,409,JSON.stringify(missingConsent.data));
+ assert.equal(networkRequests,0);
+ const commit=()=>req(env,`/api/candidates/${candidateId}/commit`,{
    method:'POST',...auth(owner),data:{confirm:'CONFIRM_STUDY',privacy_confirmed:true,
      redacted_sentence:'期限までに支払います。'},
    extraHeaders:{'Idempotency-Key':'explicit-sentence-request'}
  });
- assert.equal(commit.response.status,503,JSON.stringify(commit.data));
- assert.equal(commit.data.code,'STUDY_SENTENCE_NOT_READY');
- assert.equal(networkRequests,0);
- assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+ const first=await commit();
+ assert.equal(first.response.status,200,JSON.stringify(first.data));
+ assert.equal(bodySent.payload.operation,'sentence');
+ assert.equal(bodySent.payload.privacy_confirmed,true);
+ assert.equal(bodySent.payload.skip_existing,true);
+ const again=await commit();
+ assert.equal(again.response.status,200,JSON.stringify(again.data));
+ assert.equal(again.data.already_synced,true);
+ assert.equal(networkRequests,1);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links WHERE state=\'synced\'').get().n,1);
 });
-
 
 test('missing owner-scoped object is re-uploaded before reuse; failed repair creates no reference',async()=>{
   const env=makeEnv(),owner=await boot(env),bytes=new Uint8Array([255,216,255,224,41,42,43,44]);
