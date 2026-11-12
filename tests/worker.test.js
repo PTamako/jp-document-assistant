@@ -679,6 +679,89 @@ test('explicit ledger signature rejection is persisted without changing the repl
  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM integration_links').get().n),1);
 });
 
+test('changed failed financial mapping requires signed absence check and explicit owner consent',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+  retention:'summary',source_type:'text',text:'ご請求金額：1,200円\n納付期限：令和8年11月30日（月)'
+ }});
+ const docId=imported.data.document_id;
+ const doc=(await req(env,'/api/documents/'+docId,auth(owner))).data.document;
+ const amount=doc.fields.find(x=>x.field_key==='amount_jpy');
+ await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
+  data:{review_state:'confirmed',normalized_value:'1200'}});
+ const candidate=(await req(env,'/api/documents/'+docId+'/candidates',auth(owner))).data.items.find(x=>x.candidate_kind==='finance');
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'ledger-owner'}});
+ env.KAKEBO_BRIDGE_SECRET='fixture-strong-ledger-secret-123456789';
+ const operations=[];
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(request){
+  const data=JSON.parse(await request.text());
+  const operation=data.payload.operation;
+  operations.push(operation);
+  assert.equal(request.headers.get('Idempotency-Key'),data.idempotency_key);
+  if(operation==='lookup')return Response.json({ok:true,exists:false,remote_id:null});
+  if(operations.filter(x=>x==='entry').length===1)throw Error('lost first reply');
+  return Response.json({ok:true,remote_id:'ledger-entry-123'});
+ }};
+ const send=body=>req(env,'/api/candidates/'+candidate.id+'/commit',{method:'POST',...auth(owner),
+  data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true,date:'2026-11-12',category:'税金',
+   payment_source:'現金',...body},extraHeaders:{'Idempotency-Key':'safe-ledger-retry-123'}});
+ const original=await send({});
+ assert.equal(original.response.status,503);
+ assert.equal(original.data.code,'BRIDGE_UNCONFIRMED');
+ // Simulate an older settled failure; do not remap an in-flight request.
+ env.DB.sql.prepare("UPDATE integration_links SET updated_at='2026-01-01T00:00:00.000Z'").run();
+ const changed=await send({category:'饮食料品'});
+ assert.equal(changed.response.status,409);
+ assert.equal(changed.data.code,'RETRY_PAYLOAD_CHANGED');
+ assert.deepEqual(operations,['entry']);
+ const recovered=await send({category:'饮食料品',confirm_mapping_change:true});
+ assert.equal(recovered.response.status,200,JSON.stringify(recovered.data));
+ assert.equal(recovered.data.remote_id,'ledger-entry-123');
+ assert.deepEqual(operations,['entry','lookup','entry']);
+ const state=env.DB.sql.prepare('SELECT state,attempt_count,remote_id FROM integration_links').get();
+ assert.equal(state.state,'synced');
+ assert.equal(state.attempt_count,2);
+ assert.equal(state.remote_id,'ledger-entry-123');
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM integration_links').get().n),1);
+});
+
+test('recovery lookup finds an existing remote entry and never posts another transaction',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+  data:{source_type:'text',retention:'summary',text:'ご請求金額：1,200円\n納付期限：令和8年11月30日（月)'}});
+ const docId=imported.data.document_id;
+ const amount=(await req(env,'/api/documents/'+docId,auth(owner))).data.document.fields.find(x=>x.field_key==='amount_jpy');
+ await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
+  data:{review_state:'confirmed',normalized_value:'1200'}});
+ const candidate=(await req(env,'/api/documents/'+docId+'/candidates',auth(owner))).data.items.find(x=>x.candidate_kind==='finance');
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'ledger-owner'}});
+ env.KAKEBO_BRIDGE_SECRET='fixture-strong-ledger-secret-123456789';
+ let entryCalls=0,lookupCalls=0;
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(request){
+  const operation=JSON.parse(await request.text()).payload.operation;
+  if(operation==='lookup'){lookupCalls++;return Response.json({ok:true,exists:true,remote_id:'prior-entry-01'});}
+  entryCalls++;
+  throw Error('prior write completed but response lost');
+ }};
+ const send=opts=>req(env,'/api/candidates/'+candidate.id+'/commit',{method:'POST',...auth(owner),
+  data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true,date:'2026-11-12',
+   category:'税金',payment_source:'現金',...opts},extraHeaders:{'Idempotency-Key':'safe-ledger-retry-123'}});
+ assert.equal((await send({})).response.status,503);
+ env.DB.sql.prepare("UPDATE integration_links SET updated_at='2026-01-01T00:00:00.000Z'").run();
+ const reconciled=await send({category:'饮食料品',confirm_mapping_change:true});
+ assert.equal(reconciled.response.status,200,JSON.stringify(reconciled.data));
+ assert.equal(reconciled.data.recovered_prior,true);
+ assert.equal(reconciled.data.already_synced,true);
+ assert.equal(entryCalls,1);
+ assert.equal(lookupCalls,1);
+ const state=env.DB.sql.prepare('SELECT state,attempt_count,remote_id FROM integration_links').get();
+ assert.equal(state.state,'linked_existing');
+ assert.equal(state.attempt_count,1);
+ assert.equal(state.remote_id,'prior-entry-01');
+});
+
 test('invalid calendar dates are rejected during manual verification',async()=>{
   const env=makeEnv(),user=await boot(env);
   const imp=await req(env,'/api/documents/import/text',{method:'POST',...auth(user),data:{
