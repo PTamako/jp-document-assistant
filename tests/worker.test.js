@@ -2207,6 +2207,47 @@ test('ledger options diagnose unreachable, disabled and HTML target without reve
  assert.equal(success.data.paymentSources[0].value,'三井住友カード');
 });
 
+test('approved merchant is passed as the ledger title in a signed card purchase payload',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const raw=[
+  '件名：ご利用のお知らせ【三井住友カード】',
+  'お客様のカードご利用内容をお知らせいたします。',
+  'ご利用カード：Ｏｌｉｖｅ／クレジット',
+  '◇利用日：2026/05/28 19:06',
+  '◇利用先：セブン－イレブン',
+  '◇利用取引：買物',
+  '◇利用金額：151円'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+  data:{text:raw,source_type:'text',retention:'summary'}});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const doc=(await req(env,'/api/documents/'+imported.data.document_id,auth(owner))).data.document;
+ const amount=doc.fields.find(f=>f.field_key==='amount_jpy');
+ assert.ok(amount);
+ const confirm=await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
+  data:{normalized_value:'151',review_state:'confirmed'}});
+ assert.equal(confirm.response.status,200);
+ const candidate=(await req(env,'/api/documents/'+doc.id+'/candidates',auth(owner))).data.items.find(c=>c.candidate_kind==='finance');
+ assert.ok(candidate);
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'ledger-owner'}});
+ env.KAKEBO_BRIDGE_SECRET='internal-bridge-test-secret-for-merchant-case';
+ let sent=null;
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(request){
+  sent=JSON.parse(await request.text());
+  return Response.json({ok:true,remote_id:'fake-ledger-151'});
+ }};
+ const result=await req(env,'/api/candidates/'+candidate.id+'/commit',{method:'POST',...auth(owner),
+  data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true,date:'2026-05-28',
+    category:'饮食料品',payment_source:'三井住友カード',note:''},
+  extraHeaders:{'Idempotency-Key':'merchant-test-151'}});
+ assert.equal(result.response.status,200,JSON.stringify(result.data));
+ assert.equal(sent.payload.merchant,'セブン-イレブン');
+ assert.equal(sent.payload.note,'');
+ assert.equal(sent.payload.date,'2026-05-28');
+ assert.equal(sent.payload.amount,151);
+});
+
 test('Gmail code-model grants remain encrypted and user-bound; only selected messages are read',async()=>{
  const env=makeEnv(),owner=await boot(env);
  const noConfig=await req(env,'/api/google/gmail/status',auth(owner));
