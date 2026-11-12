@@ -22,7 +22,9 @@ function config(env,target){
   if(typeof secret!=='string'||secret.length<32)return null;
   if(!service && !(typeof endpoint==='string'&&/^https:\/\//.test(endpoint)))return null;
   let url;
-  try{url=new URL(endpoint||'https://internal.invalid/api/bridge/document-assistant');}catch{return null;}
+  // A Service Binding dispatches to the private Worker directly. Never
+  // route that request through a pages.dev hostname even if a legacy URL is configured.
+  try{url=new URL(service?.fetch?'https://internal.invalid/api/bridge/document-assistant':endpoint);}catch{return null;}
   if(url.username||url.password||url.hash||url.search||url.protocol!=='https:'||url.pathname!=='/api/bridge/document-assistant')return null;
   return {secret,url:url.href,fetcher:service?.fetch?.bind(service)||fetch};
 }
