@@ -7,13 +7,14 @@ import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailAut
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
+import TabIcon from './TabIcon.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const initialized=ref(null);
 const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
 const passwordDraft=reactive({current_password:'',new_password:'',confirm_password:''});
 const calendarLink=ref(''),calendarStatusInfo=ref(null),calendarShowTitle=ref(false);
-const tabs=[{id:'today',name:'今日',icon:'◉'},{id:'docs',name:'文书',icon:'▤'},{id:'links',name:'联动',icon:'◇'},{id:'mine',name:'我的',icon:'☰'}];
+const tabs=[{id:'today',name:'今日'},{id:'docs',name:'文书'},{id:'links',name:'联动'},{id:'mine',name:'我的'}];
 const pages=reactive({today:{items:[],next:0,loaded:false},docs:{items:[],next:0,loaded:false},links:{items:[],next:0,loaded:false}});
 const loadingPage=ref(false),search=ref(''),category=ref('');
 const cats={salary:'工资／奖金',bank:'银行／信用卡',tax:'税务／缴纳',utility:'水电燃气',housing:'房屋租赁',campaign:'活动／优惠',policy:'法规／政策',manual:'使用说明',travel:'旅行交通',delivery:'配送订单',other:'其他'};
@@ -545,7 +546,11 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <p class="fine-print">原件按需从私有 R2 读取；删除文书不会删除其他三个 App 的已确认数据。</p>
       </section>
     </main>
-    <nav class="bottom-nav" aria-label="主要导航"><button v-for="tab in tabs" :key="tab.id" @click="selectTab(tab.id)" :class="{active:activeTab===tab.id}"><span class="nav-symbol">{{tab.icon}}</span><span>{{tab.name}}</span></button></nav>
+    <nav class="bottom-nav" aria-label="主要导航">
+      <button v-for="tab in tabs" :key="tab.id" type="button" @click="selectTab(tab.id)" :class="{active:activeTab===tab.id}" :aria-current="activeTab===tab.id?'page':undefined">
+        <span class="nav-symbol"><TabIcon :name="tab.id" /></span><span>{{tab.name}}</span>
+      </button>
+    </nav>
   </template>
   <div v-if="notice" class="status-toast" role="status"><span>{{notice}}</span><button @click="notice=''" aria-label="关闭提示">×</button></div>
   <div v-if="error" class="status-toast error-toast" role="alert"><span>{{error}}</span><button @click="error=''" aria-label="关闭错误">×</button></div>

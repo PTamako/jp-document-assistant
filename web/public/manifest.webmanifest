@@ -1,11 +1,31 @@
 {
-  "name":"日本生活文书助手",
-  "short_name":"文书助手",
-  "lang":"zh-CN",
-  "display":"standalone",
-  "start_url":"/",
-  "scope":"/",
-  "background_color":"#f3f6fb",
-  "theme_color":"#f3f6fb",
-  "description":"日本日文文件导入、字段核验与家庭私密存档。用户数据不在手机持久保存。"
+  "name": "日本生活文书助手",
+  "short_name": "文书助手",
+  "lang": "zh-CN",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "background_color": "#f3f6fb",
+  "theme_color": "#f3f6fb",
+  "description": "日本日文文件导入、字段核验与家庭私密存档。用户数据不在手机持久保存。",
+  "icons": [
+    {
+      "src": "/icons/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/app-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
 }
