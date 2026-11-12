@@ -85,7 +85,7 @@ const drivePickerReadyUi=ref(false),drivePickerLoadingUi=ref(false);
 const driveCloud=ref({enabled:false,connected:false,google_email:null});
 const driveItems=ref([]),driveNext=ref(''),driveQuery=ref(''),driveBusy=ref(false);
 const googlePending=ref({service:'',flow:''});
-const gmailAvailable=gmailConfigured(),gmailAuthorizedUi=ref(false),gmailIdentityReadyUi=ref(false),gmailIdentityLoadingUi=ref(false),gmailQuery=ref('newer_than:30d'),gmailItems=ref([]),gmailNext=ref(null),gmailBusy=ref(false);
+const gmailAvailable=gmailConfigured(),gmailAuthorizedUi=ref(false),gmailIdentityReadyUi=ref(false),gmailIdentityLoadingUi=ref(false),gmailQuery=ref(''),gmailLastQuery=ref(''),gmailSearched=ref(false),gmailItems=ref([]),gmailNext=ref(null),gmailBusy=ref(false);
 const gmailPersistent=ref({enabled:false,connected:false,google_email:null,client_id:''});
 let gmailGeneration=0;
 const salaryAmountDraft=ref(''),salaryAmountConfirmed=ref(false);
@@ -391,18 +391,27 @@ async function loadGmailMessages(append=false){
   if(!gmailPersistent.value.connected&&!gmailConnected()){
     gmailAuthorizedUi.value=false;return problem(new Error('Gmail 授权已过期，请重新授权'));
   }
+  if(append&&!gmailNext.value)return;
+  // Search via Gmail's server-side query; do not filter only the visible five.
+  // Keep the applied query stable across all subsequent five-mail pages.
+  const query=append?gmailLastQuery.value:gmailQuery.value.trim();
   const serial=++gmailGeneration;
   gmailBusy.value=true;
+  if(!append){
+    gmailLastQuery.value=query;
+    gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;
+  }
   try{
     const result=gmailPersistent.value.connected
-      ?await api('/api/google/gmail/messages?q='+encodeURIComponent(gmailQuery.value)+
+      ?await api('/api/google/gmail/messages?q='+encodeURIComponent(query)+
         '&pageToken='+encodeURIComponent(append?gmailNext.value||'':''))
-      :await gmailList(gmailQuery.value,append?gmailNext.value||'':'');
+      :await gmailList(query,append?gmailNext.value||'':'');
     if(serial!==gmailGeneration||!user.value)return;
     const old=append?gmailItems.value:[];
     const ids=new Set(old.map(x=>x.id));
     gmailItems.value=[...old,...result.items.filter(x=>!ids.has(x.id))];
     gmailNext.value=result.nextPageToken;
+    gmailSearched.value=true;
   }catch(e){if(serial===gmailGeneration)problem(e);}
   finally{if(serial===gmailGeneration)gmailBusy.value=false;}
 }
@@ -427,7 +436,7 @@ function clearGmailSession(){
   gmailPersistent.value={enabled:false,connected:false,google_email:null,client_id:''};
   driveCloud.value={enabled:false,connected:false,google_email:null};
   driveItems.value=[];driveNext.value='';googlePending.value={service:'',flow:''};
-  gmailItems.value=[];gmailNext.value=null;
+  gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;gmailLastQuery.value='';gmailQuery.value='';
 }
 async function boot(){
   try{
@@ -590,7 +599,7 @@ async function saveDocAiProvider(){
  try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
  closeSheet();await openDoc(id);flash('已保存 AI 选择');}catch(e){problem(e);}finally{busy.value=false;}
 }
-function closeSheet(){attachmentActionsTarget.value=null;importOcrEngine.value='local';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){attachmentActionsTarget.value=null;importOcrEngine.value='local';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;gmailLastQuery.value='';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){
   inputMode.value=mode;sheet.value='import';
 }
@@ -1238,14 +1247,19 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
     <p v-if="!gmailPersistent.enabled" class="fine-print">Google 授权配置尚未完成</p><p v-else-if="gmailPersistent.progress_error" class="fine-print">{{gmailPersistent.progress_error}}</p>
   </template>
   <template v-else>
-    <label class="form-label">搜索邮件<input v-model.trim="gmailQuery" maxlength="180" placeholder="newer_than:30d"/></label>
-    <button class="secondary full" :disabled="gmailBusy" @click="loadGmailMessages(false)">搜索</button>
+    <form class="search-row gmail-search-form" @submit.prevent="loadGmailMessages(false)">
+      <input v-model.trim="gmailQuery" type="search" maxlength="180"
+        aria-label="搜索 Gmail 邮件" placeholder="发件人、主题或关键词"
+        enterkeyhint="search" autocomplete="off"/>
+      <button type="submit" class="filter-button icon-label" :disabled="gmailBusy"><UiIcon name="search" :size="17"/>搜索</button>
+    </form>
+    <p v-if="gmailSearched" class="fine-print">已显示 {{gmailItems.length}} 封 · 每次 5 封</p>
     <div v-for="m in gmailItems" :key="m.id" class="recycle-row">
       <div class="item-info"><strong>{{m.subject}}</strong><small>{{m.from}}</small><small>{{m.date}}</small></div>
       <button class="secondary small" :disabled="gmailBusy" @click="selectGmailMessage(m.id)">导入</button>
     </div>
-    <div v-if="!gmailItems.length" class="empty">暂无邮件</div>
-    <button v-if="gmailNext" class="secondary full" :disabled="gmailBusy" @click="loadGmailMessages(true)">加载更多</button>
+    <div v-if="gmailSearched&&!gmailItems.length" class="empty">没有匹配的邮件</div>
+    <button v-if="gmailNext&&gmailQuery.trim()===gmailLastQuery" class="secondary full" :disabled="gmailBusy" @click="loadGmailMessages(true)">加载更多（5 封）</button>
     <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">断开连接</button>
   </template>
   <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
