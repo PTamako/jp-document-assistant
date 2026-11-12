@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import app from '../worker/index.js';
+import {geminiQuotaSlots,GEMINI_MODEL} from '../worker/gemini-budget.js';
 import {hmacHex} from '../worker/security.js';
 import {createZip} from '../web/src/zip.js';
 import {readBackup,restoreBatch} from '../web/src/backup-client.js';
@@ -2041,5 +2042,33 @@ test('Gemini quota failure persists an error code and explicit user retry succee
   assert.equal(passed.status,'success');
   assert.equal(passed.failure_code,null);
   assert.match(passed.result.explanation_zh,/实际银行入账/);
+ }finally{globalThis.fetch=existingFetch;}
+});
+
+test('a 20/20 Gemini 3.6 budget blocks imports before Google fetch and is visible in usage',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GEMINI_API_KEY='test-key';
+ const {dayPt,minuteUtc}=geminiQuotaSlots();
+ env.DB.sql.prepare('INSERT INTO gemini_api_daily(model_id,day_pt,calls,minute_utc,minute_calls) VALUES(?,?,?,?,?)')
+  .run(GEMINI_MODEL,dayPt,20,minuteUtc,0);
+ const existingFetch=globalThis.fetch;
+ let externalCalls=0;
+ globalThis.fetch=async()=>{externalCalls++;throw Error('Google must not be called');};
+ try{
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+   title:'工资',text:'給与明細 差引支給額 100000円',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+  }});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  assert.equal(imported.data.ai_status,'gemini_daily_limit');
+  assert.equal(externalCalls,0);
+  const doc=(await req(env,'/api/documents/'+imported.data.document_id,auth(owner))).data.document;
+  assert.equal(doc.ai_analysis.model,'gemini-3.6-flash');
+  assert.equal(doc.ai_analysis.failure_code,'gemini_daily_limit');
+  const usage=await req(env,'/api/usage',auth(owner));
+  assert.equal(usage.response.status,200);
+  assert.equal(usage.data.gemini_daily.model,'gemini-3.6-flash');
+  assert.equal(usage.data.gemini_daily.calls,20);
+  assert.equal(usage.data.gemini_daily.limit,20);
+  assert.equal(usage.data.gemini_daily.remaining,0);
  }finally{globalThis.fetch=existingFetch;}
 });
