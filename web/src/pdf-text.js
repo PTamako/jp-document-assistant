@@ -42,7 +42,10 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
             const canvas=window.document.createElement('canvas');
             canvas.width=Math.round(viewport.width);canvas.height=Math.round(viewport.height);
             try{
-              await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+              const context=canvas.getContext('2d',{alpha:false});
+              if(!context)throw Error('浏览器不支持 PDF 页面绘制');
+              context.fillStyle='#fff';context.fillRect(0,0,canvas.width,canvas.height);
+              await page.render({canvasContext:context,viewport}).promise;
               const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.92));
               if(!blob)throw Error('无法将扫描页转换成图片');
               result=String((await ocrPage(blob,pageNumber))?.text||'').trim();
