@@ -54,6 +54,29 @@ test('full-width Olive amount still recognized and monthly bill / refund not tre
    '三井住友カードのご利用内容\nご利用日時：2026/11/08 13:58\nカードチャージ 1,520円'
  ])assert.equal(isCardPurchaseNotice(text),false);
 });
+test('split-field SMBC Olive authorization extracts 151 JPY as reviewable expense',()=>{
+ const raw=[
+  '件名：ご利用のお知らせ【三井住友カード】',
+  'お客様のカードご利用内容をお知らせいたします。',
+  'ご利用カード：Ｏｌｉｖｅ／クレジット',
+  '◇利用日：2026/05/28 19:06',
+  '◇利用先：セブン－イレブン',
+  '◇利用取引：買物',
+  '◇利用金額：151円',
+  '※カード利用の承認照会通知であり、ご請求を確定しません。'
+ ].join('\n');
+ assert.equal(isCardPurchaseNotice(raw),true);
+ const parsed=parseJapaneseText(raw);
+ assert.equal(parsed.category,'card_spend');
+ assert.equal(f(parsed,'amount_jpy')?.normalized_value,'151');
+ assert.equal(f(parsed,'merchant')?.normalized_value,'セブン-イレブン');
+ assert.equal(f(parsed,'transaction_at')?.normalized_value,'2026-05-28 19:06');
+ assert.equal(f(parsed,'amount_jpy')?.source_quote,'◇利用金額：151円');
+ assert.equal(f(parsed,'merchant')?.source_quote,'◇利用先：セブン－イレブン');
+ assert.equal(f(parsed,'due_date'),undefined);
+ assert.equal(isCardPurchaseNotice(raw.replace('◇利用取引：買物','◇利用取引：返金')),false);
+ assert.equal(isCardPurchaseNotice(raw+'\n◇利用金額：200円'),false);
+});
 test('receipt and salary matching do not reclassify card bill payment or Suica recharge',()=>{
  assert.equal(parseJapaneseText('口座引落予定日：2026年11月10日\n引落金額：20,000円').category,'bank');
  assert.equal(parseJapaneseText('Suicaポケット受取完了\n受取額：1,000円').category,'topup');
