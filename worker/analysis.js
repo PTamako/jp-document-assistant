@@ -1,3 +1,4 @@
+import { explainNotice } from './notice-context.js';
 // Safe, deterministic Japanese document pre-analysis. This is NOT OCR or a generative translation.
 const gloss = [
   ['納付期限', '缴纳期限', 'のうふきげん'],
@@ -12,6 +13,9 @@ const gloss = [
   ['消印有効', '以邮戳日期为准', 'けしいんゆうこう'],
   ['申請', '申请', 'しんせい'],
   ['お支払い', '支付', 'おしはらい'],
+  ['口座引き落とし', '银行账户自动扣款', 'こうざひきおとし'],
+  ['チャージ', '充值／余额转移', 'ちゃーじ'],
+  ['お届け予定', '预计送达', 'おとどけよてい'],
 ];
 // Stored-value top-ups move funds between accounts, not expense or income events.
 const storedValueTopup = text =>
@@ -20,6 +24,8 @@ const storedValueTopup = text =>
 
 export function classifyText(text) {
   if (storedValueTopup(text)) return 'topup';
+  if (/(?:口座引[き]?落[とし]?|口座振替|引落(?:し)?(?:予定日|金額|額))/.test(text)) return 'bank';
+  if (/(?:お届け予定日時|配達予定日|配送予定日|お荷物のお届け)/.test(text)) return 'delivery';
   if (/(給与明細|差引支給|支給総額|賞与明細)/.test(text)) return 'salary';
   if (/(カードご利用|利用速報|クレジットカード|ご請求額|利用確定)/.test(text)) return 'bank';
   if (/(納付書|納付期限|税額|保険料|年金保険料)/.test(text)) return 'tax';
@@ -42,7 +48,7 @@ const priority = [
   {key:'net_salary', re:/(?:差引支給額|差引支給|手取(?:り)?額)[^\n\r\d]{0,22}(?:[¥￥]\s*)?([\d０-９,，]{1,15})\s*円?/g},
   {key:'gross_salary', re:/(?:総支給額|支給合計)[^\n\r\d]{0,22}(?:[¥￥]\s*)?([\d０-９,，]{1,15})\s*円?/g},
   {key:'total_deductions', re:/(?:控除合計|控除総額)[^\n\r\d]{0,22}(?:[¥￥]\s*)?([\d０-９,，]{1,15})\s*円?/g},
-  {key:'amount_jpy', re:/(?:ご請求金額|請求金額|納付金額|お支払金額|合計金額|ご利用金額|金額)[^\n\r\d]{0,18}(?:[¥￥]\s*)?([\d０-９,，]{1,15})\s*円?/g},
+  {key:'amount_jpy', re:/(?:ご請求金額|請求金額|納付金額|お支払金額|合計金額|ご利用金額|引落金額|引き落とし金額|引落額|受取額|チャージ金額|チャージ額|入金額|金額)[^\n\r\d]{0,18}(?:[¥￥]\s*)?([\d０-９,，]{1,15})\s*円?/g},
 ];
 const kanjiWeekdays = ['日','月','火','水','木','金','土'];
 const datePattern = /(令和|平成)?\s*(元|[0-9０-９]{1,4})\s*年\s*([0-9０-９]{1,2})\s*月\s*([0-9０-９]{1,2})\s*日(?:\s*[(（]([日月火水木金土])(?:曜(?:日)?)?[)）])?/g;
@@ -131,10 +137,16 @@ export function parseJapaneseText(raw) {
   const issues=[];
   const dates=extractDates(text);
   const fields=category==='topup'?extractTopupFields(text):[];
-  const due=dates.find(d=>d.due_hint);
+  const due=dates.find(d=>d.due_hint && !/(?:お届け予定|配達予定|配送予定|口座引落|引き落とし予定|受取完了)/.test(d.source_quote));
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
+  // Scheduled debit and delivery dates are events, NOT actionable deadlines.
+  // Restrict event extraction to those notice categories so receipts cannot make tasks.
+  if (category==='bank'||category==='delivery'){
+    const event=dates.find(d=>/(?:口座引落|引き落とし|お届け予定|配達予定|配送予定)/.test(text.slice(Math.max(0,d.index-90),d.index+d.source_quote.length)));
+    if(event && event!==due)fields.push({field_key:'event_date',value_type:'date',normalized_value:event.date,source_quote:event.source_quote,review_state:'unreviewed'});
+  }
   if (dates.some(x=>x.weekday_mismatch)) issues.push('日期与原文星期不一致，请核对原件');
-  if(!due && /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2})/.test(text)) issues.push('存在未注明年份的日期，无法直接确认截止日');
+  if(!due && dates.length===0 && /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2})/.test(text)) issues.push('存在未注明年份的日期，无法直接确认截止日');
   for(const {key,re} of priority){
     if(category==='topup' && key==='amount_jpy')continue; // No payment or income inference from a top-up.
     re.lastIndex=0;
@@ -163,7 +175,8 @@ export function parseJapaneseText(raw) {
     source_date_quote:sourceDate?.source_quote||null,official_current_verified_at:null};
   const vocabulary=gloss.filter(([term])=>text.includes(term)).slice(0,8).map(([term,meaning_zh,reading])=>({term,reading,meaning_zh}));
   const labels={salary:'工资／奖金',bank:'银行／信用卡',topup:'电子钱包／充值',tax:'缴纳／税务',insurance:'保险',medical:'医疗通知',government:'行政手续',utility:'水电燃气',housing:'住房／合同',campaign:'活动／优惠',policy:'法规／政策',terms:'合同／使用条款',manual:'使用说明',travel:'航班／旅行',hotel:'酒店预约',shopping:'购物订单',delivery:'配送／订单',other:'其他文书'};
-  const summary_zh=category==='topup'?'检测到电子钱包充值／余额转移通知；已识别的信息仍须核对原文，不作为消费或收入。':`检测到「${labels[category]}」相关表述；以下字段仅为规则提取结果，仍需核对日文原文。`;
+  const notice=explainNotice({text,category,fields});
+  const summary_zh=notice.summary||`检测到「${labels[category]}」相关表述；提取字段须核对原文。`;
   const clauseLines=clauses.length?
    ['关键条款（逐条核对日文原文，未确认个人资格）：',
     ...clauses.map(c=>'· '+c.term+'｜日文证据：「'+c.source_quote+'」｜中文：'+c.meaning_zh+'｜建议：'+c.action_zh)]:[];
@@ -172,6 +185,6 @@ export function parseJapaneseText(raw) {
       '原文版本／发布日期线索：'+policyVersion.source_document_date+'（'+policyVersion.source_date_quote+'）':
       '原文版本／发布日期：无法确定，请手动核对',
     '官方现行有效性：尚未核验（official_current_verified_at = null）；不得据此判定个人权益或现行法律。']: [];
-  const explanation_zh=[`文书类别建议：${labels[category]}`,...fields.map(f=>`${f.field_key==='due_date'?'疑似截止日':f.field_key==='net_salary'?'疑似实发金额':f.field_key==='gross_salary'?'疑似应发金额':f.field_key==='total_deductions'?'疑似扣款合计':category==='topup'&&f.field_key==='amount_jpy'?'充值金额':f.field_key==='transaction_at'?'疑似完成时间':f.field_key==='service_name'?'服务名称':'疑似金额'}：${f.normalized_value}${f.value_type==='money'?' 日元':''}（未核验）`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`),'此版本只进行有来源的规则抽取，并非完整机器翻译、OCR 或法律效力核实。'].join('\n');
+  const explanation_zh=[`文书类别建议：${labels[category]}`,...notice.lines,...fields.map(f=>`${f.field_key==='due_date'?'待核对截止日':f.field_key==='event_date'?'事件／预计日期':f.field_key==='transaction_at'?'交易完成时间':f.field_key==='service_name'?'服务名称':f.field_key==='net_salary'?'实发金额':f.field_key==='gross_salary'?'应发金额':f.field_key==='total_deductions'?'扣款合计':category==='topup'?'充值金额':'金额线索'}：${f.normalized_value}${f.value_type==='money'?' 日元':''}｜原文：${f.source_quote}`),...clauseLines,...versionLines,...issues.map(x=>`注意：${x}`)].join('\n');
   return {category,summary_zh,explanation_zh,fields,issues,vocabulary,clauses,policyVersion,analysis_status:'needs_review'};
 }

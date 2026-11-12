@@ -670,6 +670,26 @@ ELSE 'unreviewed' END review_status,
       const result=await analyzeStored(env,updated,true);
       return json({ok:true,analysis_status:result.result?.analysis_status||'needs_review',fields:result.result?.fields||[],privacy_auto_private:nextVisibility==='private'&&d.visibility==='shared',message:'文字已保存为待人工核对的分析结果'});
     }
+    if(method==='POST'&&rest==='reinterpret'){
+      const doc=await ownedDocument(env.DB,id,p,'active');
+      if(!doc.extracted_text_ja)bad('这份文书尚无可解读的文字，请先导入文字','SOURCE_TEXT_REQUIRED',422);
+      const parsed=parseJapaneseText(doc.extracted_text_ja);
+      const existing=await dbAll(env.DB,'SELECT field_key FROM document_fields WHERE document_id=?',id);
+      const keys=new Set(existing.map(x=>x.field_key)),now=isoNow();
+      // Add only previously missing fields: never overwrite approved/corrected/
+      // rejected values, destroy candidates, or regenerate remote idempotency keys.
+      const added=parsed.fields.filter(x=>!keys.has(x.field_key));
+      const nextCategory=doc.category==='other'?parsed.category:doc.category;
+      const nextVisibility=requiresPrivateDefault(nextCategory,doc.extracted_text_ja)?'private':doc.visibility;
+      const statements=[['UPDATE documents SET summary_zh=?,explanation_zh=?,category=?,visibility=?,extraction_version=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=? AND lifecycle=?',
+        parsed.summary_zh,parsed.explanation_zh,nextCategory,nextVisibility,'rules-v3-notices',now,id,p.user_id,'active']];
+      for(const f of added)statements.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+        randomToken(16),id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);
+      await batch(env.DB,statements);
+      return json({ok:true,added_fields:added.length,preserved_fields:existing.length,
+        privacy_auto_private:doc.visibility==='shared'&&nextVisibility==='private',
+        remote_integrations_unchanged:true});
+    }
     if(method==='POST'&&rest==='analyze'){
       const doc=await ownedDocument(env.DB,id,p,'active');
       const result=await analyzeStored(env,doc);

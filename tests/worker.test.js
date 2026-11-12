@@ -1299,3 +1299,34 @@ test('append page reuses owner object only after safe repair; different owners c
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,2);
  assert.equal(env._blobs.size,2);
 });
+
+test('re-interpretation only adds missing fields, preserves manual review and never writes linked apps',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+    source_type:'text',retention:'summary',text:'口座引落予定日：2026年11月10日\\n引落金額：27,460円\\n内容：カード代金'
+  }});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  const id=imported.data.document_id;
+  const original=(await req(env,`/api/documents/${id}`,auth(owner))).data.document;
+  const amount=original.fields.find(f=>f.field_key==='amount_jpy');
+  assert.ok(amount);
+  const verified=await req(env,`/api/fields/${amount.id}`,{method:'PATCH',...auth(owner),
+    data:{review_state:'confirmed',normalized_value:'27460'}});
+  assert.equal(verified.response.status,200,JSON.stringify(verified.data));
+  // Simulate a document imported before support for event dates and rich explanation.
+  env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=? AND field_key='event_date'").run(id);
+  env.DB.sql.prepare("UPDATE documents SET category='other',explanation_zh='old' WHERE id=?").run(id);
+  const refreshed=await req(env,`/api/documents/${id}/reinterpret`,{method:'POST',...auth(owner),data:{}});
+  assert.equal(refreshed.response.status,200,JSON.stringify(refreshed.data));
+  assert.equal(refreshed.data.added_fields,1);
+  assert.equal(refreshed.data.remote_integrations_unchanged,true);
+  const next=(await req(env,`/api/documents/${id}`,auth(owner))).data.document;
+  assert.equal(next.category,'bank');
+  assert.match(next.explanation_zh,/银行账户自动扣款/);
+  assert.equal(next.fields.find(f=>f.field_key==='amount_jpy').id,amount.id);
+  assert.equal(next.fields.find(f=>f.field_key==='amount_jpy').review_state,'confirmed');
+  assert.equal(next.fields.find(f=>f.field_key==='event_date').normalized_value,'2026-11-10');
+  assert.equal(next.fields.find(f=>f.field_key==='event_date').review_state,'unreviewed');
+  assert.equal((await req(env,`/api/documents/${id}/reinterpret`,{method:'POST',...auth(owner),data:{}})).data.added_fields,0);
+  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+});

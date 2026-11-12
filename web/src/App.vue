@@ -47,7 +47,7 @@ const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=r
 const integrationConfigured=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
 
-const fieldLabel={due_date:'办理／缴费期限',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称'};
+const fieldLabel={due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称'};
 const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
 function documentReviewLabel(d){
  const state=d?.review_status || (
@@ -540,6 +540,18 @@ async function appendFiles(event){const files=Array.from(event.target.files||[])
  busy.value=true;try{for(const f of files){const optimized=await compressImage(f);const form=new FormData();form.append('file',optimized,optimized.name);form.append('retention','original');await api(`/api/documents/${current.value.id}/attachments`,{method:'POST',body:form,form:true});}
  await openDoc(current.value.id);flash(`已添加 ${files.length} 页原件，尚待人工确认识别内容`);
  }catch(e){problem(e);}finally{busy.value=false;if(extraFileInput.value)extraFileInput.value.value='';}}
+async function refreshInterpretation(){
+ if(!current.value||busy.value)return;
+ const id=current.value.id;
+ busy.value=true;
+ try{
+   const result=await api(`/api/documents/${id}/reinterpret`,{method:'POST',body:{}});
+   refreshDocumentViews();
+   await openDoc(id);
+   flash(`中文讲解已更新；补充 ${result.added_fields} 个待核验字段，原有核验及跨应用联动保持不变`+
+     (result.privacy_auto_private?'；敏感文书已自动设为仅自己':''));
+ }catch(e){problem(e);}finally{busy.value=false;}
+}
 function editText(){editTextDraft.value=current.value?.extracted_text_ja||'';sheet.value='editText';}
 async function saveSourceText(){busy.value=true;try{await api(`/api/documents/${current.value.id}/source-text`,{method:'PATCH',body:{text:editTextDraft.value,confirm_reset_review:true}});const id=current.value.id;sheet.value='';editTextDraft.value='';await openDoc(id);flash('文字已保存并重新生成待核验字段');}catch(e){problem(e);}finally{busy.value=false;}}
 function runOcr(a){ocrAttachmentPending.value=a;ocrRetryStale.value=false;ocrRetryEmpty.value=false;sheet.value='ocrConfirm';}
@@ -739,7 +751,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       <h2>{{current.title}}</h2>
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
       <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
-      <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>原文版本与官方核验</h3><p>原文注明的日期：{{current.source_document_date||'未能确定（请核对原件）'}}</p><p v-if="current.source_date_quote" class="muted">来源：{{current.source_date_quote}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文说明</h3><p class="multiline">{{current.explanation_zh||'当前仅保存原件。图像 OCR 尚未验证，建议使用粘贴文字导入。'}}</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
+      <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>原文版本与官方核验</h3><p>原文注明的日期：{{current.source_document_date||'未能确定（请核对原件）'}}</p><p v-if="current.source_date_quote" class="muted">来源：{{current.source_date_quote}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文说明</h3><p class="multiline">{{current.explanation_zh||'当前仅保存原件。图像 OCR 尚未验证，建议使用粘贴文字导入。'}}</p><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解并补充字段</button><p class="fine-print">只补充缺失字段，不覆盖已核验的数据，也不会修改其他 App 的记录。</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
       <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>原文：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':'截止日：'+item.payload.due_on}}</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div><p class="fine-print">确认后才写入目标 App。</p></section>
       <section v-if="detailTab==='study'"><h3 class="section-title">值得记住的日文词语</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id"><strong>{{item.payload.term}}</strong><p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入</button></div><div v-if="!detailCandidates.some(c=>c.candidate_kind==='vocabulary')" class="empty">尚未找到可复用词语。</div></section>
