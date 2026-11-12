@@ -696,6 +696,7 @@ test('owner reorders active attachment IDs with version CAS; no R2 operation',as
   const id=first.data.document_id;
   assert.equal((await req(env,`/api/documents/${id}/attachments`,{method:'POST',...auth(owner),form:form([33,44])})).response.status,201);
   const before=(await req(env,`/api/documents/${id}`,auth(owner))).data.document;
+  assert.deepEqual(before.attachments.map(x=>x.mime),['image/jpeg','image/jpeg']);
   const ids=before.attachments.map(x=>x.id);
   assert.equal(ids.length,2);
   let r2Reads=0,r2Writes=0;
