@@ -48,7 +48,7 @@ const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recyc
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 // Selection belongs to THIS import only; never stored as a global/device default.
-const aiProvider=ref(''),geminiConsent=ref(false);
+const aiProvider=ref(''),geminiConsent=ref(false),docAiProvider=ref('none'),docGeminiConsent=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
 
 const fieldLabel={merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
@@ -90,6 +90,7 @@ const choices={
  archived:{title:'归档状态',items:[{value:'active',label:'未归档'},{value:'archived',label:'已归档'},{value:'all',label:'全部'}]},
  favorite:{title:'收藏',items:[{value:'all',label:'全部'},{value:'yes',label:'仅收藏'}]},
  aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则分析（不调用 AI）'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 免费 API'}]},
+ docAiProvider:{title:'当前文书 AI 引擎',items:[{value:'none',label:'仅规则分析（不调用 AI）'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 免费 API'}]},
  textSource:{title:'文书来源',items:[{value:'text',label:'粘贴文本'},{value:'mail_forward',label:'苹果邮件复制 / 转发'},{value:'gmail',label:'Gmail 逐封选择'},{value:'google_drive',label:'Google Drive 复制'},{value:'local_file',label:'本地文档文本'}]},
  textRetention:{title:'保存方式',items:[{value:'summary',label:'保存文字和分析结果'},{value:'analyze_only',label:'仅分析，不保存'}]},
  fileRetention:{title:'保存方式',items:[{value:'analyze_only',label:'仅分析，不保存'},{value:'summary',label:'仅保存文字，不上传 R2'},{value:'original',label:'保存私有原件到 R2'}]},
@@ -104,6 +105,7 @@ function choiceValue(field){
   case 'archived':return archivedFilter.value;
   case 'favorite':return favoriteFilter.value;
   case 'aiProvider':return aiProvider.value;
+  case 'docAiProvider':return docAiProvider.value;
   case 'textSource':return textDraft.source_type;
   case 'textRetention':return textDraft.retention;
   case 'fileRetention':return fileRetention.value;
@@ -138,6 +140,7 @@ function selectChoice(value){
   case 'archived':archivedFilter.value=value;break;
   case 'favorite':favoriteFilter.value=value;break;
   case 'aiProvider':aiProvider.value=value;geminiConsent.value=false;break;
+  case 'docAiProvider':docAiProvider.value=value;docGeminiConsent.value=false;break;
   case 'textSource':textDraft.source_type=value;break;
   case 'textRetention':textDraft.retention=value;break;
   case 'fileRetention':fileRetention.value=value;break;
@@ -383,7 +386,15 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){aiProvider.value='';geminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function openDocAiProvider(){if(!current.value)return;docAiProvider.value=current.value.ai_provider||'none';docGeminiConsent.value=false;sheet.value='docAiProvider';}
+async function saveDocAiProvider(){
+ if(!current.value||busy.value)return;
+ if(docAiProvider.value==='gemini'&&!docGeminiConsent.value){problem(new Error('请确认这份文书不包含私人或机密信息'));return;}
+ busy.value=true;const id=current.value.id;
+ try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
+ closeSheet();await openDoc(id);flash('已保存这份文书的 AI 选择，尚未调用 AI');}catch(e){problem(e);}finally{busy.value=false;}
+}
+function closeSheet(){aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function primeGooglePicker(){
   if(!drivePickerAvailable||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
   drivePickerLoadingUi.value=true;
@@ -790,7 +801,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       <h2>{{current.title}}</h2>
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
       <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
-      <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>文件日期与官方核验</h3><p>文件日期线索：{{current.source_document_date||'未能确定（请核对文件）'}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文讲解</h3><p class="multiline">{{chineseExplanation(current.explanation_zh)||'目前没有可供讲解的文字内容，请检查识别结果。'}}</p><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解并补充字段</button><p class="fine-print">只补充缺失字段，不覆盖已核验的数据，也不会修改其他 App 的记录。</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
+      <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>文件日期与官方核验</h3><p>文件日期线索：{{current.source_document_date||'未能确定（请核对文件）'}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文讲解</h3><p class="fine-print">本份文书 AI 引擎：{{({cloudflare:'Cloudflare AI',gemini:'Gemini 免费 API',none:'仅规则分析'})[current.ai_provider]||'仅规则分析'}}（当前仍为规则解读，AI 接入尚未完成）</p><button class="secondary full" type="button" @click="openDocAiProvider">为这份文书选择 AI</button><p class="multiline">{{chineseExplanation(current.explanation_zh)||'目前没有可供讲解的文字内容，请检查识别结果。'}}</p><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解并补充字段</button><p class="fine-print">只补充缺失字段，不覆盖已核验的数据，也不会修改其他 App 的记录。</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
       <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div v-if="canManualSalary" class="content-card"><p>已识别工资入账通知，但邮件没有金额。</p><button class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写到账金额，生成家計簿收入建议</button></div>
         <div v-if="topupAdvice" class="content-card">
@@ -825,6 +836,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
         <p class="fine-print">每份文书单独选择，不会作为全局设置。当前 AI 新分析功能仍在开发；现有规则提取照常运行。</p>
         <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>我已确认这份文书不含私人或机密信息，并同意今后启用时发送给 Gemini 免费 API。当前不会发送。</label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
+      <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">只影响当前文书。AI 智能分析尚未启用，这里先保存选择。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>我确认这份文书不含个人或机密资料，同意未来启用时发送给 Gemini 免费 API。当前不会发送。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
   <p class="fine-print">只读取你主动选择的文件或邮件。iPhone PWA 可直接尝试 Gmail／Google Drive；若 Google 弹窗受限，可在「文件」App 的 Google Drive 位置选择文件。Google Docs 原生格式通过下方在线选择器导出。</p>
