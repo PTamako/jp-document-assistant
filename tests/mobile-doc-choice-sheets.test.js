@@ -49,7 +49,7 @@ test('new document import uses one provider menu and single-choice retention/sou
  assert.match(provider,/@change="selectFile"/);
  assert.match(provider,/@change="importLocalText"/);
  assert.match(provider,/@click="openGmailSheet"/);
- assert.match(provider,/@click="importFromGoogleDrive"/);
+ assert.match(provider,/@click="iosStandalonePwa\?sheet='safariGoogleGuide':importFromGoogleDrive\(\)"/);
  assert.match(provider,/@click="sheet='import'"/);
  assert.doesNotMatch(provider,/window\.localStorage|setInterval/);
 });
