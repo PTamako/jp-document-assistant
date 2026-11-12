@@ -743,6 +743,39 @@ paths:
                   type: boolean
               required:
               - text
+  /api/documents/{documentId}/reinterpret:
+    post:
+      tags:
+      - Documents
+      summary: 从保存的原文重新讲解，只补充缺失字段；保留人工核验及跨 App 候选记录
+      operationId: reinterpretDocumentPreservingReview
+      responses:
+        '200':
+          description: 成功，返回 added_fields、preserved_fields、privacy_auto_private 和 remote_integrations_unchanged
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
   /api/documents/{documentId}/analyze:
     post:
       tags:
