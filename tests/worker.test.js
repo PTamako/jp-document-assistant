@@ -57,6 +57,37 @@ async function boot(env){
 }
 function auth(p){return {cookie:p.cookie,csrf:p.csrf};}
 
+test('AI engine is chosen and consented per document, never globally or invoked on import',async()=>{
+ const env=makeEnv(),u=await boot(env);
+ const first=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+   title:'句子',text:'今日は良い天気です。散歩に行きます。',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+ }});
+ assert.equal(first.response.status,201,JSON.stringify(first.data));
+ const second=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+   title:'お知らせ',text:'お知らせの内容を確認してください。',source_type:'text',retention:'summary',ai_provider:'cloudflare'
+ }});
+ assert.equal(second.response.status,201,JSON.stringify(second.data));
+ const doc=async id=>(await req(env,'/api/documents/'+id,auth(u))).data.document;
+ assert.equal((await doc(first.data.document_id)).ai_provider,'gemini');
+ assert.equal((await doc(second.data.document_id)).ai_provider,'cloudflare');
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM ocr_attempts').get().n,0);
+ const denied=await req(env,'/api/documents/'+first.data.document_id+'/ai-provider',{
+   method:'PATCH',...auth(u),data:{ai_provider:'gemini'}
+ });
+ assert.equal(denied.response.status,400);
+ const changed=await req(env,'/api/documents/'+first.data.document_id+'/ai-provider',{
+   method:'PATCH',...auth(u),data:{ai_provider:'none'}
+ });
+ assert.equal(changed.response.status,200,JSON.stringify(changed.data));
+ assert.equal(changed.data.ai_invoked,false);
+ assert.equal((await doc(first.data.document_id)).ai_provider,'none');
+ assert.equal((await doc(second.data.document_id)).ai_provider,'cloudflare');
+ const sensitive=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+   title:'工资',text:'給与明細 差引支給額 120000円',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+ }});
+ assert.equal(sensitive.response.status,422,JSON.stringify(sensitive.data));
+});
+
 test('top-up email is private, exposes reviewed candidates, never generates a finance write candidate',async()=>{
  const env=makeEnv(),p=await boot(env);
  const email=[
