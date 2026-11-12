@@ -167,3 +167,15 @@
 .choice-picker-file>.ui-icon{flex:none;color:var(--secondary)}
 .choice-picker-file:focus-within{outline:2px solid var(--blue);outline-offset:2px}
 @media(max-height:670px){.choice-picker-list{max-height:48dvh}}
+
+/* OCR is one compact provider choice + one shared action, not a separate card. */
+.ocr-method-row{display:flex;align-items:stretch;gap:8px;margin:12px 0 8px}
+.ocr-method-row .choice-field-control{flex:1;min-width:0;padding:7px 11px;min-height:48px;gap:5px}
+.ocr-choice-text{min-width:0;display:flex;flex-direction:column;gap:2px}
+.ocr-choice-text strong{font-size:15px;font-weight:650;overflow-wrap:anywhere}
+.ocr-method-label{font-size:12px;font-weight:500;color:var(--secondary)}
+.ocr-run-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:96px;min-height:48px;flex:none}
+.ocr-cloud-options{display:flex;align-items:center;flex-wrap:wrap;gap:3px 12px;margin:0 0 9px;padding:0 3px}
+.ocr-cloud-options .check-row{margin:3px 0}
+.ocr-page-control{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--secondary)}
+.ocr-page-control input{width:62px;min-height:44px;text-align:center;padding:5px;font-size:15px}
