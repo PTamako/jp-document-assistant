@@ -177,8 +177,14 @@ watch(error,value=>{
   if(errorTimeout!==null)clearTimeout(errorTimeout);
   errorTimeout=value?setTimeout(()=>{error.value='';errorTimeout=null;},3000):null;
 });
-function flash(message){notice.value=message;error.value='';}
-function problem(err){error.value=err?.message || '操作失败'; notice.value='';}
+// Keep transient notices brief; detailed diagnostic text is never displayed
+// as a wall of text on mobile.
+function shortMessage(value,limit=110){
+ const message=String(value||'操作失败').replace(/\s+/g,' ').trim();
+ return message.length>limit?message.slice(0,limit-1)+'…':message;
+}
+function flash(message){notice.value=shortMessage(message,90);error.value='';}
+function problem(err){error.value=shortMessage(err?.message||err,140);notice.value='';}
 async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={}){
   const epoch=accountEpoch.snapshot();
   const headers={}; if(body&&!form)headers['Content-Type']='application/json';
@@ -563,7 +569,7 @@ async function parseSelectedFileWithOcr(file,epoch){
     if(!unchanged())return;
     fileText.value=result.text||'';
     if(isPdf)importPdfPages.value=Math.max(1,Number(result.pages_read)||1);
-    fileWarning.value=result.warning||(
+    fileWarning.value=shortMessage(result.warning,120)||(
       isImage?'识别完成，请核对文字。':'');
     if(isPdf&&fileSource.value==='google_drive'){
       fileWarning.value='已读取（'+(result.pages_read||'?')+' 页）。'+fileWarning.value;
@@ -574,7 +580,7 @@ async function parseSelectedFileWithOcr(file,epoch){
     }
   }catch(e){
     if(unchanged()){
-      fileWarning.value='识别失败：'+String(e?.message||'未知错误')+'。可保存原件重试。';
+      fileWarning.value='识别失败：'+shortMessage(e?.message||'未知错误',100);
       if(isPdf||isImage)fileRetention.value='original';
     }
   }finally{if(unchanged())ocrProgress.value='';}
@@ -632,7 +638,7 @@ async function runImportOcrSpace(){
    fileText.value=fileText.value.trim()?fileText.value.trim()+'\n\n'+candidate:candidate;
    fileWarning.value='OCR.space 识别完成，请核对。';
    flash('识别完成，请核对。');
- }catch(e){problem(e);fileWarning.value='OCR.space 失败：'+String(e?.message||'未知错误').slice(0,180);}
+ }catch(e){problem(e);fileWarning.value='OCR.space 失败：'+shortMessage(e?.message||'未知错误',110);}
  finally{if(fileDraft.value===selected)ocrProgress.value='';busy.value=false;}
 }
 async function retryLocalOcr(){
