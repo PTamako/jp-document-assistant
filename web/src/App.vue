@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick, watch } from 'vue';
 import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
@@ -160,6 +160,17 @@ function closeNestedSheet(){
 
 const showDue=(v)=>v?String(v):'日期待确认';
 const pageData=computed(()=>pages[activeTab.value]||{items:[],next:null,loaded:true});
+// Non-blocking global banners disappear in three seconds. Actual confirmation
+// dialogs never expire automatically: the user must choose Confirm/Cancel.
+let noticeTimeout=null,errorTimeout=null;
+watch(notice,value=>{
+  if(noticeTimeout!==null)clearTimeout(noticeTimeout);
+  noticeTimeout=value?setTimeout(()=>{notice.value='';noticeTimeout=null;},3000):null;
+});
+watch(error,value=>{
+  if(errorTimeout!==null)clearTimeout(errorTimeout);
+  errorTimeout=value?setTimeout(()=>{error.value='';errorTimeout=null;},3000):null;
+});
 function flash(message){notice.value=message;error.value='';}
 function problem(err){error.value=err?.message || '操作失败'; notice.value='';}
 async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={}){
@@ -381,12 +392,23 @@ async function selectTab(tab){
 async function searchDocs(){pages.docs.loaded=false;await loadTab('docs');closeSheet();}
 async function loadUsage(){try{usage.value=await api('/api/usage');}catch(e){problem(e);}}
 async function cleanupStorage(){busy.value=true;try{const result=await api('/api/storage/cleanup-orphans',{method:'POST',body:{}});flash(result.pending?'部分 R2 文件清理失败，请稍后手动重试':`已清理 ${result.removed} 个无引用原件；不扫描 R2 全桶`);}catch(e){problem(e);}finally{busy.value=false;}}
-async function openDoc(id){
+async function openDoc(id,{preserveTab=false,preserveScroll=false}={}){
   swipeOpenId.value='';
-  detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];detailTab.value='explain';
+  const sameDocument=preserveTab&&current.value?.id===id;
+  const tabBefore=detailTab.value;
+  const scrollBefore=preserveScroll&&sameDocument
+    ?document.querySelector('.detail-body')?.scrollTop:null;
+  detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];
+  if(!sameDocument)detailTab.value='explain';
   try{
     const d=await api(`/api/documents/${id}`);current.value=d.document;
     const c=await api(`/api/documents/${id}/candidates`);detailCandidates.value=c.items||[];
+    if(sameDocument)detailTab.value=tabBefore;
+    if(scrollBefore!==null&&scrollBefore!==undefined){
+      await nextTick();
+      const container=document.querySelector('.detail-body');
+      if(container)container.scrollTop=scrollBefore;
+    }
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
@@ -455,6 +477,9 @@ async function parseSelectedFileWithOcr(file,epoch){
     fileText.value=result.text||'';
     fileWarning.value=result.warning||(
       isImage?'已由本机 PaddleOCR 提取候选文字，请核对姓名、金额、日期和漏行。':'');
+    if(isPdf&&fileSource.value==='google_drive'){
+      fileWarning.value='Google Drive PDF 已成功下载并读取（'+(result.pages_read||'?')+' 页）。'+fileWarning.value;
+    }
     if(isPdf&&(result.ocr_pages_attempted||result.pages_without_text?.length)){
       // Keep scanned originals available for source verification.
       fileRetention.value='original';
@@ -571,7 +596,7 @@ async function saveManualSalary(){
 function startField(field){fieldDraft.id=field.id;fieldDraft.value=field.normalized_value||'';fieldDraft.state=field.review_state==='unreviewed'?'confirmed':field.review_state;fieldDraft.confirmRemote=false;sheet.value='field';}
 async function saveField(){busy.value=true;try{
   const result=await api(`/api/fields/${fieldDraft.id}`,{method:'PATCH',body:{normalized_value:fieldDraft.value,review_state:fieldDraft.state,confirm_remote_unchanged:fieldDraft.confirmRemote}});
-  const id=current.value.id;sheet.value='';await openDoc(id);
+  const id=current.value.id;sheet.value='';await openDoc(id,{preserveTab:true,preserveScroll:true});
   refreshDocumentViews();
   if(pages[activeTab.value])await loadTab(activeTab.value);
   flash(result.linked_records_unchanged?'本地字段已修改；已同步的目标 App 记录不会自动改变，请前往目标 App 核对':'字段已保存');
@@ -784,7 +809,7 @@ function todayReviewBadge(d){
 const labelFor=(key)=>key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 onMounted(async()=>{await boot();if(!user.value)await refreshInitStatus();});
-onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
+onBeforeUnmount(()=>{if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);clearPrivateWorkspace();fileDraft.value=null;});
 </script>
 
 <template>
@@ -902,7 +927,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
   <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button>
   <div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print" role="status">{{fileWarning}}</p><p v-if="fileDraft && /\\.pdf$/i.test(fileDraft.name) && !fileText.trim()" class="fine-print">本机识别失败时，可以先保存 PDF 原件，再在「原文」页点击「OCR.space 备用识别」，你同意后才会发送至第三方。</p><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
 
         <div class="choice-form-field"><span class="choice-field-label">这份文书使用的 AI</span><button type="button" class="choice-field-control" @click="openChoice('aiProvider')"><span>{{choiceLabel('aiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p class="fine-print">每份文书单独选择，不保存全局偏好。首次导入在服务已启用时尝试 AI 分析，同版本命中缓存不会重复调用。</p>
