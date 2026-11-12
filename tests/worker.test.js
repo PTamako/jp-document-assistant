@@ -177,6 +177,9 @@ test('browser OAuth shows safe reason for invalid_client without leaking Google 
  const status=await req(env,'/api/google/oauth/status?service=drive&flow='+state,auth(owner));
  assert.equal(status.data.progress,'failed');
  assert.match(status.data.progress_error,/Google 客户端密钥无效/);
+ const returned=await req(env,'/api/google/oauth/status?service=drive',auth(owner));
+ assert.equal(returned.data.progress,'failed');
+ assert.equal(returned.data.progress_error,status.data.progress_error);
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM google_oauth_grants').get().n,0);
 });
 
