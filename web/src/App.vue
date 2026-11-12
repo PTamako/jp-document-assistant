@@ -1317,7 +1317,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
   </div>
 
   <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeNestedSheet()">
-    <section class="bottom-sheet" role="dialog" aria-modal="true" :aria-label="sheet">
+    <section class="bottom-sheet" :class="{'recycle-sheet':sheet==='recycle','confirmation-sheet':['emptyRecycleConfirm','permanent','permanentAttachment','trashConfirm'].includes(sheet)}" role="dialog" aria-modal="true" :aria-label="sheet">
       <div class="grabber"></div>
       <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2>
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
@@ -1443,8 +1443,50 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <div class="sheet-actions"><button class="secondary" type="button" @click="sheet=''">取消</button><button class="destructive" type="button" :disabled="busy" @click="trashCurrent"><UiIcon name="trash" :size="17"/>确认移入</button></div>
       </template>
       <template v-else-if="sheet==='recycle'">
-         <div class="section-head"><h2>回收站</h2><button v-if="trashItems.length||attachmentTrashItems.length" class="destructive small" type="button" :disabled="busy" @click="askEmptyRecycle"><UiIcon name="trash" :size="16"/>全部清空</button></div>
-         <p class="muted">删除可恢复，永久删除不可撤销。</p><div v-if="!trashItems.length" class="empty">文书回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+        <div class="recycle-header">
+          <h2>回收站</h2>
+          <button v-if="trashItems.length||attachmentTrashItems.length"
+            class="recycle-clear-button" type="button" :disabled="busy" @click="askEmptyRecycle">
+            <UiIcon name="trash" :size="16"/>全部清空
+          </button>
+        </div>
+        <p class="recycle-explain">删除可恢复，永久删除不可撤销。</p>
+        <div v-if="!trashItems.length&&!attachmentTrashItems.length" class="recycle-empty">
+          <UiIcon name="trash" :size="22"/>
+          <span>回收站为空</span>
+        </div>
+        <div v-if="trashItems.length" class="recycle-list">
+          <div v-for="d in trashItems" :key="d.id" class="recycle-row">
+            <strong class="recycle-title" :title="d.title">{{d.title}}</strong>
+            <div class="recycle-row-bottom">
+              <small class="recycle-date">{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small>
+              <div class="recycle-row-actions">
+                <button class="recycle-action restore" type="button" :disabled="busy" @click="restore(d.id)">恢复</button>
+                <button class="recycle-action permanent" type="button" :disabled="busy" @click="askPermanent(d.id)">永久删除</button>
+              </div>
+            </div>
+          </div>
+          <button v-if="recycleNext!==null" class="text-button full recycle-more" type="button"
+            :disabled="busy" @click="loadMoreTrash">查看更多文书</button>
+        </div>
+        <h3 v-if="attachmentTrashItems.length" class="recycle-subheading">附件回收站</h3>
+        <div v-if="attachmentTrashItems.length" class="recycle-list">
+          <div v-for="a in attachmentTrashItems" :key="a.id" class="recycle-row">
+            <strong class="recycle-title" :title="a.file_label">{{a.file_label}}</strong>
+            <div class="recycle-row-bottom">
+              <small class="recycle-date">{{a.title}}</small>
+              <div class="recycle-row-actions">
+                <button class="recycle-action restore" type="button" :disabled="busy" @click="restoreAttachment(a.document_id,a.id)">恢复</button>
+                <button class="recycle-action permanent" type="button" :disabled="busy"
+                  @click="pendingAttachment=a;sheet='permanentAttachment'">永久删除</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="sheet-actions recycle-footer">
+          <button class="secondary full" type="button" @click="closeSheet">完成</button>
+        </div>
+      </template>
       <template v-else-if="sheet==='emptyRecycleConfirm'">
          <h2 class="danger-text">永久清空回收站？</h2>
          <p class="confirmation-help">将永久删除回收站中的全部文书及附件，并清理不再被引用的 R2 原件。不能恢复。不会删除正常使用的文书。</p>
