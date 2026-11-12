@@ -7,41 +7,67 @@ let token='',expires=0,version=0,loader=null;
 export const gmailConfigured=()=>!!String(import.meta.env.VITE_GOOGLE_CLIENT_ID||'').trim();
 export const gmailConnected=()=>!!token&&Date.now()+30000<expires;
 export function gmailForget(){version++;token='';expires=0;}
+export const gmailIdentityReady=()=>typeof window!=='undefined'&&!!window.google?.accounts?.oauth2?.initTokenClient;
 export function preloadGmailIdentity(){
-  if(!gmailConfigured())return Promise.reject(new Error('尚未配置 Gmail OAuth Web Client ID'));
-  if(typeof document==='undefined'||typeof window==='undefined')
-    return Promise.reject(new Error('Gmail 授权只能从浏览器操作'));
-  if(window.google?.accounts?.oauth2?.initTokenClient)return Promise.resolve();
-  if(loader)return loader;
-  loader=new Promise((resolve,reject)=>{
-    const el=document.createElement('script');el.src=GIS;el.async=true;
-    el.onload=()=>window.google?.accounts?.oauth2?.initTokenClient?resolve():reject(new Error('Google 授权组件不可用'));
-    el.onerror=()=>reject(new Error('Google 授权组件加载失败'));
-    document.head.appendChild(el);
-  }).catch(err=>{loader=null;throw err;});
-  return loader;
+ if(!gmailConfigured())return Promise.reject(new Error('尚未配置 Gmail OAuth Web Client ID'));
+ if(typeof document==='undefined'||typeof window==='undefined')
+  return Promise.reject(new Error('Gmail 授权只能从浏览器操作'));
+ if(gmailIdentityReady())return Promise.resolve();
+ if(loader)return loader;
+ loader=new Promise((resolve,reject)=>{
+  const el=document.createElement('script');el.src=GIS;el.async=true;
+  let complete=false;
+  const finish=(error)=>{
+   if(complete)return;complete=true;clearTimeout(timer);
+   if(error){el.remove();reject(error)}else resolve();
+  };
+  const timer=setTimeout(()=>finish(new Error('Google 登录组件加载超时，请检查网络后重试')),15000);
+  el.onload=()=>finish(gmailIdentityReady()?null:new Error('Google 授权组件不可用'));
+  el.onerror=()=>finish(new Error('Google 授权组件加载失败'));
+  document.head.appendChild(el);
+ }).catch(err=>{loader=null;throw err;});
+ return loader;
 }
-export async function gmailAuthorize(){
-  await preloadGmailIdentity();
-  const initial=version;
-  return new Promise((resolve,reject)=>{
-    const client=window.google.accounts.oauth2.initTokenClient({
-      client_id:import.meta.env.VITE_GOOGLE_CLIENT_ID,
-      scope:SCOPE,include_granted_scopes:false,
-      error_callback:()=>reject(new Error('Gmail 授权窗口被关闭或无法打开，请手动重试')),
-      callback:reply=>{
-        if(version!==initial)return reject(new Error('已切换用户，会话授权被取消'));
-        if(reply?.error||!reply?.access_token)return reject(new Error('Gmail 只读授权未完成'));
-        if(!window.google.accounts.oauth2.hasGrantedAllScopes(reply,SCOPE))
-          return reject(new Error('未授予 Gmail 只读权限，任何邮件均未读取'));
-        token=reply.access_token;
-        expires=Date.now()+Math.max(0,Number(reply.expires_in)||0)*1000;
-        if(!gmailConnected()){gmailForget();return reject(new Error('Gmail 授权无效或已过期'));}
-        resolve({authorized:true});
-      }
-    });
-    try{client.requestAccessToken({prompt:'consent',include_granted_scopes:false});}catch{reject(new Error('浏览器阻止了 Gmail 授权弹窗，请在 Safari 中重试'));}
-  });
+// The token request must be made synchronously from the click listener.
+// Awaiting script load here forfeits Safari's popup user activation.
+export function gmailAuthorize(){
+ if(!gmailConfigured())return Promise.reject(new Error('尚未配置 Gmail OAuth Web Client ID'));
+ if(!gmailIdentityReady())return Promise.reject(new Error('Google 授权组件还在加载，请稍后再点击'));
+ const initial=version;
+ return new Promise((resolve,reject)=>{
+  let settled=false;
+  const timer=setTimeout(()=>finish(new Error('Gmail 授权等待超时。请在 Safari 打开网站后重试')),60000);
+  const finish=(err,result)=>{
+   if(settled)return;settled=true;clearTimeout(timer);
+   if(err)reject(err);else resolve(result);
+  };
+  try{
+   const client=window.google.accounts.oauth2.initTokenClient({
+    client_id:import.meta.env.VITE_GOOGLE_CLIENT_ID,
+    scope:SCOPE,include_granted_scopes:false,
+    error_callback:e=>{
+     const msg=e?.type==='popup_failed_to_open'?'Gmail 授权弹窗被浏览器阻止':
+      e?.type==='popup_closed'?'Gmail 授权窗口已关闭':'Gmail 授权失败';
+     finish(new Error(msg+'。请在 Safari 中重试'));
+    },
+    callback:reply=>{
+     if(settled){
+      if(reply?.access_token)try{window.google.accounts.oauth2.revoke(reply.access_token,()=>{})}catch{}
+      return;
+     }
+     if(version!==initial)return finish(new Error('已切换用户，会话授权被取消'));
+     if(reply?.error||!reply?.access_token)return finish(new Error('Gmail 只读授权未完成'));
+     if(!window.google.accounts.oauth2.hasGrantedAllScopes(reply,SCOPE))
+      return finish(new Error('未授予 Gmail 只读权限，任何邮件均未读取'));
+     token=reply.access_token;
+     expires=Date.now()+Math.max(0,Number(reply.expires_in)||0)*1000;
+     if(!gmailConnected()){gmailForget();return finish(new Error('Gmail 授权无效或已过期'))}
+     finish(null,{authorized:true});
+    }
+   });
+   client.requestAccessToken({prompt:'consent',include_granted_scopes:false});
+  }catch{finish(new Error('浏览器阻止了 Gmail 授权弹窗，请在 Safari 中重试'))}
+ });
 }
 export async function gmailRevoke(){
   const current=token;gmailForget();
