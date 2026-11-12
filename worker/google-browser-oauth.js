@@ -16,6 +16,7 @@ const GOOGLE_ERRORS=Object.freeze({
  GOOGLE_INVALID_GRANT:'授权码已失效，请重新连接',
  GOOGLE_TOKEN_REQUEST:'Google 授权请求参数有误',
  GOOGLE_TOKEN_NETWORK:'无法连接 Google 授权服务',
+ GOOGLE_UNEXPECTED_REDIRECT:'Google 授权服务返回异常跳转',
  GOOGLE_TOKEN_FAILED:'Google 令牌交换失败',
  GOOGLE_SCOPE_MISSING:'Google 没有授予所需权限',
  GOOGLE_PROFILE_DENIED:'Google 拒绝访问账号信息，请检查 API 是否启用',
@@ -64,7 +65,12 @@ async function decrypt(env,service,uid,grant){
  }catch{bad('Google 授权密钥不可解密，请管理员检查配置','GOOGLE_KEY_UNAVAILABLE',503)}
 }
 async function googleFetch(env,url,init){
- return (env.GOOGLE_OAUTH_FETCH||fetch)(url,{...init,cache:'no-store',redirect:'error'});
+ // Cloudflare workerd does NOT implement redirect:'error': it throws TypeError
+ // before contacting Google. 'manual' returns 3xx without following it.
+ const response=await (env.GOOGLE_OAUTH_FETCH||fetch)(url,{...init,cache:'no-store',redirect:'manual'});
+ if(response.status>=300&&response.status<400)
+   bad('Google 授权服务返回异常跳转','GOOGLE_UNEXPECTED_REDIRECT',502);
+ return response;
 }
 async function tokenRequest(env,payload){
  let response;
@@ -72,7 +78,10 @@ async function tokenRequest(env,payload){
    response=await googleFetch(env,TOKEN,{method:'POST',
      headers:{'Content-Type':'application/x-www-form-urlencoded',Accept:'application/json'},
      body:new URLSearchParams(payload).toString()});
- }catch{bad('无法连接 Google 授权服务','GOOGLE_TOKEN_NETWORK',502)}
+ }catch(error){
+   if(error?.code==='GOOGLE_UNEXPECTED_REDIRECT')throw error;
+   bad('无法连接 Google 授权服务','GOOGLE_TOKEN_NETWORK',502);
+ }
  const data=await response.json().catch(()=>null);
  if(!response.ok||!data?.access_token){
    if(['invalid_client','unauthorized_client'].includes(data?.error))
@@ -112,7 +121,10 @@ async function googleJSON(env,url,token){
  try{
    res=await googleFetch(env,url,{method:'GET',
      headers:{Authorization:'Bearer '+token,Accept:'application/json'}});
- }catch{bad('无法访问 Google API','GOOGLE_PROFILE_FAILED',502)}
+ }catch(error){
+   if(error?.code==='GOOGLE_UNEXPECTED_REDIRECT')throw error;
+   bad('无法访问 Google API','GOOGLE_PROFILE_FAILED',502);
+ }
  if([401,403].includes(res.status))
    bad('Google API 拒绝访问，请检查是否已启用 Gmail API 和 Drive API','GOOGLE_PROFILE_DENIED',403);
  if(!res.ok)bad('Google API 请求失败','GOOGLE_PROFILE_FAILED',502);
