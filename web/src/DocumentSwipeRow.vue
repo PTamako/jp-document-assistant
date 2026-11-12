@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue';
+import UiIcon from './UiIcon.vue';
 
 const props=defineProps({
   id:{type:String,required:true},
@@ -61,7 +62,7 @@ function toggle(){
        @touchend="onTouchEnd" @touchcancel="resetDrag">
     <button type="button" class="document-swipe-delete" :disabled="disabled"
             :tabindex="revealed?0:-1" aria-label="删除文书，移入回收站"
-            @click.stop="emit('delete',id)">删除</button>
+            @click.stop="emit('delete',id)"><UiIcon name="trash" :size="19"/>删除</button>
     <div class="document-swipe-content"
          :style="{transform:'translateX('+((revealed?-RAIL:0)+drag)+'px)'}"
          @click.capture="onContentClick">
@@ -69,10 +70,7 @@ function toggle(){
       <button type="button" class="document-swipe-trigger" :disabled="disabled"
               :aria-expanded="revealed" :aria-label="revealed?'收起文书操作':'展开删除文书操作'"
               @click.stop="toggle">
-        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M6 12h.01M12 12h.01M18 12h.01" stroke-width="3" />
-        </svg>
+        <UiIcon name="ellipsis" :size="19"/>
       </button>
     </div>
   </div>
@@ -80,12 +78,12 @@ function toggle(){
 <style scoped>
 .document-swipe-row{position:relative;overflow:hidden;isolation:isolate;min-width:0;
   margin:0 0 9px;border-radius:var(--radius);border:1px solid var(--line);
-  background:#cf4056;touch-action:pan-y}
+  background:var(--danger);touch-action:pan-y}
 .document-swipe-content{position:relative;z-index:1;min-width:0;background:var(--panel);
   transition:transform .19s ease-out;will-change:transform}
 .is-dragging .document-swipe-content{transition:none}
-.document-swipe-delete{position:absolute;right:0;inset-block:0;display:grid;place-items:center;
-  width:88px;padding:0;color:#fff;background:#cf4056;font-weight:750;font-size:14px}
+.document-swipe-delete{position:absolute;right:0;inset-block:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;
+  width:88px;padding:0;color:#fff;background:var(--danger);font-weight:750;font-size:13px}
 .document-swipe-delete:disabled{opacity:.5}
 .document-swipe-content :deep(.item-card){margin:0;border:0;border-radius:0;
   min-height:78px;padding-right:53px}
