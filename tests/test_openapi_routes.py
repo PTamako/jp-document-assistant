@@ -17,7 +17,7 @@ class OpenApiContractTests(unittest.TestCase):
         self.assertEqual(SPEC.count('\ncomponents:\n'),1)
         self.assertNotIn('\n}\n      responses:',SPEC)
         paths = re.findall(r'^  (/api/[^:\n]+):\s*$', SPEC, re.M)
-        self.assertEqual(len(paths),59)
+        self.assertEqual(len(paths),60)
         self.assertEqual(len(paths),len(set(paths)))
         self.assertNotIn('/api/auth/start',paths)
         self.assertNotIn('/api/auth/complete',paths)
@@ -37,8 +37,8 @@ class OpenApiContractTests(unittest.TestCase):
     def test_operations_are_unique_and_security_boundary_documented(self):
         operations = re.findall(r'^    (get|post|patch|put|delete):\s*$', SPEC, re.M)
         ids=re.findall(r'^      operationId:\s*(\S+)\s*$',SPEC,re.M)
-        self.assertEqual(len(operations),60)
-        self.assertEqual(len(ids),60)
+        self.assertEqual(len(operations),61)
+        self.assertEqual(len(ids),61)
         self.assertEqual(len(ids),len(set(ids)))
         for operation in ['listOwnSessions','revokeOwnSession','revokeOtherOwnSessions','reinterpretDocumentPreservingReview','createConfirmedManualSalaryIncome']:
             self.assertIn(operation,ids)
