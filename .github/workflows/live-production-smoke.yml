@@ -27,6 +27,9 @@ jobs:
             {name:'jpda-health',url:'https://jp-document-assistant.yupan6706.workers.dev/api/health',status:200,check:d=>d?.ok===true&&d?.service==='document-assistant'&&d?.ai_ocr==='disabled'},
             {name:'jpda-first-account',url:'https://jp-document-assistant.yupan6706.workers.dev/api/auth/status',status:200,check:d=>d?.ok===true&&d?.initialized===true},
             {name:'jpda-private-api',url:'https://jp-document-assistant.yupan6706.workers.dev/api/me',status:401},
+            // Intentionally malformed JSON: must reach the auth Worker, fail before any DB write,
+            // and return INVALID_JSON/400 rather than Static Assets HTTP 405.
+            {name:'jpda-login-post-routing',url:'https://jp-document-assistant.yupan6706.workers.dev/api/auth/login',method:'POST',body:'{invalid-json',status:400,check:d=>d?.code==='INVALID_JSON'},
             {name:'homeflow-no-unauthorized-write',url:'https://homeflow.yupan6706.workers.dev/api/bridge/document-assistant',method:'POST',status:401},
             {name:'kakebo-no-unauthorized-write',url:'https://kakeibo-f17.pages.dev/api/bridge/document-assistant',method:'POST',status:401},
             {name:'zhixue-no-unauthorized-write',url:'https://it-study-platform.yupan6706.workers.dev/api/bridge/document-assistant',method:'POST',status:401}
@@ -37,7 +40,7 @@ jobs:
             for(let i=0;i<3;i++){
               const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),18000);
               try{
-                const response=await fetch(t.url,{method:t.method||'GET',signal:controller.signal,headers:{'Cache-Control':'no-store'},redirect:'manual'});
+                const response=await fetch(t.url,{method:t.method||'GET',body:t.body,signal:controller.signal,headers:{'Cache-Control':'no-store',...(t.body?{'Origin':new URL(t.url).origin,'Content-Type':'application/json'}:{})},redirect:'manual'});
                 actual=response.status;
                 const data=t.check?await response.json().catch(()=>null):null;
                 passed=response.status===t.status&&(!t.check||t.check(data));
