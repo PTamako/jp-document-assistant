@@ -2,6 +2,11 @@
 // Pin the SDK version; deployment must audit third-party runtime script and
 // first-load model downloads before approving this path for private documents.
 export const PADDLE_SDK_VERSION='0.4.2';
+export const ORT_WASM_VERSION='1.31.1';
+const ORT_WASM_BASE='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/';
+// Only the WASM binary is remote. JS/OCR runtime remains same-origin and
+// cannot upload any scanned document images to the CDN.
+const wasmPaths=Object.fromEntries(['ort-wasm-simd-threaded.jsep.wasm','ort-wasm-simd-threaded.wasm','ort-wasm-simd.jsep.wasm','ort-wasm-simd.wasm'].map(file=>[file,ORT_WASM_BASE+file]));
 let enginePromise;
 export function normalizeOcrItems(results){
   const items=Array.isArray(results?.[0]?.items)?results[0].items:[];
@@ -19,7 +24,7 @@ export async function recognizeJapaneseImage(file,{loadSdk}={}){
       const {PaddleOCR}=await loader();
       if(!PaddleOCR||typeof PaddleOCR.create!=='function')throw Error('PaddleOCR SDK 不可用');
       return PaddleOCR.create({lang:'japan',ocrVersion:'PP-OCRv6',
-        ortOptions:{backend:'wasm',numThreads:1}});
+        ortOptions:{backend:'wasm',numThreads:1,wasmPaths}});
     })().catch(error=>{enginePromise=null;throw error;});
   }
   const engine=await enginePromise;
