@@ -99,7 +99,7 @@ const accountEpoch=createAccountEpoch();
 let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
-const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
+const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 // Selection belongs to THIS import only; never stored as a global/device default.
@@ -270,7 +270,7 @@ function clearPrivateWorkspace(){
   swipeOpenId.value='';swipeTrashTarget.value=null;
   clearGmailSession();revokeOriginal();closeSheet();current.value=null;
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
-  usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];
+  usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
   ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;candidateMerchant.value='';pendingCandidateRetry.value=null;
   sessions.value=[];sessionsNext.value=null;
   backupFile.value=null;backupPass.value='';backupOffset.value=0;
@@ -840,7 +840,49 @@ async function trashCurrent(){busy.value=true;try{
   if(pages[activeTab.value])await loadTab(activeTab.value);
   flash('已移入回收站，「今日」与「联动」已同步更新，原件保留可恢复');
 }catch(e){problem(e);}finally{busy.value=false;}}
-async function showRecycle(){sheet.value='recycle';await refreshTrash();}
+async function showRecycle(){sheet.value='recycle';recycleEmptyProgress.value=0;await refreshTrash();}
+function askEmptyRecycle(){
+  if(busy.value||(!trashItems.value.length&&!attachmentTrashItems.value.length))return;
+  recycleEmptyProgress.value=0;
+  sheet.value='emptyRecycleConfirm';
+}
+async function emptyRecycle(){
+  if(busy.value)return;
+  const epoch=accountEpoch.snapshot();
+  const send=accountApi(epoch);
+  busy.value=true;
+  let documents=0,attachments=0,remaining=0,completed=false;
+  try{
+    // Five documents and five deleted attachments per bounded Worker request.
+    for(let batch=0;batch<100;batch++){
+      const result=await send('/api/recycle/empty',{method:'POST',body:{confirm:'DELETE_FOREVER'}});
+      accountEpoch.assertCurrent(epoch);
+      documents+=Number(result.processed_documents||0);
+      attachments+=Number(result.processed_attachments||0);
+      recycleEmptyProgress.value=documents+attachments;
+      remaining=Number(result.remaining||0);
+      if(!result.ok||result.failed?.length)break;
+      if(!result.has_more){completed=true;break;}
+      if(!result.processed)break;
+    }
+    accountEpoch.assertCurrent(epoch);
+    sheet.value='recycle';
+    await refreshTrash();
+    refreshDocumentViews();
+    if(pages[activeTab.value])await loadTab(activeTab.value);
+    if(completed)flash(`回收站已清空：文书 ${documents} 份、附件 ${attachments} 个`);
+    else problem(new Error(`已清理 ${documents+attachments} 项，仍有 ${remaining} 项未完成；请检查并重试`));
+  }catch(e){
+    if(accountEpoch.isCurrent(epoch)){
+      sheet.value='recycle';
+      await refreshTrash();
+      refreshDocumentViews();
+      problem(new Error(`已清理 ${documents+attachments} 项，其余清理未完成：${e?.message||'请重试'}`));
+    }
+  }finally{
+    if(accountEpoch.isCurrent(epoch))busy.value=false;
+  }
+}
 async function refreshTrash(reset=true){try{if(reset)recycleOffset.value=0;
   const d=await api(`/api/recycle?limit=5&offset=${recycleOffset.value}`);
   trashItems.value=reset?d.items:[...trashItems.value,...d.items];recycleNext.value=d.next_offset;
@@ -1400,8 +1442,19 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <p class="confirmation-help">文书和原件可恢复，已同步内容不受影响。</p>
         <div class="sheet-actions"><button class="secondary" type="button" @click="sheet=''">取消</button><button class="destructive" type="button" :disabled="busy" @click="trashCurrent"><UiIcon name="trash" :size="17"/>确认移入</button></div>
       </template>
-      <template v-else-if="sheet==='recycle'"><h2>回收站</h2><p class="muted">删除可恢复，永久删除不可撤销。</p><div v-if="!trashItems.length" class="empty">回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
-      <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
+      <template v-else-if="sheet==='recycle'">
+         <div class="section-head"><h2>回收站</h2><button v-if="trashItems.length||attachmentTrashItems.length" class="destructive small" type="button" :disabled="busy" @click="askEmptyRecycle"><UiIcon name="trash" :size="16"/>全部清空</button></div>
+         <p class="muted">删除可恢复，永久删除不可撤销。</p><div v-if="!trashItems.length" class="empty">文书回收站为空。</div><div v-for="d in trashItems" :key="d.id" class="recycle-row"><div class="item-info"><strong>{{d.title}}</strong><small>{{d.trashed_at?d.trashed_at.slice(0,10):'清理待重试'}}</small></div><button class="secondary small" @click="restore(d.id)" :disabled="busy">恢复</button><button class="destructive small" @click="askPermanent(d.id)">永久删除</button></div><button v-if="recycleNext!==null" class="text-button full" @click="loadMoreTrash">查看更多文书</button><h3>附件回收站</h3><div class="recycle-row" v-for="a in attachmentTrashItems" :key="a.id"><div class="item-info"><strong>{{a.file_label}}</strong><small>{{a.title}}</small></div><button class="secondary small" @click="restoreAttachment(a.document_id,a.id)">恢复</button><button class="destructive small" @click="pendingAttachment=a;sheet='permanentAttachment'">清理</button></div><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
+      <template v-else-if="sheet==='emptyRecycleConfirm'">
+         <h2 class="danger-text">永久清空回收站？</h2>
+         <p class="confirmation-help">将永久删除回收站中的全部文书及附件，并清理不再被引用的 R2 原件。不能恢复。不会删除正常使用的文书。</p>
+         <p v-if="busy" class="muted" role="status">正在清理，已处理 {{recycleEmptyProgress}} 项…</p>
+         <div class="sheet-actions">
+           <button class="secondary" type="button" :disabled="busy" @click="sheet='recycle'">取消</button>
+           <button class="destructive" type="button" :disabled="busy" @click="emptyRecycle"><UiIcon name="trash" :size="17"/>确认全部清空</button>
+         </div>
+       </template>
+       <template v-else-if="sheet==='permanentAttachment'"><h2 class="danger-text">永久删除这个附件？</h2><p>对应 R2 对象在最后一个引用删除后物理清理；文书的文字内容保留。无法直接撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" @click="deleteAttachment" :disabled="busy">确认清理</button></div></template>
       <template v-else-if="sheet==='permanent'"><h2 class="danger-text">永久删除文书？</h2><p>将从 D1 清理私人内容，并在没有其他文书引用该原件时同步物理删除 R2 文件。不能撤销。</p><div class="sheet-actions"><button class="secondary" @click="sheet='recycle'">取消</button><button class="destructive" :disabled="busy" @click="permanentDelete">确认永久删除</button></div></template>
       <template v-else-if="sheet==='calendar'"><h2>私人日历订阅</h2>
         <p class="fine-print">仅包含已人工确认的截止日期。默认隐藏文书名称、金额和个人资料。订阅链接相当于密码，请勿转发或公开。</p>

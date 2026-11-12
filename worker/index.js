@@ -658,11 +658,47 @@ ELSE 'unreviewed' END review_status,
   }
   if(method==='POST'&&path==='/api/recycle/empty'){
     const data=await readJson(request,5000);
-    if(data.confirm!=='DELETE_FOREVER')bad('必须再次输入确认操作','CONFIRM_REQUIRED',409);
-    const rows=await dbAll(env.DB,"SELECT id FROM documents WHERE owner_id=? AND lifecycle IN ('trashed','deletion_pending') ORDER BY trashed_at ASC LIMIT 5",p.user_id);
-    let processed=0,failures=[];
-    for(const d of rows){const r=await permanentlyDelete(env,p,d.id);if(r.ok){processed++;}else{failures.push(d.id);}}
-    return json({ok:failures.length===0,processed,failed:failures,has_more:rows.length===5});
+    if(data.confirm!=='DELETE_FOREVER')bad('需要确认永久清空回收站','CONFIRM_REQUIRED',409);
+    // Each request is deliberately bounded to protect the Worker subrequest
+    // budget. The client repeats until has_more=false, without deleting live
+    // documents or another user's items.
+    const documents=await dbAll(env.DB,`SELECT id FROM documents WHERE owner_id=?
+      AND lifecycle IN ('trashed','deletion_pending')
+      ORDER BY trashed_at ASC,id ASC LIMIT 5`,p.user_id);
+    const attachments=await dbAll(env.DB,`SELECT a.id,a.document_id FROM attachments a
+      JOIN documents d ON d.id=a.document_id
+      WHERE d.owner_id=? AND d.lifecycle='active'
+        AND a.state IN ('trashed','deletion_pending')
+      ORDER BY a.trashed_at ASC,a.id ASC LIMIT 5`,p.user_id);
+    let processed_documents=0,processed_attachments=0;
+    const failed=[];
+    for(const document of documents){
+      try{
+        const result=await permanentlyDelete(env,p,document.id);
+        if(result.ok)processed_documents++;
+        else failed.push({type:'document',id:document.id});
+      }catch{failed.push({type:'document',id:document.id});}
+    }
+    for(const attachment of attachments){
+      try{
+        const result=await attachmentDelete(env,p,attachment.document_id,attachment.id);
+        if(result.ok)processed_attachments++;
+        else failed.push({type:'attachment',id:attachment.id});
+      }catch{failed.push({type:'attachment',id:attachment.id});}
+    }
+    // The remaining count also handles a batch of exactly five; the UI never
+    // guesses that the bin is empty or hides an R2 clean-up failure.
+    const [remainingDocs,remainingAttachments]=await Promise.all([
+      dbFirst(env.DB,`SELECT COUNT(*) count FROM documents WHERE owner_id=?
+        AND lifecycle IN ('trashed','deletion_pending')`,p.user_id),
+      dbFirst(env.DB,`SELECT COUNT(*) count FROM attachments a
+        JOIN documents d ON d.id=a.document_id
+        WHERE d.owner_id=? AND d.lifecycle='active'
+          AND a.state IN ('trashed','deletion_pending')`,p.user_id)
+    ]);
+    const remaining=Number(remainingDocs?.count||0)+Number(remainingAttachments?.count||0);
+    return json({ok:failed.length===0,processed:processed_documents+processed_attachments,
+      processed_documents,processed_attachments,failed,remaining,has_more:remaining>0});
   }
   if(method==='POST'&&path==='/api/backups/plan')return planBackup(request,env,p);
   if(method==='GET'&&path==='/api/backups/export')return exportBackup(env,p,url);

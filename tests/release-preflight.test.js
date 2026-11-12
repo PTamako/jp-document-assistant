@@ -96,3 +96,14 @@ test('store-based prefill and transaction clock are surfaced in the document UI'
  assert.match(app,/candidateDraft\.payment_source=ledgerOptions\.value\.suggested\?\.payment_source/);
  assert.match(app,/\['card_spend','shopping'\]\.includes\(current\.category\)/);
 });
+
+test('recycle empty-all has a second confirmation, bounded server batches and no active-document deletion',()=>{
+ const ui=read('web/src/App.vue'),server=read('worker/index.js');
+ assert.match(ui,/<template v-else-if="sheet==='emptyRecycleConfirm'">/);
+ assert.match(ui,/确认全部清空/);
+ assert.match(ui,/recycleEmptyProgress/);
+ assert.match(ui,/await send\('\/api\/recycle\/empty'/);
+ assert.match(server,/if\(data\.confirm!=='DELETE_FOREVER'\)/);
+ assert.match(server,/d\.lifecycle='active'/);
+ assert.match(server,/processed_documents,processed_attachments,failed,remaining,has_more:remaining>0/);
+});
