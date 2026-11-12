@@ -74,7 +74,8 @@ test('OCR.space scanned PDF import preview is private, consent gated, page-only 
   return Response.json({OCRExitCode:1,IsErroredOnProcessing:false,
    ParsedResults:[{FileParseExitCode:1,ParsedText:'区役所のお知らせを確認してください。'}]});
  };
- const jpg=new Blob([new Uint8Array([255,216,45,45,45,45,255,217])],{type:'image/jpeg'});
+ const jpegBytes=new Uint8Array(150);jpegBytes[0]=255;jpegBytes[1]=216;jpegBytes[148]=255;jpegBytes[149]=217;
+ const jpg=new Blob([jpegBytes],{type:'image/jpeg'});
  const makeForm=(consented=true,file=jpg)=>{
   const f=new FormData();f.append('file',file,'page.jpg');
   if(consented){f.append('confirm_ocr_space','true');f.append('confirm_private_upload','true');}
