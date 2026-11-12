@@ -5,7 +5,6 @@ import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
 import { isIosStandalonePwa } from './google-auth-context.js';
 import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke,gmailPayloadToDocument} from './gmail-import.js';
-import {gmailAuthorizePersistent} from './gmail-persistent.js';
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
@@ -40,6 +39,9 @@ const drivePickerAvailable=!!drivePickerConfig();
 const iosStandalonePwa=isIosStandalonePwa();
 const mainSiteUrl=typeof window==='undefined'?'':window.location.origin+'/';
 const drivePickerReadyUi=ref(false),drivePickerLoadingUi=ref(false);
+const driveCloud=ref({enabled:false,connected:false,google_email:null});
+const driveItems=ref([]),driveNext=ref(''),driveQuery=ref(''),driveBusy=ref(false);
+const googlePending=ref({service:'',flow:''});
 const gmailAvailable=gmailConfigured(),gmailAuthorizedUi=ref(false),gmailIdentityReadyUi=ref(false),gmailIdentityLoadingUi=ref(false),gmailQuery=ref('newer_than:30d'),gmailItems=ref([]),gmailNext=ref(null),gmailBusy=ref(false);
 const gmailPersistent=ref({enabled:false,connected:false,google_email:null,client_id:''});
 let gmailGeneration=0;
@@ -218,45 +220,120 @@ function clearPrivateWorkspace(){
   if(backupInput.value)backupInput.value.value='';
   if(extraFileInput.value)extraFileInput.value.value='';
 }
-async function openGmailSheet(){
-  gmailBusy.value=false;gmailAuthorizedUi.value=gmailConnected();
-  gmailItems.value=[];gmailNext.value=null;sheet.value='gmail';
-  gmailIdentityReadyUi.value=gmailIdentityReady();
-  try{
-    const status=await api('/api/google/gmail/status');
-    if(sheet.value!=='gmail')return;
-    gmailPersistent.value=status;
-    gmailAuthorizedUi.value=(status.enabled&&status.connected)||gmailConnected();
-  }catch(e){if(sheet.value==='gmail')problem(e);}
-  if(sheet.value!=='gmail'||gmailAuthorizedUi.value||gmailIdentityReadyUi.value)return;
-  gmailIdentityLoadingUi.value=true;
-  try{
-    await preloadGmailIdentity();
-    gmailIdentityReadyUi.value=gmailIdentityReady();
-  }catch(e){if(sheet.value==='gmail')problem(e);}
-  finally{gmailIdentityLoadingUi.value=false;}
+async function googleStatus(service){
+  const params=new URLSearchParams({service});
+  if(googlePending.value.service===service&&googlePending.value.flow)
+    params.set('flow',googlePending.value.flow);
+  const state=await api('/api/google/oauth/status?'+params);
+  if(service==='gmail'){
+    gmailPersistent.value=state;
+    gmailAuthorizedUi.value=state.connected===true;
+  }else{
+    driveCloud.value=state;
+  }
+  if(googlePending.value.service===service&&
+     ['done','failed','expired'].includes(state.progress)){
+    if(state.progress==='done'&&state.connected)flash('Google '+(service==='gmail'?'Gmail':'Drive')+' 已连接');
+    else if(state.progress==='failed')problem(new Error('Google 授权未完成，请重新连接'));
+    googlePending.value={service:'',flow:''};
+  }
+  return state;
 }
-async function connectGmail(){
-  if(!gmailIdentityReadyUi.value)return problem(new Error('Google 登录组件尚未准备好，请等待加载完成'));
-  const epoch=accountEpoch.snapshot();
-  gmailBusy.value=true;
+async function refreshGoogleOnReturn(){
+  if(!user.value)return;
+  const service=googlePending.value.service|| (sheet.value==='gmail'?'gmail':sheet.value==='drive'?'drive':'');
+  if(!service)return;
+  try{await googleStatus(service);}catch(e){problem(e)}
+}
+function onGoogleVisibility(){
+  if(document.visibilityState==='visible')void refreshGoogleOnReturn();
+}
+async function startGoogleAuthorization(service){
+  if(!user.value)return problem(new Error('请先登录文书助手'));
+  if(service==='gmail')gmailBusy.value=true;
+  else driveBusy.value=true;
   try{
-    if(gmailPersistent.value.enabled){
-      const result=await gmailAuthorizePersistent({
-        clientId:gmailPersistent.value.client_id,
-        exchangeCode:code=>api('/api/google/gmail/connect',{method:'POST',body:{code}})
-      });
-      accountEpoch.assertCurrent(epoch);
-      gmailPersistent.value={...gmailPersistent.value,connected:true,needs_reauthorization:false,google_email:result.google_email};
-      gmailAuthorizedUi.value=true;
-      flash('Gmail 长期连接已建立。令牌由 Cloudflare 加密保管，过期时自动续期。');
-    }else{
-      await gmailAuthorize();
-      accountEpoch.assertCurrent(epoch);
-      gmailAuthorizedUi.value=gmailConnected();
-      flash('Gmail 临时连接成功。长期免重复授权尚需配置 Cloudflare Google OAuth。');
+    const result=await api('/api/google/oauth/start',{method:'POST',body:{service}});
+    if(!result?.authorization_url?.startsWith('https://accounts.google.com/'))
+      throw new Error('Google 授权地址无效');
+    googlePending.value={service,flow:result.flow};
+    // Navigate from the PWA into Google's first-party browser page, not an iframe.
+    // Safari may not automatically switch back to a home-screen PWA.
+    window.location.assign(result.authorization_url);
+  }catch(e){problem(e);}
+  finally{gmailBusy.value=false;driveBusy.value=false;}
+}
+async function openGmailSheet(){
+  gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;sheet.value='gmail';
+  try{await googleStatus('gmail');}catch(e){if(sheet.value==='gmail')problem(e)}
+}
+async function connectGmail(){await startGoogleAuthorization('gmail');}
+async function openDriveSheet(){
+  driveItems.value=[];driveNext.value='';driveBusy.value=false;sheet.value='drive';
+  try{
+    const status=await googleStatus('drive');
+    if(status.connected&&sheet.value==='drive')await loadDriveFiles(false);
+  }catch(e){if(sheet.value==='drive')problem(e)}
+}
+async function loadDriveFiles(append=false){
+  if(!driveCloud.value.connected)return;
+  driveBusy.value=true;
+  try{
+    const params=new URLSearchParams({q:driveQuery.value});
+    if(append&&driveNext.value)params.set('pageToken',driveNext.value);
+    const result=await api('/api/google/drive/files?'+params);
+    if(sheet.value!=='drive')return;
+    driveItems.value=append?[...driveItems.value,...result.items]:result.items;
+    driveNext.value=result.nextPageToken||'';
+  }catch(e){problem(e);}finally{driveBusy.value=false;}
+}
+async function chooseDriveFile(item){
+  if(!driveCloud.value.connected||!item?.id)return;
+  const epoch=accountEpoch.snapshot();driveBusy.value=true;busy.value=true;
+  try{
+    const response=await fetch('/api/google/drive/files/'+encodeURIComponent(item.id),
+      {method:'GET',credentials:'same-origin',cache:'no-store'});
+    if(!response.ok){
+      const failure=await response.json().catch(()=>({}));
+      throw new Error(failure.message||'Google 文件下载失败');
     }
-  }catch(e){problem(e);}finally{gmailBusy.value=false;}
+    const name=decodeURIComponent(response.headers.get('X-Document-Name')||encodeURIComponent(item.name||'文书'));
+    const mime=response.headers.get('Content-Type')||item.mimeType||'application/octet-stream';
+    const file=new File([await response.blob()],name,{type:mime});
+    accountEpoch.assertCurrent(epoch);
+    if(file.size>8*1024*1024)throw new Error('文件超过 8MB');
+    aiProvider.value='';geminiConsent.value=false;
+    if(/\.(?:eml|txt)$/i.test(file.name)){
+      const parsed=await readLocalText(file);
+      accountEpoch.assertCurrent(epoch);
+      textDraft.title=parsed.title;textDraft.text=parsed.text;
+      textDraft.source_type='google_drive';textDraft.retention='summary';
+      localImportNote.value='已提取文字，请核对后保存';
+      inputMode.value='text';
+    }else{
+      fileDraft.value=file;fileSource.value='google_drive';inputMode.value='file';
+      fileText.value='';fileWarning.value='';ocrProgress.value='';
+      importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;
+      fileRetention.value=/\.pdf$/i.test(file.name)||/^image\//.test(file.type)?'original':'summary';
+      await parseSelectedFileWithOcr(file,epoch);
+    }
+    sheet.value='import';
+  }catch(e){problem(e);}finally{driveBusy.value=false;busy.value=false}
+}
+async function disconnectGoogle(service){
+  if(service==='gmail')gmailBusy.value=true;else driveBusy.value=true;
+  try{
+    await api('/api/google/oauth/disconnect',{method:'POST',body:{service}});
+    if(service==='gmail'){
+      gmailForget();gmailItems.value=[];gmailAuthorizedUi.value=false;
+      gmailPersistent.value={enabled:true,connected:false,google_email:null};
+    }else{
+      driveCloud.value={enabled:true,connected:false,google_email:null};
+      driveItems.value=[];driveNext.value='';
+    }
+    flash('已断开 '+(service==='gmail'?'Gmail':'Google Drive'));
+  }catch(e){problem(e);}
+  finally{gmailBusy.value=false;driveBusy.value=false;}
 }
 async function loadGmailMessages(append=false){
   if(!gmailPersistent.value.connected&&!gmailConnected()){
@@ -292,24 +369,12 @@ async function selectGmailMessage(id){
     flash('已读取选中邮件正文；请核对后决定是否保存');
   }catch(e){problem(e);}finally{gmailBusy.value=false;}
 }
-async function disconnectGmail(){
-  gmailGeneration++;gmailItems.value=[];gmailNext.value=null;
-  gmailBusy.value=true;
-  try{
-    if(gmailPersistent.value.enabled&&(gmailPersistent.value.connected||gmailPersistent.value.needs_reauthorization)){
-      const result=await api('/api/google/gmail/disconnect',{method:'POST',body:{}});
-      gmailPersistent.value={...gmailPersistent.value,connected:false,needs_reauthorization:false,google_email:null};
-      gmailForget();
-      flash(result.remotely_revoked?'Gmail 已断开并撤销 Google 权限':'Gmail 本应用连接已删除；Google 远端撤销尚未确认');
-    }else{
-      await gmailRevoke();flash('已清除 Gmail Token 并请求 Google 撤销授权');
-    }
-  }
-  catch(e){problem(e);}finally{gmailAuthorizedUi.value=false;gmailBusy.value=false;}
-}
+async function disconnectGmail(){await disconnectGoogle('gmail');}
 function clearGmailSession(){
   gmailGeneration++;gmailBusy.value=false;gmailForget();forgetDriveAuthorization();gmailAuthorizedUi.value=false;
   gmailPersistent.value={enabled:false,connected:false,google_email:null,client_id:''};
+  driveCloud.value={enabled:false,connected:false,google_email:null};
+  driveItems.value=[];driveNext.value='';googlePending.value={service:'',flow:''};
   gmailItems.value=[];gmailNext.value=null;
 }
 async function boot(){
@@ -474,30 +539,9 @@ async function saveDocAiProvider(){
  closeSheet();await openDoc(id);flash('已保存这份文书的 AI 选择，尚未调用 AI');}catch(e){problem(e);}finally{busy.value=false;}
 }
 function closeSheet(){importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
-function primeGooglePicker(){
-  if(!drivePickerAvailable||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
-  drivePickerLoadingUi.value=true;
-  void prepareGoogleDrivePicker().then(()=>{
-    drivePickerReadyUi.value=googlePickerReady();
-  }).catch(e=>{if(sheet.value==='import')problem(e);}).finally(()=>{drivePickerLoadingUi.value=false;});
-}
 function openImport(mode='text'){
   inputMode.value=mode;sheet.value='import';
-  // User explicitly opened the import panel. Prepare external scripts now so
-  // clicking the Google button does not await before the OAuth popup.
-  primeGooglePicker();
 }
-async function refreshDocumentsAfterSafari(){
-  closeSheet();
-  activeTab.value='docs';
-  pages.docs.loaded=false;
-  await loadTab('docs');
-}
-async function copySafariSite(){
-  try{await navigator.clipboard.writeText(mainSiteUrl);flash('网址已复制，请打开 Safari 地址栏粘贴访问');}
-  catch{problem(new Error('无法自动复制，请长按页面显示的网址，在 Safari 地址栏打开'));}
-}
-
 async function parseSelectedFileWithOcr(file,epoch){
   const unchanged=()=>accountEpoch.isCurrent(epoch)&&fileDraft.value===file;
   const isPdf=/\.pdf$/i.test(file.name)||file.type==='application/pdf';
@@ -545,37 +589,6 @@ async function selectFile(event){
   const epoch=accountEpoch.snapshot();busy.value=true;
   try{await parseSelectedFileWithOcr(file,epoch);}
   finally{busy.value=false;if(fileInput.value)fileInput.value.value='';}
-}
-
-async function importFromGoogleDrive(){
-  if(!drivePickerReadyUi.value){
-    primeGooglePicker();
-    return problem(new Error('Google Drive 授权组件正在加载，请稍后再次点击'));
-  }
-  const epoch=accountEpoch.snapshot();busy.value=true;error.value='';
-  try{
-    const file=await pickGoogleDriveFile();
-    accountEpoch.assertCurrent(epoch);
-    if(!file)return; // Canceling Google Picker does not request an R2 upload or import.
-    aiProvider.value='';geminiConsent.value=false;
-    if(/\.(?:eml|txt)$/i.test(file.name)){
-      const parsed=await readLocalText(file);
-      accountEpoch.assertCurrent(epoch);
-      textDraft.title=parsed.title;textDraft.text=parsed.text;
-      textDraft.source_type='google_drive';textDraft.retention='summary';
-      localImportNote.value='已从所选 Google 文件提取文字；请核对后决定是否保存。';
-      inputMode.value='text';
-    }else{
-      fileDraft.value=file;fileSource.value='google_drive';inputMode.value='file';
-      fileText.value='';fileWarning.value='';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;
-      const isTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
-      fileRetention.value=/\.pdf$/i.test(file.name)||/^image\//.test(file.type)?'original':isTextLayer?'summary':'original';
-      if(isTextLayer||/^image\/(?:jpeg|png|webp)$/.test(file.type))
-        await parseSelectedFileWithOcr(file,epoch);
-    }
-    sheet.value='import';
-  }catch(e){problem(e)}
-  finally{busy.value=false}
 }
 
 async function importLocalText(event){
@@ -890,8 +903,12 @@ function todayReviewBadge(d){
 }
 const labelFor=(key)=>key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
-onMounted(async()=>{await boot();if(!user.value)await refreshInitStatus();});
-onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
+onMounted(async()=>{
+  document.addEventListener('visibilitychange',onGoogleVisibility);
+  window.addEventListener('pageshow',refreshGoogleOnReturn);
+  await boot();if(!user.value)await refreshInitStatus();
+});
+onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',refreshGoogleOnReturn);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
 
 <template>
@@ -1019,61 +1036,57 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeou
       <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">只影响当前文书。保存后可点「AI 智能解读」，同版本命中缓存时不会再次调用。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>我确认这份文书不含个人或机密资料，同意未来启用时发送给 Gemini 免费 API。只有启用并执行所选 Gemini 分析时才发送。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
-  <p class="fine-print">只读取你主动选择的文件或邮件。iPhone PWA 可直接从「文件」App 的 Google Drive 位置选择 PDF、Office 或图片，无需跳转浏览器；Google Docs 等原生格式可先在 Google Drive App 中导出 PDF 或 Office 格式。</p>
-  <label class="choice-picker-file">
-    <UiIcon name="file" :size="20"/><span>iPhone「文件」（含已启用的 Google Drive）／本地 PDF、Office、图片</span><UiIcon name="chevron-right" :size="18"/>
-    <input type="file" class="visually-hidden" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="selectFile" />
+  <label class="choice-picker-file"><UiIcon name="file" :size="20"/><span>上传 PDF / 图片 / Office</span><UiIcon name="chevron-right" :size="18"/>
+    <input type="file" class="visually-hidden" accept="image/*,.pdf,.docx,.xlsx,.pptx,application/pdf" @change="selectFile"/>
   </label>
-  <label class="choice-picker-file">
-    <UiIcon name="file-text" :size="20"/><span>本地 .eml 邮件 / .txt 文本</span><UiIcon name="chevron-right" :size="18"/>
-    <input type="file" class="visually-hidden" accept=".eml,.txt,message/rfc822,text/plain" @change="importLocalText" />
+  <label class="choice-picker-file"><UiIcon name="file-text" :size="20"/><span>上传邮件 / 文本文件</span><UiIcon name="chevron-right" :size="18"/>
+    <input type="file" class="visually-hidden" accept=".eml,.txt,message/rfc822,text/plain" @change="importLocalText"/>
   </label>
-  <button v-if="gmailAvailable" class="choice-picker-file" type="button" @click="openGmailSheet"><UiIcon name="mail" :size="20"/><span>{{iosStandalonePwa?'从 Gmail 选择邮件（PWA 尝试授权）':'从 Gmail 选择邮件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
-  <label v-if="iosStandalonePwa" class="choice-picker-file">
-    <UiIcon name="file" :size="20"/><span>从 Google Drive 选文件（使用 iPhone「文件」）</span><UiIcon name="chevron-right" :size="18"/>
-    <input type="file" class="visually-hidden" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="selectFile" />
-  </label>
-  <button v-if="drivePickerAvailable&&!iosStandalonePwa" class="choice-picker-file" type="button" :disabled="!drivePickerReadyUi" @click="importFromGoogleDrive"><UiIcon name="file" :size="20"/><span>{{drivePickerLoadingUi?'Google Drive 准备中…':driveAuthorizationReady()?'从 Google Drive 选文件（已授权）':'从 Google Drive 在线选择文件'}}</span><UiIcon name="chevron-right" :size="18"/></button>
-  <button v-if="drivePickerAvailable&&iosStandalonePwa" class="text-button full" type="button" @click="sheet='safariGoogleGuide'">Google 原生格式或在线选择遇到问题？</button>
-  <div class="sheet-actions"><button class="secondary full" type="button" @click="sheet='import'">返回导入表单</button></div>
+  <button class="choice-picker-file" type="button" @click="openGmailSheet"><UiIcon name="mail" :size="20"/><span>Gmail</span><UiIcon name="chevron-right" :size="18"/></button>
+  <button class="choice-picker-file" type="button" @click="openDriveSheet"><UiIcon name="file" :size="20"/><span>Google Drive</span><UiIcon name="chevron-right" :size="18"/></button>
+  <div class="sheet-actions"><button class="secondary full" @click="sheet='import'">返回</button></div>
 </template>
-<template v-else-if="sheet==='safariGoogleGuide'">
-        <h2>iPhone 上使用 Google Drive</h2>
-        <p class="info-note">Google Picker 会在嵌入式窗口访问 Google 账号。iPhone 主屏幕 PWA 可能阻止跨网站 Cookie，即使 Google 已授权，也会显示「Can't access your Google Account」。这不代表文书助手登录失效。</p>
-        <p>推荐直接从 iPhone「文件」→「浏览」→「位置」→「Google Drive」选择 PDF、图片或 Office 文书。若没有 Google Drive 位置，请先安装并登录 Google Drive App，再在「文件」里开启该位置。</p>
-        <label class="choice-picker-file">
-          <UiIcon name="file" :size="20"/><span>从 iPhone「文件」选择文书</span><UiIcon name="chevron-right" :size="18"/>
-          <input type="file" class="visually-hidden" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="selectFile" />
-        </label>
-        <p>Google Docs／表格／幻灯片等原生格式可先在 Google Drive App 里导出为 PDF 或 Office 文件，再通过上方「iPhone 文件」直接导入。如果仍希望使用 Google 在线选择器，Safari 网页版是备用方式，同一文书助手账号的数据会同步到 PWA。</p>
-        <button class="primary full" type="button" @click="copySafariSite">复制文书助手网址</button>
-        <a class="secondary full safari-link" :href="mainSiteUrl" target="_blank" rel="noopener noreferrer">尝试在浏览器中打开</a>
-        <p class="fine-print safari-url">{{mainSiteUrl}}</p>
-        <p class="fine-print">Safari 保存后，回到这里刷新文书库即可；不必关闭系统的跨网站追踪保护。</p>
-        <button v-if="drivePickerAvailable" class="secondary full" type="button" :disabled="!drivePickerReadyUi||busy" @click="importFromGoogleDrive">{{drivePickerReadyUi?'仍尝试在 PWA 在线选择（可能失败）':'正在准备 Google 组件…'}}</button>
-        <button class="secondary full" type="button" :disabled="loadingPage" @click="refreshDocumentsAfterSafari">{{loadingPage?'正在刷新文书库…':'刷新文书库'}}</button>
-        <div class="sheet-actions"><button class="secondary full" @click="closeSheet">返回</button></div>
-      </template>
-      <template v-else-if="sheet==='gmail'"><h2>Gmail · 只读选取</h2>
-        <p class="fine-print">每次最多浏览五封，只读取你主动选择的邮件正文。{{gmailPersistent.enabled?'Cloudflare 将加密保存 Gmail 长期授权并自动续期；手机不保存 Google 令牌。':'当前为临时授权，关闭 PWA 后可能需要重新连接；长期授权需要后台完成安全配置。'}} 保存前需确认内容。</p>
-        <button v-if="gmailPersistent.enabled&&gmailPersistent.needs_reauthorization" class="secondary full" :disabled="gmailBusy" @click="disconnectGmail">清除过期的 Gmail 长期授权</button>
-        <button v-if="!gmailAuthorizedUi" class="primary full" :disabled="gmailBusy||gmailIdentityLoadingUi||!gmailIdentityReadyUi" @click="connectGmail">{{gmailIdentityLoadingUi?'正在准备 Google 登录…':gmailPersistent.enabled?'连接 Gmail（长期授权）':'授权 Gmail 只读访问（临时）'}}</button><button v-if="!gmailAuthorizedUi&&!gmailIdentityLoadingUi&&!gmailIdentityReadyUi" class="text-button full" type="button" @click="openGmailSheet">重试加载 Google 登录组件</button>
-        <template v-else>
-          <p v-if="gmailPersistent.connected&&gmailPersistent.google_email" class="fine-print">已长期连接：{{gmailPersistent.google_email}}</p>
-          <label class="form-label">Gmail 搜索条件<input v-model.trim="gmailQuery" maxlength="180" placeholder="newer_than:30d" /></label>
-          <button class="secondary full" :disabled="gmailBusy" @click="loadGmailMessages(false)">搜索邮件（每页五封）</button>
-          <div v-if="!gmailItems.length" class="empty">尚未查询，或没有符合条件的邮件。</div>
-          <div class="recycle-row" v-for="m in gmailItems" :key="m.id">
-            <div class="item-info"><strong>{{m.subject}}</strong><small>{{m.from}}</small><small>{{m.date}}</small></div>
-            <button class="secondary small" :disabled="gmailBusy" @click="selectGmailMessage(m.id)">选取正文</button>
-          </div>
-          <button v-if="gmailNext" class="text-button full" :disabled="gmailBusy" @click="loadGmailMessages(true)">继续查看五封</button>
-          <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">{{gmailPersistent.connected?'断开 Gmail 长期连接':'撤销 Gmail 临时授权'}}</button>
-        </template>
-        <p class="fine-print">Gmail 只读授权受 Google 限制。如果主屏幕 PWA 的 Google 弹窗失败，可直接从苹果邮件复制正文，或使用「文件」导入；Apple Mail 聚合邮箱无法通过 Gmail API 直接读取。</p><button v-if="iosStandalonePwa" class="text-button full" type="button" @click="sheet='safariGoogleGuide'">Google 弹窗无法使用？查看替代导入方式</button>
-        <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
-      </template>
-      <template v-else-if="sheet==='filter'">
+<template v-else-if="sheet==='drive'">
+  <h2>Google Drive</h2>
+  <p v-if="driveCloud.connected" class="fine-print">已连接 {{driveCloud.google_email}}</p>
+  <template v-if="!driveCloud.connected">
+    <button class="primary full" :disabled="driveBusy||!driveCloud.enabled" @click="startGoogleAuthorization('drive')">连接 Google Drive</button>
+    <p v-if="!driveCloud.enabled" class="fine-print">Google 授权配置尚未完成</p>
+  </template>
+  <template v-else>
+    <label class="form-label">搜索文件<input v-model.trim="driveQuery" maxlength="120" placeholder="文件名"/></label>
+    <button class="secondary full" :disabled="driveBusy" @click="loadDriveFiles(false)">搜索</button>
+    <div v-for="f in driveItems" :key="f.id" class="recycle-row">
+      <div class="item-info"><strong>{{f.name}}</strong></div>
+      <button class="secondary small" :disabled="driveBusy" @click="chooseDriveFile(f)">导入</button>
+    </div>
+    <div v-if="!driveItems.length" class="empty">暂无文件</div>
+    <button v-if="driveNext" class="secondary full" :disabled="driveBusy" @click="loadDriveFiles(true)">加载更多</button>
+    <button class="destructive full" :disabled="driveBusy" @click="disconnectGoogle('drive')">断开连接</button>
+  </template>
+  <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
+</template>
+<template v-else-if="sheet==='gmail'">
+  <h2>Gmail</h2>
+  <p v-if="gmailPersistent.connected" class="fine-print">已连接 {{gmailPersistent.google_email}}</p>
+  <template v-if="!gmailAuthorizedUi">
+    <button class="primary full" :disabled="gmailBusy||!gmailPersistent.enabled" @click="connectGmail">连接 Gmail</button>
+    <p v-if="!gmailPersistent.enabled" class="fine-print">Google 授权配置尚未完成</p>
+  </template>
+  <template v-else>
+    <label class="form-label">搜索邮件<input v-model.trim="gmailQuery" maxlength="180" placeholder="newer_than:30d"/></label>
+    <button class="secondary full" :disabled="gmailBusy" @click="loadGmailMessages(false)">搜索</button>
+    <div v-for="m in gmailItems" :key="m.id" class="recycle-row">
+      <div class="item-info"><strong>{{m.subject}}</strong><small>{{m.from}}</small><small>{{m.date}}</small></div>
+      <button class="secondary small" :disabled="gmailBusy" @click="selectGmailMessage(m.id)">导入</button>
+    </div>
+    <div v-if="!gmailItems.length" class="empty">暂无邮件</div>
+    <button v-if="gmailNext" class="secondary full" :disabled="gmailBusy" @click="loadGmailMessages(true)">加载更多</button>
+    <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">断开连接</button>
+  </template>
+  <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
+</template>
+<template v-else-if="sheet==='filter'">
   <h2>筛选文书</h2>
   <p class="fine-print picker-helper">点击字段选择，返回后统一应用筛选。</p>
   <div class="choice-form-field"><span class="choice-field-label">文书类型</span><button type="button" class="choice-field-control" @click="openChoice('category')"><span>{{choiceLabel('category')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
