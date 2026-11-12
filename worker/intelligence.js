@@ -87,9 +87,11 @@ function prompt(source){
  ].join('\n');
 }
 function config(env,provider){
+ // Gemini is user-selected and uses the user's API key; only Google determines
+ // its actual account quota/availability.
+ if(provider==='gemini')return env.GEMINI_API_KEY?'ready':'not_configured';
  if(env.ENABLE_DOCUMENT_AI!=='true')return 'disabled';
  if(provider==='cloudflare')return env.AI?.run?'ready':'not_configured';
- if(provider==='gemini')return env.GEMINI_API_KEY?'ready':'not_configured';
  return 'rules_only';
 }
 async function generate(env,provider,source){
