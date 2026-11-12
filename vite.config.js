@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { readdirSync, statSync, unlinkSync } from 'node:fs';
+import { readdirSync, statSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 // Cloudflare Workers Static Assets reject files >25 MiB. ORT's WASM
@@ -11,6 +11,12 @@ function externalizeOversizedOrtWasm() {
     name:'externalize-oversized-ort-wasm',
     closeBundle(){
       const dir=resolve(process.cwd(),'dist/assets');
+      // Keep version-matched ONNX .mjs module glue same-origin; Safari PWA
+      // cannot dynamically import CDN module scripts under its script CSP.
+      const moduleDir=resolve(process.cwd(),'dist/ocr');
+      mkdirSync(moduleDir,{recursive:true});
+      copyFileSync(resolve(process.cwd(),'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs'),
+        resolve(moduleDir,'ort-wasm-simd-threaded.jsep.mjs'));
       const names=readdirSync(dir);
       for(const name of names){
         const path=resolve(dir,name);
