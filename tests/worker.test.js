@@ -13,7 +13,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_google_oauth_callback_error.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -106,6 +106,81 @@ test('Workers AI file/photo import preview needs consent and uses shared five-ca
  assert.equal(usage.data.app_utc_day.reserved,0);
  assert.equal(usage.data.app_utc_day.limit,5);
  assert.equal(usage.data.ocr_space_utc_day.calls,0);
+});
+
+test('browser OAuth completes Gmail and Drive, even when Google omits optional token scope',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GOOGLE_OAUTH_CLIENT_ID='12345-test.apps.googleusercontent.com';
+ env.GOOGLE_OAUTH_CLIENT_SECRET='test-only-client-secret';
+ env.GOOGLE_TOKEN_ENCRYPTION_KEY='a'.repeat(64);
+ let calls=0;
+ env.GOOGLE_OAUTH_FETCH=async(url,options)=>{
+   calls++;
+   if(String(url)==='https://oauth2.googleapis.com/token'){
+     const payload=new URLSearchParams(options.body);
+     assert.equal(payload.get('client_id'),env.GOOGLE_OAUTH_CLIENT_ID);
+     assert.equal(payload.get('client_secret'),env.GOOGLE_OAUTH_CLIENT_SECRET);
+     assert.match(payload.get('code_verifier')||'',/^[a-f0-9]{128}$/);
+     assert.equal(payload.get('grant_type'),'authorization_code');
+     assert.equal(payload.get('redirect_uri'),'https://app.example.test/api/google/oauth/callback');
+     return Response.json({access_token:'example-access-secret',refresh_token:'private-refresh-1234567',expires_in:3600,token_type:'Bearer'});
+   }
+   if(String(url).includes('/gmail/v1/users/me/profile'))
+     return Response.json({emailAddress:'user@example.test'});
+   if(String(url).includes('/drive/v3/about'))
+     return Response.json({user:{emailAddress:'user@example.test'}});
+   throw Error('unexpected fetch '+url);
+ };
+ for(const service of ['gmail','drive']){
+   const started=await req(env,'/api/google/oauth/start',{method:'POST',...auth(owner),data:{service}});
+   assert.equal(started.response.status,200,JSON.stringify(started.data));
+   const authUrl=new URL(started.data.authorization_url);
+   assert.equal(authUrl.origin,'https://accounts.google.com');
+   assert.equal(authUrl.searchParams.get('scope'),service==='gmail'?'https://www.googleapis.com/auth/gmail.readonly':'https://www.googleapis.com/auth/drive.readonly');
+   const state=authUrl.searchParams.get('state');
+   assert.equal(authUrl.searchParams.get('code_challenge_method'),'S256');
+   const callback=await req(env,'/api/google/oauth/callback?state='+encodeURIComponent(state)+'&code=valid-google-code-1234');
+   assert.equal(callback.response.status,200);
+   const html=await callback.response.text();
+   assert.match(html,/Google 授权成功/);
+   assert.doesNotMatch(html,/private-refresh-1234567|valid-google-code-1234/);
+   const grant=env.DB.sql.prepare('SELECT service,status,refresh_cipher,refresh_iv FROM google_oauth_grants WHERE user_id=? AND service=?').get(owner.user.id,service);
+   assert.equal(grant?.status,'connected');
+   assert.notEqual(grant.refresh_cipher,'private-refresh-1234567');
+   const status=await req(env,'/api/google/oauth/status?service='+service,auth(owner));
+   assert.equal(status.data.connected,true);
+   assert.equal(status.data.google_email,'user@example.test');
+   assert.equal(status.data.progress,null);
+ }
+ assert.equal(calls,4);
+});
+
+test('browser OAuth shows safe reason for invalid_client without leaking Google response',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GOOGLE_OAUTH_CLIENT_ID='12345-test.apps.googleusercontent.com';
+ env.GOOGLE_OAUTH_CLIENT_SECRET='test-only-client-secret';
+ env.GOOGLE_TOKEN_ENCRYPTION_KEY='a'.repeat(64);
+ env.GOOGLE_OAUTH_FETCH=async()=>Response.json({
+   error:'invalid_client',error_description:'SENSITIVE_PROVIDER_DETAILS_SHOULD_NEVER_SHOW'
+ },{status:401});
+ const started=await req(env,'/api/google/oauth/start',{method:'POST',...auth(owner),data:{service:'drive'}});
+ assert.equal(started.response.status,200);
+ const state=new URL(started.data.authorization_url).searchParams.get('state');
+ const callback=await req(env,'/api/google/oauth/callback?state='+state+'&code=valid-test-code');
+ assert.equal(callback.response.status,200);
+ const html=await callback.response.text();
+ assert.match(html,/Google 客户端密钥无效/);
+ assert.doesNotMatch(html,/SENSITIVE_PROVIDER_DETAILS|valid-test-code/);
+ const row=env.DB.sql.prepare('SELECT status,error_code FROM google_oauth_pending').get();
+ assert.equal(row.status,'failed');
+ assert.equal(row.error_code,'GOOGLE_CLIENT_INVALID');
+ const status=await req(env,'/api/google/oauth/status?service=drive&flow='+state,auth(owner));
+ assert.equal(status.data.progress,'failed');
+ assert.match(status.data.progress_error,/Google 客户端密钥无效/);
+ const returned=await req(env,'/api/google/oauth/status?service=drive',auth(owner));
+ assert.equal(returned.data.progress,'failed');
+ assert.equal(returned.data.progress_error,status.data.progress_error);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM google_oauth_grants').get().n,0);
 });
 
 test('OCR.space scanned PDF import preview is private, consent gated, page-only and quota limited',async()=>{
