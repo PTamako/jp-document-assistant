@@ -21,9 +21,9 @@ const calendarLink=ref(''),calendarStatusInfo=ref(null),calendarShowTitle=ref(fa
 const tabs=[{id:'today',name:'今日'},{id:'docs',name:'文书'},{id:'links',name:'联动'},{id:'mine',name:'我的'}];
 const pages=reactive({today:{items:[],next:0,loaded:false},docs:{items:[],next:0,loaded:false},links:{items:[],next:0,loaded:false}});
 const loadingPage=ref(false),search=ref(''),category=ref('');
-const cats={salary:'工资／奖金',bank:'银行／信用卡',tax:'税务／缴纳',utility:'水电燃气',housing:'房屋租赁',campaign:'活动／优惠',policy:'法规／政策',manual:'使用说明',travel:'旅行交通',delivery:'配送订单',other:'其他'};
+const cats={salary:'工资／奖金',bank:'银行／信用卡',topup:'电子钱包／充值',tax:'税务／缴纳',utility:'水电燃气',housing:'房屋租赁',campaign:'活动／优惠',policy:'法规／政策',manual:'使用说明',travel:'旅行交通',delivery:'配送订单',other:'其他'};
 const categoryOptions=Object.entries(cats);
-const categoryIcon=kind=>({salary:'wallet',bank:'wallet',tax:'file-text',utility:'file-text',housing:'file-text',campaign:'tag',policy:'shield',manual:'book',travel:'calendar',delivery:'archive'}[kind]||'file');
+const categoryIcon=kind=>({salary:'wallet',bank:'wallet',topup:'wallet',tax:'file-text',utility:'file-text',housing:'file-text',campaign:'tag',policy:'shield',manual:'book',travel:'calendar',delivery:'archive'}[kind]||'file');
 const candidateIcon=kind=>({finance:'wallet',homeflow_task:'today',vocabulary:'book',sentence:'book'}[kind]||'links');
 const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',failed:'同步失败',pending:'待确认'}[state]||'待确认');
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
@@ -47,7 +47,7 @@ const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=r
 const integrationConfigured=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
 
-const fieldLabel={due_date:'办理／缴费期限',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）'};
+const fieldLabel={due_date:'办理／缴费期限',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称'};
 const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
 function documentReviewLabel(d){
  const state=d?.review_status || (
