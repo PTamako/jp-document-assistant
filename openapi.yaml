@@ -441,6 +441,37 @@ paths:
               - text
               - source_type
               - retention
+
+  /api/ocr-space/preview:
+    post:
+      tags: [Documents]
+      operationId: runConsentedOcrSpaceImportPreview
+      summary: 导入前经用户确认对扫描 PDF 的单张已本机渲染 JPEG 进行 OCR.space 备用识别
+      description: 只接收 900KB 以内 JPEG，不存入 R2 或文书数据库；与文书附件云端 OCR 共用应用每日限额
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: {type: string, format: binary, description: 所选扫描页的 JPEG 预览图}
+                confirm_ocr_space: {type: string, const: 'true'}
+                confirm_private_upload: {type: string, const: 'true'}
+              required: [file, confirm_ocr_space, confirm_private_upload]
+      responses:
+        '200': {description: 返回待用户核验的 OCR 文字，服务器不持久化}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '413': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /api/documents/import/file:
     post:
       tags:
