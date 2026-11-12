@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeOcrItems,recognizeJapaneseImage,PADDLE_SDK_URL} from '../web/src/local-ocr.js';
+import {normalizeOcrItems,recognizeJapaneseImage,PADDLE_SDK_VERSION} from '../web/src/local-ocr.js';
 test('Paddle model version is pinned and Japanese text stays unverified',async()=>{
- assert.match(PADDLE_SDK_URL,/@0\.4\.2/);
+ assert.equal(PADDLE_SDK_VERSION,'0.4.2');
  const normalized=normalizeOcrItems([{items:[
   {text:'納付期限',score:0.93},{text:'11月30日',score:0.54},{text:'  ',score:0.98}
  ]}]);
