@@ -268,3 +268,242 @@
 .study-sync-tag{display:inline-flex;align-items:center;flex:none;border-radius:999px;padding:4px 9px;border:1px solid color-mix(in srgb,var(--blue) 24%,var(--line));background:color-mix(in srgb,var(--blue) 10%,var(--panel));color:var(--blue);font-size:12px;font-weight:650;white-space:nowrap}
 .study-sync-tag.error{border-color:color-mix(in srgb,var(--danger) 24%,var(--line));background:color-mix(in srgb,var(--danger) 10%,var(--panel));color:var(--danger)}
 .study-sync-tag.neutral{border-color:var(--line);background:var(--soft);color:var(--secondary)}
+
+
+/* iPhone-style translucent surfaces: shared tokens across every tab, sheet and
+   picker. Keep the frosted layers still for Safari performance and readable in
+   light/dark and reduced-transparency modes. */
+:root{
+  --glass-card:rgba(255,255,255,.76);
+  --glass-header:rgba(248,251,255,.82);
+  --glass-sheet:rgba(250,252,255,.90);
+  --glass-input:rgba(255,255,255,.74);
+  --glass-outline:rgba(105,133,168,.24);
+  --glass-rim:rgba(255,255,255,.81);
+  --glass-shadow:0 7px 25px rgba(24,58,101,.075),inset 0 1px 0 rgba(255,255,255,.72);
+  --glass-blur:blur(18px) saturate(155%);
+  --glass-blue:rgba(38,102,185,.10);
+  --glass-red:rgba(185,60,83,.09);
+}
+body{
+  background:radial-gradient(ellipse 72% 28% at 2% -6%,rgba(169,207,248,.27),transparent 100%),
+    radial-gradient(ellipse 70% 30% at 105% 20%,rgba(187,206,241,.17),transparent 100%),var(--bg);
+}
+.topbar,.top-bar,.detail-top{
+  background:var(--glass-header);
+  border-bottom:1px solid var(--glass-outline);
+  -webkit-backdrop-filter:var(--glass-blur);
+  backdrop-filter:var(--glass-blur);
+}
+.bottom-nav{
+  background:var(--glass-header);
+  border:1px solid var(--glass-rim);
+  box-shadow:0 11px 35px rgba(23,53,91,.16),inset 0 1px 0 rgba(255,255,255,.72);
+  -webkit-backdrop-filter:blur(26px) saturate(170%);
+  backdrop-filter:blur(26px) saturate(170%);
+}
+.bottom-nav button.active{
+  background:var(--glass-blue);
+  box-shadow:inset 0 1px 0 var(--glass-rim);
+}
+:is(.welcome,.profile-card,.auth-panel,.auth-card,.card,.content-card,.document-card,
+    .item-card,.field-card,.summary-card,.account-panel,.empty){
+  background:var(--glass-card);
+  border-color:var(--glass-outline);
+  box-shadow:var(--glass-shadow);
+  -webkit-backdrop-filter:blur(12px) saturate(150%);
+  backdrop-filter:blur(12px) saturate(150%);
+}
+:is(.welcome,.profile-card,.auth-panel,.item-card,.document-card,.content-card){
+  border-radius:18px;
+}
+.welcome{
+  background:linear-gradient(126deg,var(--glass-card) 8%,var(--glass-header));
+}
+:is(.search-row input,.form-label input,.form-label textarea,.form-label select,
+    .bottom-sheet input,.bottom-sheet textarea,.bottom-sheet select,.choice-field-control){
+  background:var(--glass-input);
+  border-color:var(--glass-outline);
+}
+:is(.choice-picker-list,.option-list,.upload-box,.attachment-file-open,.attachment-file-more){
+  background:var(--glass-card);
+  border-color:var(--glass-outline);
+}
+:is(.secondary,.filter-button,.load-more,.text-button){
+  border-radius:12px;
+}
+:is(.secondary,.filter-button,.load-more){
+  background:var(--glass-card);
+  border:1px solid var(--glass-outline);
+  box-shadow:inset 0 1px 0 var(--glass-rim);
+  -webkit-backdrop-filter:blur(12px) saturate(140%);
+  backdrop-filter:blur(12px) saturate(140%);
+}
+.primary,.top-add{
+  background:linear-gradient(160deg,#337ed1,#205eaa);
+  color:#fff;
+  box-shadow:0 4px 12px rgba(38,102,185,.17),inset 0 1px 0 rgba(255,255,255,.25);
+}
+:is(.primary,.secondary,.filter-button,.load-more,.destructive,.choice-field-control){
+  transition:background .15s ease,box-shadow .15s ease,transform .15s ease;
+}
+:is(.primary,.secondary,.filter-button,.load-more,.destructive):active:not(:disabled){
+  transform:scale(.985);
+}
+:is(.status-toast,.info-note){overflow-wrap:anywhere}
+.status-toast{
+  background:rgba(24,52,82,.92);
+  -webkit-backdrop-filter:blur(18px) saturate(155%);
+  backdrop-filter:blur(18px) saturate(155%);
+  box-shadow:0 12px 32px rgba(15,36,65,.24);
+}
+.sheet-overlay{
+  background:rgba(13,29,48,.35);
+  -webkit-backdrop-filter:blur(4px);
+  backdrop-filter:blur(4px);
+}
+.bottom-sheet{
+  height:auto;
+  min-height:0;
+  max-height:min(88dvh,860px);
+  overflow-y:auto;
+  padding:10px 16px calc(12px + env(safe-area-inset-bottom));
+  border:1px solid var(--glass-rim);
+  border-bottom:0;
+  border-radius:27px 27px 0 0;
+  background:var(--glass-sheet);
+  box-shadow:0 -16px 54px rgba(19,42,73,.22),inset 0 1px 0 rgba(255,255,255,.85);
+  -webkit-backdrop-filter:blur(30px) saturate(170%);
+  backdrop-filter:blur(30px) saturate(170%);
+}
+.bottom-sheet h2{font-size:20px;line-height:1.3;margin:11px 0 13px}
+.bottom-sheet h3{font-size:16px;line-height:1.4}
+.grabber{width:38px;height:5px;margin:0 auto 7px;background:var(--glass-outline);border-radius:9px}
+.sheet-actions{
+  min-width:0;
+  gap:9px;
+  padding:12px 0 4px;
+  background:linear-gradient(180deg,transparent,var(--glass-sheet) 18%);
+}
+.sheet-actions>button{min-height:46px}
+:is(.choice-picker-item,.choice-picker-file,.field-card,.settings-line) {
+  -webkit-tap-highlight-color:transparent;
+}
+.item-info,.profile-card>div,.field-card>div,.choice-picker-item>span{
+  min-width:0;
+}
+.profile-card p,.field-card small{overflow-wrap:anywhere}
+.item-card .item-title,.detail-body .document-detail-title{word-break:normal;overflow-wrap:anywhere}
+.detail-tabs-sticky{
+  background:var(--glass-header);
+  -webkit-backdrop-filter:blur(16px) saturate(150%);
+  backdrop-filter:blur(16px) saturate(150%);
+  border-radius:14px;
+}
+.segments{background:var(--glass-blue);border:1px solid var(--glass-outline)}
+.segments button.selected{background:var(--glass-card);box-shadow:var(--glass-shadow)}
+
+/* Recycle bin: reserve an entire line for the original Japanese title; actions
+   sit below on a compact row rather than squeezing the title into a sliver. */
+.recycle-sheet{max-height:min(82dvh,780px)}
+.recycle-header{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:12px;min-width:0;margin:2px 0 5px;
+}
+.recycle-header h2{margin:7px 0 3px;min-width:0}
+.recycle-clear-button{
+  display:inline-flex;align-items:center;justify-content:center;
+  gap:7px;flex:0 0 auto;min-height:42px;max-width:46%;
+  padding:9px 12px;border-radius:13px;
+  background:var(--glass-red);color:var(--danger);
+  border:1px solid color-mix(in srgb,var(--danger) 18%,var(--glass-outline));
+  font-size:13px;font-weight:700;white-space:nowrap;
+}
+.recycle-clear-button:active{background:color-mix(in srgb,var(--danger) 15%,var(--glass-card))}
+.recycle-explain{margin:1px 0 13px;color:var(--secondary);font-size:12px;line-height:1.5}
+.recycle-list{display:grid;gap:9px;min-width:0}
+.recycle-row{
+  display:flex;flex-direction:column;align-items:stretch;gap:9px;
+  min-width:0;max-width:100%;margin:0;padding:12px 13px;
+  border:1px solid var(--glass-outline);border-radius:16px;
+  background:var(--glass-card);
+  box-shadow:inset 0 1px 0 var(--glass-rim);
+}
+.recycle-title{
+  display:-webkit-box;-webkit-box-orient:vertical;
+  -webkit-line-clamp:2;line-clamp:2;
+  min-width:0;max-width:100%;overflow:hidden;
+  overflow-wrap:anywhere;word-break:normal;
+  font-size:15px;font-weight:700;line-height:1.45;
+}
+.recycle-row-bottom{display:flex;align-items:center;gap:8px;min-width:0}
+.recycle-date{
+  min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:12px;color:var(--secondary);line-height:1.35;
+}
+.recycle-row-actions{display:flex;flex:0 0 auto;align-items:center;gap:7px}
+.recycle-action{
+  min-height:44px;padding:9px 11px;border-radius:12px;
+  font-size:13px;font-weight:700;white-space:nowrap;
+  border:1px solid var(--glass-outline);
+}
+.recycle-action.restore{color:var(--blue);background:var(--glass-blue)}
+.recycle-action.permanent{
+  color:var(--danger);background:var(--glass-red);
+  border-color:color-mix(in srgb,var(--danger) 16%,var(--glass-outline));
+}
+.recycle-action:active{filter:brightness(.96)}
+.recycle-subheading{margin:15px 1px 9px;font-weight:700}
+.recycle-empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:9px;min-height:105px;color:var(--secondary);font-size:14px;
+}
+.recycle-empty .ui-icon{opacity:.65}
+.recycle-more{margin-top:4px}
+.recycle-footer{margin:10px 0 0}
+.recycle-footer>button{border-radius:14px}
+.confirmation-sheet .confirmation-help{font-size:13px;line-height:1.5}
+@media(max-width:390px){
+  .bottom-sheet{padding-inline:14px}
+  .topbar h1{font-size:25px}
+  .recycle-row{padding-inline:11px}
+  .recycle-action{padding-inline:9px;font-size:12px}
+  .recycle-clear-button{padding-inline:10px}
+  .sheet-actions>button{font-size:13px}
+}
+@media(min-width:768px){
+  .bottom-sheet{border-radius:27px;margin-bottom:20px;border-bottom:1px solid var(--glass-rim)}
+}
+@media(prefers-color-scheme:dark){
+  :root{
+    --glass-card:rgba(36,51,68,.77);
+    --glass-header:rgba(27,40,55,.87);
+    --glass-sheet:rgba(31,45,61,.92);
+    --glass-input:rgba(32,47,63,.85);
+    --glass-outline:rgba(156,187,220,.19);
+    --glass-rim:rgba(203,226,250,.17);
+    --glass-shadow:0 8px 30px rgba(0,8,20,.24),inset 0 1px 0 rgba(221,237,255,.085);
+    --glass-blue:rgba(129,183,251,.13);
+    --glass-red:rgba(231,124,141,.12);
+  }
+  body{
+    background:radial-gradient(ellipse 78% 28% at 0 -4%,rgba(54,104,162,.17),transparent 100%),
+      radial-gradient(ellipse 70% 35% at 100% 30%,rgba(65,83,122,.14),transparent 100%),var(--bg);
+  }
+  .primary,.top-add{background:linear-gradient(155deg,#478cd5,#2b659f);color:#fff}
+  .status-toast{background:rgba(41,65,88,.93)}
+  .bottom-sheet{box-shadow:0 -15px 46px rgba(0,7,19,.38),inset 0 1px 0 rgba(227,239,255,.10)}
+  .recycle-action:active{filter:brightness(1.1)}
+}
+/* Accessibility and battery: solid high-contrast surfaces when blur is reduced. */
+@media(prefers-reduced-transparency:reduce){
+  :root{--glass-card:var(--panel);--glass-header:var(--panel);--glass-sheet:var(--panel);--glass-input:var(--panel)}
+  :is(.topbar,.top-bar,.detail-top,.bottom-nav,.bottom-sheet,.sheet-overlay,
+      .item-card,.content-card,.field-card,.profile-card,.welcome,.secondary,.status-toast){
+    -webkit-backdrop-filter:none;backdrop-filter:none;
+  }
+  .sheet-overlay{background:rgba(10,20,35,.6)}
+}
+@supports not (backdrop-filter:blur(1px)){
+  :is(.bottom-sheet,.bottom-nav,.topbar,.detail-top){background:var(--panel)}
+}
