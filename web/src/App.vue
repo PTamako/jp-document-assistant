@@ -47,7 +47,7 @@ const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=r
 const integrationConfigured=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
 
-const fieldLabel={due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'本次请款金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
+const fieldLabel={due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
 const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
 const topupAdvice=computed(()=>{
   if(current.value?.category!=='topup')return null;
@@ -679,7 +679,7 @@ function todayReviewBadge(d){
   const reviewed=documentReviewLabel(d);
   return reviewed==='已核验'||reviewed==='部分核验'||reviewed==='待核验'?reviewed:due;
 }
-const labelFor=(key)=>fieldLabel[key]||key;
+const labelFor=(key)=>key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 onMounted(async()=>{await boot();if(!user.value)await refreshInitStatus();});
 onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
