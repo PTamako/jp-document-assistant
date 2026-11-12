@@ -430,6 +430,13 @@ paths:
                   enum:
                   - summary
                   - analyze_only
+                ai_provider:
+                  type: string
+                  enum: [none, cloudflare, gemini]
+                  description: Per-file preference, not a global setting. No AI invocation yet.
+                gemini_consent:
+                  type: boolean
+                  description: Required when selecting Gemini, limited to nonsensitive documents.
               required:
               - text
               - source_type
@@ -858,6 +865,39 @@ paths:
         required: true
         schema:
           type: string
+  /api/documents/{documentId}/ai-provider:
+    patch:
+      tags: [Documents]
+      summary: 为当前文书单独记录 AI 引擎选择；目前不触发推理
+      operationId: updateDocumentAiProvider
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: {type: string}
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ai_provider:
+                  type: string
+                  enum: [none, cloudflare, gemini]
+                gemini_consent:
+                  type: boolean
+              required: [ai_provider]
+      responses:
+        '200': {description: 本份文书 AI 选择已保存，不代表 AI 已调用}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
   /api/documents/{documentId}/ocr:
     post:
       tags:
