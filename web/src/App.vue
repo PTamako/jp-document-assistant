@@ -978,7 +978,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="loadUsage">刷新服务用量 <UiIcon name="refresh-cw" :size="17"/></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
-        <div class="info-note" v-if="usage">Cloudflare AI {{usage.document_ai_utc_day?.calls??0}} / {{usage.document_ai_utc_day?.limit??0}} 次 · OCR {{usage.app_utc_day?.calls??0}} / {{usage.app_utc_day?.limit??0}} 次。Gemini 以 Google 实际额度为准。</div>
+        <div class="info-note" v-if="usage">Workers AI 解读 {{usage.document_ai_utc_day?.calls??0}}/{{usage.document_ai_utc_day?.limit??0}} · Workers AI OCR {{usage.app_utc_day?.calls??0}}/{{usage.app_utc_day?.limit??0}} · OCR.space {{usage.ocr_space_utc_day?.calls??0}}/{{usage.ocr_space_utc_day?.limit??0}}（今日）</div>
         <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
