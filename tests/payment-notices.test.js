@@ -81,3 +81,37 @@ test('receipt and salary matching do not reclassify card bill payment or Suica r
  assert.equal(parseJapaneseText('口座引落予定日：2026年11月10日\n引落金額：20,000円').category,'bank');
  assert.equal(parseJapaneseText('Suicaポケット受取完了\n受取額：1,000円').category,'topup');
 });
+
+test('shop and transaction timestamp are extracted from a Japanese shopping order, not message arrival metadata',()=>{
+ const text=[
+  '購入明細',
+  'ショップ名：カメラショップ渋谷',
+  '購入日時：2026年11月8日（日） 14時23分',
+  '合計金額：3,520円',
+  'メール送信日時：2026年11月9日 08:00',
+  '営業時間：10:00〜21:00'
+ ].join('\n');
+ const parsed=parseJapaneseText(text);
+ assert.equal(parsed.category,'shopping');
+ assert.equal(f(parsed,'merchant')?.normalized_value,'カメラショップ渋谷');
+ assert.equal(f(parsed,'transaction_at')?.normalized_value,'2026-11-08 14:23');
+ assert.equal(f(parsed,'merchant')?.source_quote,'ショップ名：カメラショップ渋谷');
+ assert.equal(f(parsed,'due_date'),undefined);
+ assert.equal(parseJapaneseText('購入明細\nメール送信日時：2026/11/09 08:00').fields.some(x=>x.field_key==='transaction_at'),false);
+});
+test('split-line OCR transaction clock and alternate store label retain the printed source',()=>{
+ const text=[
+  'カードのご利用内容をお知らせします。三井住友カード',
+  '利用日時：2026/11/08',
+  '利用時刻：19:06',
+  '店舗名：セブン－イレブン',
+  '利用金額：151円',
+  '利用取引：買物'
+ ].join('\n');
+ assert.equal(isCardPurchaseNotice(text),true);
+ const parsed=parseJapaneseText(text);
+ assert.equal(parsed.category,'card_spend');
+ assert.equal(f(parsed,'merchant')?.normalized_value,'セブン-イレブン');
+ assert.equal(f(parsed,'transaction_at')?.normalized_value,'2026-11-08 19:06');
+ assert.equal(f(parsed,'amount_jpy')?.normalized_value,'151');
+});
