@@ -983,9 +983,10 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[]};
  ledgerOptionsError.value=d.ledger_options_error||'';
  ledgerAttempted.value=Number(d.integration?.attempt_count||0)>0&&d.integration?.state==='failed';ledgerMappingChangeConfirmed.value=false;
- candidateDraft.category='';
- const hint=item.payload?.payment_source_hint||'';
- candidateDraft.payment_source=ledgerOptions.value.paymentSources.some(x=>x.value===hint)?hint:'';
+ // Suggestions are calculated by Kakebo against its real D1 merchant rules
+ // and user-configured defaults. The user can always override either picker.
+ candidateDraft.category=ledgerOptions.value.suggested?.category||'';
+ candidateDraft.payment_source=ledgerOptions.value.suggested?.payment_source||'';
  // Explanatory warnings are not a real transaction memo. Leave the
  // accounting note blank for card purchase; the user can add their own.
  candidateDraft.note=current.value.category==='card_spend'?'':(item.payload?.note||'');
@@ -1170,6 +1171,10 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
       <p class="eyebrow">{{cats[current.category]||current.category}} · {{current.visibility==='shared'?'家庭共享':'仅自己'}}</p>
       <h2 class="document-detail-title" :title="current.title">{{current.title}}</h2>
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
+      <p v-if="['card_spend','shopping'].includes(current.category)&&current.fields?.some(f=>['merchant','transaction_at','transaction_date'].includes(f.field_key)&&f.review_state!=='rejected')" class="muted">
+        {{current.fields?.find(f=>f.field_key==='merchant'&&f.review_state!=='rejected')?.normalized_value||'商户待核验'}}
+        <template v-if="current.fields?.some(f=>['transaction_at','transaction_date'].includes(f.field_key)&&f.review_state!=='rejected')"> · {{current.fields?.find(f=>f.field_key==='transaction_at'&&f.review_state!=='rejected')?.normalized_value||current.fields?.find(f=>f.field_key==='transaction_date'&&f.review_state!=='rejected')?.normalized_value}}</template>
+      </p>
       <div class="detail-tabs-sticky"><div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div></div>
       <section v-if="detailTab==='explain'">
         <div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card policy-check-card">

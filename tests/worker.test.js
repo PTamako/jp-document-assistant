@@ -2223,10 +2223,14 @@ test('approved merchant is passed as the ledger title in a signed card purchase 
  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
  const doc=(await req(env,'/api/documents/'+imported.data.document_id,auth(owner))).data.document;
  const amount=doc.fields.find(f=>f.field_key==='amount_jpy');
- assert.ok(amount);
+ const stamp=doc.fields.find(f=>f.field_key==='transaction_at');
+ assert.ok(amount);assert.ok(stamp);
  const confirm=await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
   data:{normalized_value:'151',review_state:'confirmed'}});
  assert.equal(confirm.response.status,200);
+ const confirmStamp=await req(env,'/api/fields/'+stamp.id,{method:'PATCH',...auth(owner),
+  data:{normalized_value:'2026-05-28 19:06',review_state:'confirmed'}});
+ assert.equal(confirmStamp.response.status,200);
  const candidate=(await req(env,'/api/documents/'+doc.id+'/candidates',auth(owner))).data.items.find(c=>c.candidate_kind==='finance');
  assert.ok(candidate);
  const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
@@ -2245,7 +2249,56 @@ test('approved merchant is passed as the ledger title in a signed card purchase 
  assert.equal(sent.payload.merchant,'セブン-イレブン');
  assert.equal(sent.payload.note,'');
  assert.equal(sent.payload.date,'2026-05-28');
+ assert.equal(sent.payload.time,'19:06');
  assert.equal(sent.payload.amount,151);
+});
+
+
+test('ledger preview passes merchant and recognized card and uses target rule suggestions',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const raw=[
+ '件名：ご利用のお知らせ【三井住友カード】',
+ 'カードのご利用内容をお知らせいたします',
+ 'ご利用カード：Olive／クレジット',
+ '◇利用日：2026/05/28 19:06',
+ '◇利用先：セブン－イレブン',
+ '◇利用取引：買物',
+ '◇利用金額：151円'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+  data:{text:raw,source_type:'text',retention:'summary'}});
+ assert.equal(imported.response.status,201);
+ const id=imported.data.document_id;
+ const candidate=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.find(c=>c.candidate_kind==='finance');
+ assert.ok(candidate);
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'owner-1'}});
+ env.KAKEBO_BRIDGE_SECRET='test-store-matching-secret-123456789';
+ let received=null;
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(request){
+  received=JSON.parse(await request.text());
+  return Response.json({ok:true,
+   categories:[{value:'饮食料品',label:'飲食料品'},{value:'日用品',label:'日用品'}],
+   payment_sources:[{value:'三井住友カード',label:'三井住友カード'},{value:'セゾンカード',label:'セゾンカード'}],
+   suggested:{category:'饮食料品',payment_source:'三井住友カード'}
+  });
+ }};
+ const result=await req(env,'/api/candidates/'+candidate.id+'/preview',auth(owner));
+ assert.equal(result.response.status,200,JSON.stringify(result.data));
+ assert.equal(received.payload.operation,'options');
+ assert.equal(received.payload.merchant,'セブン-イレブン');
+ assert.equal(received.payload.recognizedPayment,'Olive');
+ assert.equal(result.data.ledger_options.suggested.category,'饮食料品');
+ assert.equal(result.data.ledger_options.suggested.payment_source,'三井住友カード');
+ // Ignore an upstream hint not present in the selected user's real catalogue.
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(){return Response.json({ok:true,
+  categories:[{value:'日用品',label:'日用品'}],
+  payment_sources:[{value:'現金',label:'現金'}],
+  suggested:{category:'any-forged-category',payment_source:'hidden-card'}
+ });}};
+ const second=await req(env,'/api/candidates/'+candidate.id+'/preview',auth(owner));
+ assert.equal(second.data.ledger_options.suggested.category,'');
+ assert.equal(second.data.ledger_options.suggested.payment_source,'');
 });
 
 test('Gmail code-model grants remain encrypted and user-bound; only selected messages are read',async()=>{
