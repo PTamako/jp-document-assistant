@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {normalizeOcrItems,recognizeJapaneseImage,PADDLE_SDK_VERSION} from '../web/src/local-ocr.js';
 test('Paddle model version is pinned and Japanese text stays unverified',async()=>{
  assert.equal(PADDLE_SDK_VERSION,'0.4.2');
- assert.ok(true);
  const normalized=normalizeOcrItems([{items:[
   {text:'納付期限',score:0.93},{text:'11月30日',score:0.54},{text:'  ',score:0.98}
  ]}]);
@@ -14,6 +13,6 @@ test('Paddle model version is pinned and Japanese text stays unverified',async()
  const result=await recognizeJapaneseImage(new Blob([new Uint8Array([255,216,255])],{type:'image/jpeg'}),{loadSdk:async()=>fake});
  assert.equal(options.lang,'japan');
  assert.equal(options.ocrVersion,'PP-OCRv6');
- assert.match(options.ortOptions.wasmPaths['ort-wasm-simd-threaded.jsep.wasm'],/@1\\.31\\.1\\/dist\\//);
+ assert.match(options.ortOptions.wasmPaths['ort-wasm-simd-threaded.jsep.wasm'],/@1\.31\.1\/dist\//);
  assert.equal(result.needs_review,true);
 });
