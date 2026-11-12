@@ -30,7 +30,7 @@ const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',f
 const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 // Preserve exact retry fields in memory while the app stays open.
 const pendingCandidateRetry=ref(null);
-const ledgerOptions=ref({categories:[],paymentSources:[]}),ledgerOptionsError=ref(''),ledgerAttempted=ref(false);
+const ledgerOptions=ref({categories:[],paymentSources:[]}),ledgerOptionsError=ref(''),ledgerAttempted=ref(false),ledgerMappingChangeConfirmed=ref(false);
 const aiAnalysis=computed(()=>current.value?.ai_analysis?.result||null);
 const explanationExpanded=ref(false),ocrTextExpanded=ref(false);
 const attachmentActionsTarget=ref(null);
@@ -270,7 +270,7 @@ function clearPrivateWorkspace(){
   clearGmailSession();revokeOriginal();closeSheet();current.value=null;
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];
-  ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;pendingCandidateRetry.value=null;
+  ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;pendingCandidateRetry.value=null;
   sessions.value=[];sessionsNext.value=null;
   backupFile.value=null;backupPass.value='';backupOffset.value=0;
   backupScope.value='all';backupMonth.value='';restoreArchive.value=null;restorePreview.value=[];
@@ -981,7 +981,7 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  candidateDraft.date=String(verifiedDate||item.payload?.transaction_date||'').slice(0,10);
  ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[]};
  ledgerOptionsError.value=d.ledger_options_error||'';
- ledgerAttempted.value=Number(d.integration?.attempt_count||0)>0;
+ ledgerAttempted.value=Number(d.integration?.attempt_count||0)>0&&d.integration?.state==='failed';ledgerMappingChangeConfirmed.value=false;
  candidateDraft.category='';
  const hint=item.payload?.payment_source_hint||'';
  candidateDraft.payment_source=ledgerOptions.value.paymentSources.some(x=>x.value===hint)?hint:'';
@@ -995,14 +995,14 @@ async function commitApprovedCandidate(){
  if(busy.value||!current.value)return;
  busy.value=true;
  const id=candidateDraft.id,docId=current.value.id;
- const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance'};
+ const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value};
  if(body.kind==='finance'&&(!ledgerOptions.value.categories.some(x=>x.value===body.category)||
    !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){problem(new Error('请从家計簿同步的分类和支付方式中选择'));busy.value=false;return;}
  let confirmed=false,feedback='';
  try{
   const d=await api(`/api/candidates/${id}/commit`,{method:'POST',body,idempotencyKey:`jda-${id}`});
   confirmed=true;pendingCandidateRetry.value=null;
-  feedback=d.already_synced?'已关联已有记录，不重复记账':'目标 App 已确认同步成功';
+  feedback=d.recovered_prior?'家計簿已有该候选的旧记账；未重复写入，请核对分类':d.already_synced?'已关联已有记录，不重复记账':'目标 App 已确认同步成功';
  }catch(e){
   // Validation problems remain editable. A completed remote attempt closes
   // this sheet while preserving its exact retry fields and failure state.
@@ -1415,7 +1415,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
-        <p v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="fine-print">该候选已有同步尝试；若更改此前提交值，安全去重可能拒绝。请先核对目标账本。</p>
+        <p v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="fine-print">此候选曾同步失败；更改此前的分类或支付方式时，系统会先在家計簿只读核对是否已有相应记账。</p><label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>如需修改原提交内容，我同意核对目标账本后再提交，且不重复记账</label>
         <label v-if="candidateDraft.kind==='finance'" class="form-label">备注<input v-model="candidateDraft.note" /></label>
         <label v-if="candidateDraft.kind==='homeflow_task'" class="form-label">任务名称<input v-model="candidateDraft.title" maxlength="120" /></label><p v-if="candidateDraft.kind==='homeflow_task'" class="fine-print">请先在「字段」核验原文日期；同步后创建的是 HomeFlow 待办，不会把配送时间当作缴费期限。</p>
         <div v-if="candidateDraft.kind==='homeflow_task'"><div class="choice-form-field"><span class="choice-field-label">任务可见范围</span><button type="button" class="choice-field-control" @click="openChoice('taskVisibility')"><span>{{choiceLabel('taskVisibility')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></div>
