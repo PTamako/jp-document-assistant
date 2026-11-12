@@ -24,7 +24,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           const tests=[
-            {name:'jpda-health',url:'https://jp-document-assistant.yupan6706.workers.dev/api/health',status:200,check:d=>d?.ok===true&&d?.service==='document-assistant'&&d?.ai_ocr==='disabled'},
+            {name:'jpda-health',url:'https://jp-document-assistant.yupan6706.workers.dev/api/health',status:200,check:d=>d?.ok===true&&d?.service==='document-assistant'&&d?.ai_ocr==='experimental'},
             {name:'jpda-first-account',url:'https://jp-document-assistant.yupan6706.workers.dev/api/auth/status',status:200,check:d=>d?.ok===true&&d?.initialized===true},
             {name:'jpda-private-api',url:'https://jp-document-assistant.yupan6706.workers.dev/api/me',status:401},
             // Intentionally malformed JSON: must reach the auth Worker, fail before any DB write,
