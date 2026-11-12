@@ -40,4 +40,4 @@ jobs:
           # The browser must load the SDK from a dedicated module Worker.
           test -n "$(find dist/assets -maxdepth 1 -type f -name 'worker-entry-*.js' -print -quit)"
           # Cloudflare Workers Static Assets impose a 25 MiB single-file maximum.
-          test "$(find dist/assets -maxdepth 1 -type f -name 'worker-entry-*.js' -printf '%s\\n' | sort -nr | head -1)" -le 26214400
+          test "$(stat -c %s dist/assets/worker-entry-*.js | sort -nr | head -n 1)" -le 26214400
