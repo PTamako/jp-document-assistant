@@ -17,7 +17,7 @@ jobs:
           const a=await fetch(base+'/',{cache:'no-store'}),h=await a.text(),b=await fetch(base+'/api/health',{cache:'no-store'});
           console.log('site:',a.status,a.headers.get('referrer-policy'),/name="referrer" content="([^"]+)"/.exec(h)?.[1]);
           console.log('api:',b.status,b.headers.get('referrer-policy'));
-          if(a.headers.get('referrer-policy')!=='strict-origin-when-cross-origin'||b.headers.get('referrer-policy')!=='no-referrer')throw Error('Wrong live referrer headers');
+          if(![null,'strict-origin-when-cross-origin'].includes(a.headers.get('referrer-policy'))||!/name="referrer" content="strict-origin-when-cross-origin"/.test(h)||b.headers.get('referrer-policy')!=='no-referrer')throw Error('Wrong effective live referrer policy');
           const names=[...h.matchAll(/<script[^>]+src="([^"]+\.js)"/g)].map(x=>x[1]);
           const matches=[];
           for(const name of names){const url=new URL(name,base);if(url.origin!==base)continue;
