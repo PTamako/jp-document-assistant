@@ -57,6 +57,57 @@ async function boot(env){
 }
 function auth(p){return {cookie:p.cookie,csrf:p.csrf};}
 
+test('Workers AI file/photo import preview needs consent and uses shared five-call budget without R2 writes',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.ENABLE_EXPERIMENTAL_OCR='true';
+ env.OCR_CALLS_PER_USER_DAY='5';env.OCR_APP_UTC_DAILY_LIMIT='5';
+ let aiCalls=0;
+ env.AI={async run(model,input){
+   aiCalls++;
+   assert.equal(model,'@cf/moondream/moondream3.1-9B-A2B');
+   assert.ok(input.image.startsWith('data:image/jpeg;base64,'));
+   assert.equal(input.task,'query');
+   return {answer:'区役所のお知らせ、期限は11月30日です。'};
+ }};
+ const raw=new Uint8Array(150);
+ raw[0]=255;raw[1]=216;raw[148]=255;raw[149]=217;
+ const makeForm=(consent=true)=>{
+   const form=new FormData();
+   form.append('file',new File([raw],'photo.jpg',{type:'image/jpeg'}));
+   if(consent)form.append('confirm_workers_ai','true');
+   return form;
+ };
+ const noAuth=await req(env,'/api/workers-ai-ocr/preview',{method:'POST',form:makeForm()});
+ assert.equal(noAuth.response.status,401);
+ const noCsrf=await req(env,'/api/workers-ai-ocr/preview',{method:'POST',
+   cookie:owner.cookie,form:makeForm()});
+ assert.equal(noCsrf.response.status,403);
+ const noConsent=await req(env,'/api/workers-ai-ocr/preview',{
+   method:'POST',...auth(owner),form:makeForm(false)});
+ assert.equal(noConsent.response.status,409);
+ assert.equal(aiCalls,0);
+ for(let i=0;i<5;i++){
+   const response=await req(env,'/api/workers-ai-ocr/preview',{
+     method:'POST',...auth(owner),form:makeForm()});
+   assert.equal(response.response.status,200,JSON.stringify(response.data));
+   assert.equal(response.data.verified,false);
+   assert.match(response.data.text,/区役所/);
+ }
+ const sixth=await req(env,'/api/workers-ai-ocr/preview',{
+   method:'POST',...auth(owner),form:makeForm()});
+ assert.equal(sixth.response.status,429,JSON.stringify(sixth.data));
+ assert.equal(aiCalls,5);
+ assert.equal(env._blobs.size,0);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,0);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,0);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM ocr_space_utc_daily').get().n,0);
+ const usage=await req(env,'/api/usage',auth(owner));
+ assert.equal(usage.data.app_utc_day.calls,5);
+ assert.equal(usage.data.app_utc_day.reserved,0);
+ assert.equal(usage.data.app_utc_day.limit,5);
+ assert.equal(usage.data.ocr_space_utc_day.calls,0);
+});
+
 test('OCR.space scanned PDF import preview is private, consent gated, page-only and quota limited',async()=>{
  const env=makeEnv(),owner=await boot(env);
  env.OCR_SPACE_API_KEY='test-key-not-real';
