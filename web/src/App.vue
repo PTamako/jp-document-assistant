@@ -264,7 +264,7 @@ async function googleStatus(service){
   if(googlePending.value.service===service&&
      ['done','failed','expired'].includes(state.progress)){
     if(state.progress==='done'&&state.connected)flash('Google '+(service==='gmail'?'Gmail':'Drive')+' 已连接');
-    else if(state.progress==='failed')problem(new Error('Google 授权未完成，请重新连接'));
+    else if(state.progress==='failed')problem(new Error(state.progress_error||'Google 授权未完成，请重试'));
     googlePending.value={service:'',flow:''};
   }
   return state;
@@ -1183,7 +1183,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
   <p v-if="driveCloud.connected" class="fine-print">已连接 {{driveCloud.google_email}}</p>
   <template v-if="!driveCloud.connected">
     <button class="primary full" :disabled="driveBusy||!driveCloud.enabled" @click="startGoogleAuthorization('drive')">连接 Google Drive</button>
-    <p v-if="!driveCloud.enabled" class="fine-print">Google 授权配置尚未完成</p>
+    <p v-if="!driveCloud.enabled" class="fine-print">Google 授权配置尚未完成</p><p v-else-if="driveCloud.progress_error" class="fine-print">{{driveCloud.progress_error}}</p>
   </template>
   <template v-else>
     <label class="form-label">搜索文件<input v-model.trim="driveQuery" maxlength="120" placeholder="文件名"/></label>
@@ -1203,7 +1203,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
   <p v-if="gmailPersistent.connected" class="fine-print">已连接 {{gmailPersistent.google_email}}</p>
   <template v-if="!gmailAuthorizedUi">
     <button class="primary full" :disabled="gmailBusy||!gmailPersistent.enabled" @click="connectGmail">连接 Gmail</button>
-    <p v-if="!gmailPersistent.enabled" class="fine-print">Google 授权配置尚未完成</p>
+    <p v-if="!gmailPersistent.enabled" class="fine-print">Google 授权配置尚未完成</p><p v-else-if="gmailPersistent.progress_error" class="fine-print">{{gmailPersistent.progress_error}}</p>
   </template>
   <template v-else>
     <label class="form-label">搜索邮件<input v-model.trim="gmailQuery" maxlength="180" placeholder="newer_than:30d"/></label>
