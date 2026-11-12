@@ -137,7 +137,7 @@ test('Japanese yearless deadline and action are real review fields, never a gues
  const id=result.data.document_id;
  const detail=(await req(env,'/api/documents/'+id,auth(user))).data.document;
  const field=k=>detail.fields.find(x=>x.field_key===k);
- assert.equal(field('due_date')?.normalized_value,new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()).slice(0,4)+'-11-30');
+ assert.equal(field('due_date')?.normalized_value,new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Tokyo',year:'numeric'}).format(new Date())+'-11-30');
  assert.equal(field('due_date')?.review_state,'unreviewed');
  assert.match(field('due_date')?.source_quote||'',/年份自动补全/);
  assert.equal(field('due_date_partial')?.normalized_value,'11月30日');
