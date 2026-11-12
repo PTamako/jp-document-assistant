@@ -42,8 +42,13 @@ function validatedPayload(target,item,approved,body){
     return {operation:'entry',type:x.kind,date:body.date,amount,category:trim(body.category,80),paymentSource:trim(body.payment_source,100),note:trim(body.note,180),source_kind:'document_assistant'};
   }
   if(target==='homeflow'){
-    const date=approved.get('due_date');
-    if(!date||date!==x.due_on)bad('截止日期未经人工核验','REVIEW_REQUIRED',409);
+    const dateField=x.task_type==='delivery'?'event_date':'due_date';
+    const date=approved.get(dateField);
+    if(!date||date!==x.due_on)bad(dateField==='event_date'?'配送日期未经人工核验':'截止日期未经人工核验','REVIEW_REQUIRED',409);
+    if(x.task_type==='delivery'){
+      const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+      if(date<today)bad('配送日期已过期，不允许创建过期配送待办','DELIVERY_DATE_PASSED',409);
+    }
     if(!['private','household'].includes(body.visibility))bad('任务可见性无效');
     if(item.visibility==='private'&&body.visibility!=='private')bad('私人文书不能创建共享任务','PRIVACY_BOUNDARY',403);
     const bonusPoints=body.bonus_points===undefined?0:Number(body.bonus_points);

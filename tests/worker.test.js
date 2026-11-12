@@ -1330,3 +1330,219 @@ test('re-interpretation only adds missing fields, preserves manual review and ne
   assert.equal((await req(env,`/api/documents/${id}/reinterpret`,{method:'POST',...auth(owner),data:{}})).data.added_fields,0);
   assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
 });
+
+
+test('electricity mail import previews only invoiced 1770 JPY, not 1966 metering charge or false due task',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const text=[
+  '電気料金の検針期間','2026/09/16 ~ 2026/10/15\t1,966円 (税込)',
+  '56.00kWh','今回のご請求金額合計：','1,770円（税込)',
+  'カード立替日 : 2026/10/28'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{
+   method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text}
+ });
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(doc.category,'utility');
+ assert.equal(doc.fields.find(x=>x.field_key==='amount_jpy')?.normalized_value,'1770');
+ assert.equal(doc.fields.find(x=>x.field_key==='period_charge_jpy')?.normalized_value,'1966');
+ assert.equal(doc.fields.find(x=>x.field_key==='card_advance_date')?.normalized_value,'2026-10-28');
+ assert.equal(doc.fields.some(x=>x.field_key==='due_date'),false);
+ const suggestions=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ assert.equal(suggestions.some(x=>x.candidate_kind==='homeflow_task'),false);
+ const financial=suggestions.find(x=>x.candidate_kind==='finance');
+ assert.equal(financial?.payload.amount_jpy,1770);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+ const amount=doc.fields.find(x=>x.field_key==='amount_jpy');
+ const saved=await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
+   data:{normalized_value:'1770',review_state:'confirmed'}});
+ assert.equal(saved.response.status,200);
+ // Existing verified field id/state and bridge proposals survive explicit re-explanation.
+ const updated=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ assert.equal(updated.response.status,200);
+ assert.equal(updated.data.remote_integrations_unchanged,true);
+ const now=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(now.fields.find(x=>x.field_key==='amount_jpy')?.review_state,'confirmed');
+ assert.equal(now.fields.find(x=>x.field_key==='amount_jpy')?.id,amount.id);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+});
+
+
+test('future delivery notice creates one HomeFlow suggestion; only confirmed delivery date authorizes bridge',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const original=['佐川急便 お届け予定日時','2099/10/12　AM8:00～12:00','※ご都合の良い日時をご指定ください。'].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+   source_type:'text',retention:'summary',text:original,title:'配達予定の通知'
+ }});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const docId=imported.data.document_id;
+ const detail=(await req(env,'/api/documents/'+docId,auth(owner))).data.document;
+ assert.equal(detail.category,'delivery');
+ assert.equal(detail.fields.find(x=>x.field_key==='event_date')?.normalized_value,'2099-10-12');
+ assert.equal(detail.fields.some(x=>x.field_key==='due_date'),false);
+ const getCandidates=async()=>(await req(env,'/api/documents/'+docId+'/candidates',auth(owner))).data.items;
+ const candidate=(await getCandidates()).find(x=>x.candidate_kind==='homeflow_task');
+ assert.ok(candidate);
+ assert.equal(candidate.payload.task_type,'delivery');
+ assert.equal(candidate.payload.date_field_key,'event_date');
+ assert.equal(candidate.payload.delivery_window,'08:00～12:00');
+ assert.equal(candidate.payload.due_on,'2099-10-12');
+ let calls=0;
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{homeflow:'test_homeflow_owner'}});
+ env.HOMEFLOW_BRIDGE_SECRET='integration-test-bridge-secret-abcdefgh';
+ env.HOMEFLOW_BRIDGE_SERVICE={async fetch(r){
+   const body=JSON.parse(await r.text());
+   assert.equal(body.payload.dueOn,'2099-10-12');
+   assert.match(body.payload.title,/08:00～12:00/);
+   calls++;
+   return Response.json({ok:true,remote_id:'delivery-task-created'});
+ }};
+ const opts={method:'POST',...auth(owner),data:{
+   confirm:'CONFIRM_TASK',title:candidate.payload.title,visibility:'private'
+ },extraHeaders:{'Idempotency-Key':'delivery_test_key_20991012'}};
+ const denied=await req(env,'/api/candidates/'+candidate.id+'/commit',opts);
+ assert.equal(denied.response.status,409);
+ assert.equal(calls,0);
+ const event=detail.fields.find(x=>x.field_key==='event_date');
+ const approve=await req(env,'/api/fields/'+event.id,{method:'PATCH',...auth(owner),data:{review_state:'confirmed',normalized_value:'2099-10-12'}});
+ assert.equal(approve.response.status,200,JSON.stringify(approve.data));
+ const sent=await req(env,'/api/candidates/'+candidate.id+'/commit',opts);
+ assert.equal(sent.response.status,200,JSON.stringify(sent.data));
+ assert.equal(calls,1);
+ const second=await req(env,'/api/candidates/'+candidate.id+'/commit',opts);
+ assert.equal(second.data.already_synced,true);
+ assert.equal(calls,1);
+});
+test('reinterpret backfills one future delivery suggestion and leaves prior candidate IDs unchanged',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const old=['お届け予定日時','2099/10/12　AM8:00～12:00','ご都合のよい日時をご指定ください'].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text:old}});
+ assert.equal(imported.response.status,201);
+ const id=imported.data.document_id;
+ // Pretend pre-fix parser stored the date field but no HomeFlow proposal.
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task'").run(id);
+ const first=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ assert.equal(first.response.status,200,JSON.stringify(first.data));
+ const firstCandidates=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ const reminders=firstCandidates.filter(x=>x.candidate_kind==='homeflow_task');
+ assert.equal(reminders.length,1);
+ const twice=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ assert.equal(twice.response.status,200,JSON.stringify(twice.data));
+ const second=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.filter(x=>x.candidate_kind==='homeflow_task');
+ assert.equal(second.length,1);
+ assert.equal(second[0].id,reminders[0].id);
+});
+test('past delivery mail cannot add a HomeFlow candidate even after reinterpreting',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const old='佐川急便 お届け予定日時\n2026/10/12（月） AM8:00～12:00';
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text:old}});
+ assert.equal(imported.response.status,201);
+ const id=imported.data.document_id;
+ for(let i=0;i<2;i++){
+   if(i)assert.equal((await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}})).response.status,200);
+   const candidates=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+   assert.equal(candidates.some(x=>x.candidate_kind==='homeflow_task'),false);
+ }
+});
+
+
+test('bank salary credit without an amount supports confirmed manual net income and a single finance proposal',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const raw=[
+ 'いつもきらぼし銀行をご利用いただきありがとうございます。',
+ '普通預金口座＊＊＊＊にお振込によるご入金がございました。',
+ '入金日時 ：２０２６年１１月１０日　００時１３分２７秒',
+ '入金内容 ：カ）サンプルカイシャ　キユウヨ'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{text:raw,source_type:'text',retention:'summary'}});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const detail=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(detail.category,'salary');
+ assert.equal(detail.visibility,'private');
+ assert.equal(detail.fields.find(x=>x.field_key==='transaction_at')?.normalized_value,'2026-11-10 00:13:27');
+ assert.equal(detail.fields.some(x=>x.field_key==='net_salary'),false);
+ const candidates=async()=>(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ assert.equal((await candidates()).some(x=>x.candidate_kind==='finance'),false);
+ const endpoint='/api/documents/'+id+'/manual-income';
+ const withoutConsent=await req(env,endpoint,{method:'POST',...auth(owner),data:{amount_jpy:'245000'}});
+ assert.equal(withoutConsent.response.status,409);
+ const invalid=await req(env,endpoint,{method:'POST',...auth(owner),data:{amount_jpy:'0',confirm_bank_amount:true}});
+ assert.equal(invalid.response.status,400);
+ assert.equal((await candidates()).some(x=>x.candidate_kind==='finance'),false);
+ const added=await req(env,endpoint,{method:'POST',...auth(owner),data:{amount_jpy:'245,000',confirm_bank_amount:true}});
+ assert.equal(added.response.status,200,JSON.stringify(added.data));
+ assert.equal(added.data.amount_provenance,'manual');
+ const after=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const net=after.fields.find(x=>x.field_key==='net_salary');
+ assert.equal(net.normalized_value,'245000');
+ assert.equal(net.review_state,'corrected');
+ assert.match(net.source_quote,/用户手动补录/);
+ const finance=(await candidates()).filter(x=>x.candidate_kind==='finance');
+ assert.equal(finance.length,1);
+ assert.equal(finance[0].payload.kind,'income');
+ assert.equal(finance[0].payload.amount_jpy,245000);
+ assert.equal(finance[0].payload.transaction_date,'2026-11-10');
+ assert.equal(finance[0].payload.amount_provenance,'manual');
+ assert.equal((await req(env,endpoint,{method:'POST',...auth(owner),data:{amount_jpy:'250000',confirm_bank_amount:true}})).response.status,409);
+ assert.equal((await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}})).response.status,200);
+ const revised=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(revised.fields.find(x=>x.field_key==='net_salary')?.id,net.id);
+ assert.match(revised.explanation_zh,/人工填写工资金额/);
+ assert.equal((await candidates()).filter(x=>x.candidate_kind==='finance').length,1);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+});
+test('Olive card purchase creates an expense review candidate that confirms 1520, not a debit task',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const raw=[
+ 'いつも三井住友カードをご利用いただきありがとうございます。',
+ 'Ｏｌｉｖｅ／クレジットについてカードの利用内容をお知らせします。',
+ 'ご利用日時：2026/11/08 13:58',
+ 'マクドナルドモバイルオーダー（買物）\t1,520円'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{text:raw,source_type:'text',retention:'summary'}});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(doc.category,'card_spend');
+ assert.equal(doc.visibility,'private');
+ assert.equal(doc.fields.find(x=>x.field_key==='amount_jpy')?.normalized_value,'1520');
+ assert.equal(doc.fields.find(x=>x.field_key==='merchant')?.normalized_value,'マクドナルドモバイルオーダー');
+ const items=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ const finance=items.filter(x=>x.candidate_kind==='finance');
+ assert.equal(finance.length,1);
+ assert.equal(finance[0].payload.kind,'expense');
+ assert.equal(finance[0].payload.transaction_date,'2026-11-08');
+ assert.equal(finance[0].payload.amount_jpy,1520);
+ assert.equal(items.some(x=>x.candidate_kind==='homeflow_task'),false);
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'kakebo_owner_test'}});
+ env.KAKEBO_BRIDGE_SECRET='test-kakebo-long-secret-abcdefghijk';
+ let calls=0;
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(req){
+   const sent=JSON.parse(await req.text());
+   assert.equal(sent.payload.operation,'entry');
+   assert.equal(sent.payload.type,'expense');
+   assert.equal(sent.payload.amount,1520);
+   assert.equal(sent.payload.date,'2026-11-08');
+   assert.equal(sent.payload.paymentSource,'Olive');
+   calls++;
+   return Response.json({ok:true,remote_id:'kakebo-record-123'});
+ }};
+ const body={confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true,date:'2026-11-08',category:'外食',payment_source:'Olive'};
+ const send=opts=>req(env,'/api/candidates/'+finance[0].id+'/commit',{method:'POST',...auth(owner),data:body,extraHeaders:{'Idempotency-Key':'olive_card_purchase_20261108'}});
+ const before=await send();
+ assert.equal(before.response.status,409);
+ assert.equal(calls,0);
+ const field=doc.fields.find(x=>x.field_key==='amount_jpy');
+ assert.equal((await req(env,'/api/fields/'+field.id,{method:'PATCH',...auth(owner),data:{normalized_value:'1520',review_state:'confirmed'}})).response.status,200);
+ const sent=await send();
+ assert.equal(sent.response.status,200,JSON.stringify(sent.data));
+ assert.equal(calls,1);
+ const again=await send();
+ assert.equal(again.data.already_synced,true);
+ assert.equal(calls,1);
+});

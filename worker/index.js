@@ -1,5 +1,7 @@
 import { randomToken, hashString, hmacHex, safeEqual, newCredential, checkPassword, parseCookie, cookieForSession, clearingCookie, sameOrigin, normalizedEmail, validatePassword, isoNow } from './security.js';
 import { parseJapaneseText } from './analysis.js';
+import {isSalaryDepositNotice} from './payment-notices.js';
+import { deliveryTaskSuggestion } from './delivery-task.js';
 import { json, failure, readJson, bad, validString } from './http.js';
 import { attachmentTrash, attachmentRestore, attachmentDelete, attachmentList } from './lifecycle.js';
 import { planBackup, exportBackup, previewImport, confirmImport } from './backup.js';
@@ -13,8 +15,8 @@ import { validateOfficeBytes } from '../web/src/document-text.js';
 // One production Worker. No R2 LIST, no polling cron, no browser-owned R2 credentials.
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_LIST = 10;
-const fieldsOf = ['due_date','amount_jpy','net_salary'];
-const sensitiveCategories=new Set(['salary','tax','bank','topup','insurance','medical','government','housing','travel','hotel']);
+const fieldsOf = ['due_date','event_date','amount_jpy','net_salary'];
+const sensitiveCategories=new Set(['salary','tax','bank','card_spend','topup','insurance','medical','government','housing','travel','hotel']);
 const sensitiveSource=/(?:マイナンバー|個人番号|在留カード|旅券|パスポート|運転免許証|保険証|口座番号|銀行口座|診療明細|給与明細)/;
 function requiresPrivateDefault(category,sourceText=''){
   return sensitiveCategories.has(category)||sensitiveSource.test(String(sourceText));
@@ -162,10 +164,17 @@ async function analyzeStored(env,doc,force=false){
   const amount=result.fields.find(f=>f.field_key==='net_salary'||f.field_key==='amount_jpy');
   if(amount && !['bank','topup','travel','hotel','shopping','delivery','medical','policy','terms','manual','campaign'].includes(result.category)){
     const kind=result.category==='salary'?'income':'expense';
-    stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'finance',JSON.stringify({kind,amount_jpy:Number(amount.normalized_value),currency:'JPY',payment_confirmed:false,category:result.category,note:'必须人工确认实际到账/付款并防重'}),now,now]);
+    const merchant=result.fields.find(f=>f.field_key==='merchant');
+    const stamp=result.fields.find(f=>['transaction_at','transaction_date'].includes(f.field_key));
+    const note=result.category==='card_spend'?'信用卡单笔消费通知，需核对卡片、交易状态及是否已记账':'必须人工确认实际到账/付款并防重';
+    stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'finance',
+      JSON.stringify({kind,amount_jpy:Number(amount.normalized_value),currency:'JPY',payment_confirmed:false,category:result.category,
+        transaction_date:stamp?.normalized_value?.slice(0,10)||null,merchant:merchant?.normalized_value||null,note}),now,now]);
   }
   const due=result.fields.find(f=>f.field_key==='due_date');
-  if(due){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify({title:`确认：${doc.title.slice(0,40)}`,due_on:due.normalized_value,visibility:doc.visibility,requires_confirmation:true}),now,now]);}
+  const deliveryTask=deliveryTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
+  if(deliveryTask){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify(deliveryTask),now,now]);}
+  else if(due){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify({title:`确认：${doc.title.slice(0,40)}`,due_on:due.normalized_value,visibility:doc.visibility,requires_confirmation:true}),now,now]);}
   for(const v of result.vocabulary){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'vocabulary',JSON.stringify({term:v.term,reading:v.reading,meaning_zh:v.meaning_zh,language:'ja',source:'rules-v1',requires_privacy_review:true}),now,now]);}
   await batch(env.DB,stmts);
   return {cached:false,result};
@@ -352,7 +361,7 @@ async function updateField(request,env,p,fieldId){
   }
   let remoteLinks=[];
   if(normalized!==String(field.normalized_value??'') && fieldsOf.includes(field.field_key)){
-    const target=field.field_key==='due_date'?'homeflow':'kakebo';
+    const target=['due_date','event_date'].includes(field.field_key)?'homeflow':'kakebo';
     remoteLinks=await dbAll(env.DB,`SELECT l.remote_id,l.target FROM integration_links l
       JOIN action_candidates c ON c.id=l.candidate_id
       WHERE c.document_id=? AND l.target=? AND l.state IN ('synced','linked_existing')`,field.document_id,target);
@@ -670,21 +679,72 @@ ELSE 'unreviewed' END review_status,
       const result=await analyzeStored(env,updated,true);
       return json({ok:true,analysis_status:result.result?.analysis_status||'needs_review',fields:result.result?.fields||[],privacy_auto_private:nextVisibility==='private'&&d.visibility==='shared',message:'文字已保存为待人工核对的分析结果'});
     }
+    if(method==='POST'&&rest==='manual-income'){
+      const doc=await ownedDocument(env.DB,id,p,'active');
+      if(doc.category!=='salary'||!isSalaryDepositNotice(doc.extracted_text_ja||''))bad('仅支持在未注明金额的工资到账邮件中补录收入','NOT_SALARY_DEPOSIT',409);
+      const body=await readJson(request,2000);
+      if(body.confirm_bank_amount!==true)bad('请先确认金额已与银行入出金明细核对','MANUAL_AMOUNT_CONFIRMATION_REQUIRED',409);
+      const amountText=String(body.amount_jpy??'').normalize('NFKC').replace(/[,，]/g,'').trim();
+      if(!/^[1-9]\d{0,11}$/.test(amountText))bad('请输入大于零的整数日元金额','INVALID_AMOUNT',400);
+      const existing=await dbFirst(env.DB,"SELECT id FROM document_fields WHERE document_id=? AND field_key='net_salary'",id);
+      if(existing)bad('工资金额字段已存在，请从字段页面核对或修改','AMOUNT_ALREADY_EXISTS',409);
+      const prior=await dbFirst(env.DB,"SELECT id FROM action_candidates WHERE document_id=? AND candidate_kind='finance'",id);
+      if(prior)bad('已经存在财务联动候选，请先核对以免重复','CANDIDATE_EXISTS',409);
+      const date=await dbFirst(env.DB,"SELECT normalized_value FROM document_fields WHERE document_id=? AND field_key IN ('transaction_at','transaction_date') ORDER BY CASE field_key WHEN 'transaction_at' THEN 0 ELSE 1 END LIMIT 1",id);
+      const now=isoNow();
+      const statementFields=[
+        ['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,reviewed_by,updated_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM document_fields WHERE document_id=? AND field_key=?)',
+          randomToken(16),id,'net_salary',amountText,'money','JPY','用户手动补录：原文未提供金额，请对照银行交易明细','corrected',p.user_id,now,id,'net_salary'],
+        ['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind=?)',
+          randomToken(16),id,'finance',JSON.stringify({kind:'income',amount_jpy:Number(amountText),currency:'JPY',
+            payment_confirmed:false,category:'salary',transaction_date:date?.normalized_value?.slice(0,10)||null,
+            amount_provenance:'manual',note:'银行工资入账通知未列金额；金额为本人核对银行明细后手动填写，防止重复记账'}),now,now,id,'finance'],
+        ["UPDATE documents SET visibility='private',updated_at=?,version=version+1 WHERE id=? AND owner_id=? AND lifecycle='active'",now,id,p.user_id]
+      ];
+      await batch(env.DB,statementFields);
+      return json({ok:true,amount_provenance:'manual',remote_integrations_unchanged:true});
+    }
     if(method==='POST'&&rest==='reinterpret'){
       const doc=await ownedDocument(env.DB,id,p,'active');
       if(!doc.extracted_text_ja)bad('这份文书尚无可解读的文字，请先导入文字','SOURCE_TEXT_REQUIRED',422);
       const parsed=parseJapaneseText(doc.extracted_text_ja);
-      const existing=await dbAll(env.DB,'SELECT field_key FROM document_fields WHERE document_id=?',id);
+      const existing=await dbAll(env.DB,'SELECT field_key,normalized_value,review_state FROM document_fields WHERE document_id=?',id);
       const keys=new Set(existing.map(x=>x.field_key)),now=isoNow();
       // Add only previously missing fields: never overwrite approved/corrected/
       // rejected values, destroy candidates, or regenerate remote idempotency keys.
       const added=parsed.fields.filter(x=>!keys.has(x.field_key));
-      const nextCategory=doc.category==='other'?parsed.category:doc.category;
+      const nextCategory=doc.category==='other'||(doc.category==='bank'&&parsed.category==='card_spend')?parsed.category:doc.category;
       const nextVisibility=requiresPrivateDefault(nextCategory,doc.extracted_text_ja)?'private':doc.visibility;
+      const manualSalary=existing.find(x=>x.field_key==='net_salary'&&x.review_state==='corrected'&&parsed.category==='salary');
+      const explanation=manualSalary?parsed.explanation_zh+'\n金额说明：已根据银行明细人工填写工资金额，原文未提供此数额，请在字段中核对。':parsed.explanation_zh;
       const statements=[['UPDATE documents SET summary_zh=?,explanation_zh=?,category=?,visibility=?,extraction_version=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=? AND lifecycle=?',
-        parsed.summary_zh,parsed.explanation_zh,nextCategory,nextVisibility,'rules-v3-notices',now,id,p.user_id,'active']];
+        parsed.summary_zh,explanation,nextCategory,nextVisibility,'rules-v4-payments',now,id,p.user_id,'active']];
       for(const f of added)statements.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
         randomToken(16),id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);
+      // Explicit re-interpretation of a legacy bank-labelled card purchase may
+      // safely ADD a missing expense proposal, but never replace existing IDs.
+      const cardAmount=parsed.category==='card_spend'?parsed.fields.find(x=>x.field_key==='amount_jpy'):null;
+      const previousAmount=existing.find(x=>x.field_key==='amount_jpy');
+      const usableAmount=cardAmount&&(!previousAmount||(previousAmount.review_state!=='rejected'&&previousAmount.normalized_value===cardAmount.normalized_value));
+      if(usableAmount){
+        const merchant=parsed.fields.find(x=>x.field_key==='merchant');
+        const date=parsed.fields.find(x=>x.field_key==='transaction_at'||x.field_key==='transaction_date');
+        statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
+          SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='finance')`,
+          randomToken(16),id,'finance',JSON.stringify({kind:'expense',amount_jpy:Number(cardAmount.normalized_value),currency:'JPY',
+            category:'card_spend',payment_confirmed:false,transaction_date:date?.normalized_value?.slice(0,10)||null,
+            merchant:merchant?.normalized_value||null,
+            note:'信用卡消费通知，核对金额、卡片、是否已入账，避免与月度账单重复记账'}),now,now,id]);
+      }
+      // Backfill one missing *future* delivery suggestion for an old imported mail.
+      // Do not recreate existing linked task IDs or override a rejected/corrected date.
+      const previousEvent=existing.find(x=>x.field_key==='event_date');
+      const sourceEvent=parsed.fields.find(x=>x.field_key==='event_date');
+      const canSuggest=!previousEvent||(previousEvent.review_state!=='rejected'&&previousEvent.normalized_value===sourceEvent?.normalized_value);
+      const proposed=canSuggest?deliveryTaskSuggestion(parsed,doc.extracted_text_ja,{visibility:nextVisibility}):null;
+      if(proposed)statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
+        SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task')`,
+        randomToken(16),id,'homeflow_task',JSON.stringify(proposed),now,now,id]);
       await batch(env.DB,statements);
       return json({ok:true,added_fields:added.length,preserved_fields:existing.length,
         privacy_auto_private:doc.visibility==='shared'&&nextVisibility==='private',

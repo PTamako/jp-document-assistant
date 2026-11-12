@@ -26,6 +26,15 @@ export function explainNotice({text,category,fields}){
    const service=evidenceLine(text,/サービス名|サービス提供/);
    if(service)lines.push('服务线索（日文原文）：'+service);
    lines.push('建议：核对 Suica 的充值记录；如果从银行卡或其他余额转入交通卡，记账时通常应先考虑“账户间转移”，避免把充值与后续乘车消费重复计算。');
+ }else if(category==='card_spend'){
+   summary='信用卡消费通知';
+   const merchant=field(fields,'merchant'),when=field(fields,'transaction_at')||field(fields,'transaction_date');
+   lines.push('这是什么：信用卡单笔消费使用通知，和月度信用卡账单、银行账户自动扣款不是一回事。');
+   if(merchant)lines.push('消费商户：'+merchant.normalized_value+'（日文原文：'+merchant.source_quote+'）。');
+   if(amount)lines.push('通知中的本次消费金额：'+amount+'（实际记账前需核对银行卡明细）。');
+   if(when)lines.push('通知列出的使用时间：'+when.normalized_value+'。这不是信用卡扣款日期。');
+   if(/Olive|Ｏｌｉｖｅ/i.test(text))lines.push('卡片线索：原文出现 Olive／クレジット；记账时仍须本人选择正确的信用卡账户。');
+   lines.push('建议：可以作为家計簿支出候选，确认金额、交易日、支付卡片和是否已经记录后再入账，避免重复记账；通知不一定代表最终入账，退款、取消和金额更正可能发生。');
  }else if(directDebit){
    summary='银行账户扣款通知';
    lines.push('这是什么：这是一份银行账户自动扣款相关通知。“口座引き落とし／口座振替”指从银行账户扣款，并不等于信用卡当天新增一笔消费。');
@@ -42,13 +51,26 @@ export function explainNotice({text,category,fields}){
    if(slot)lines.push('配送时间线索（日文原文）：'+slot);
    lines.push('建议：如果需要改时间或查询进度，请通过快递公司官方 App／官网核对；“预计送达”不代表“已签收”。');
  }else if(category==='salary'){
-   summary='工资／奖金明细';
-   lines.push('这是什么：工资或奖金明细，应分别看总支给、扣除及实发，不能把应发金额直接视为到账金额。');
+   if(/(?:入金内容|振込(?:による)?ご入金|振込入金|お振込によるご入金)/.test(text.normalize('NFKC'))){
+     summary='银行工资入账通知';
+     lines.push('这是什么：银行通知收到一笔标记为「給与／キユウヨ」的振込入金，属于工资到账线索，不是信用卡消费。');
+     const stamp=field(fields,'transaction_at')||field(fields,'transaction_date');
+     if(stamp)lines.push('银行记载的入账时间：'+stamp.normalized_value+'。');
+     const payer=field(fields,'deposit_from');
+     if(payer)lines.push('入金内容／付款方：'+payer.normalized_value+'（原文记载，未核验实际付款主体）。');
+     const net=field(fields,'net_salary');
+     if(net)lines.push('工资入账金额：'+Number(net.normalized_value).toLocaleString('ja-JP')+' 日元（请核对银行明细；如是手填，原文并未提供这一数额）。');
+     else lines.push('这封邮件没有注明收入金额：可根据银行入出金明细手动填写并确认。系统不会推测工资金额。');
+     lines.push('建议：核对实际银行入账金额、对应日期以及家計簿中是否已经记录；确认后可作为收入候选，避免重复入账。');
+   }else{
+     summary='工资／奖金明细';
+     lines.push('这是什么：工资或奖金明细，应分别看总支给、扣除及实发，不能把应发金额直接视为到账金额。');
    const net=field(fields,'net_salary'),gross=field(fields,'gross_salary'),deduct=field(fields,'total_deductions');
    if(gross)lines.push('应发合计：'+Number(gross.normalized_value).toLocaleString('ja-JP')+' 日元（待核对）。');
    if(deduct)lines.push('扣除合计：'+Number(deduct.normalized_value).toLocaleString('ja-JP')+' 日元（待核对）。');
    if(net)lines.push('实发金额：'+Number(net.normalized_value).toLocaleString('ja-JP')+' 日元（待核对）。');
    lines.push('建议：核对期间、公司名称、实际入账及税社保扣除；工资单不等于银行已到账。');
+   }
  }else if(category==='tax'){
    summary='税金／缴费通知';
    lines.push('这是什么：涉及税金、保险费或其他缴费的文书。先确认是哪一种费用、金额和正式期限。');
@@ -80,9 +102,34 @@ export function explainNotice({text,category,fields}){
    summary='保险通知';
    lines.push('这是什么：保险合同或理赔相关文书。应区分投保、续约、缴费、申请与理赔是否批准。');
  }else if(category==='utility'){
-   summary='水电燃气通知';
-   lines.push('这是什么：生活公共费用通知。请区分账单金额、支付期限和是否已经实际扣款。');
-   if(amount)lines.push('原文金额线索：'+amount+'（待核对）。');
+   const electric=/(?:電気|電力|検針|kWh)/i.test(text);
+   if(electric){
+     summary='电费账单／用电量通知';
+     lines.push('这是什么：日本电费通知，包含计量期间、用电量、该期间显示的电费及本次请款金额。各金额不一定相等，不能混为一笔款项。');
+     const from=field(fields,'meter_period_start'),to=field(fields,'meter_period_end');
+     if(from&&to)lines.push('电费检针期间：'+from.normalized_value+' 至 '+to.normalized_value+'（以原文为准）。');
+     const used=field(fields,'usage_kwh');
+     if(used)lines.push('本期用电量：'+used.normalized_value+' kWh（来自原文）。');
+     const charge=field(fields,'period_charge_jpy');
+     const invoice=field(fields,'amount_jpy');
+     const showYen=x=>Number(x.normalized_value).toLocaleString('ja-JP')+' 日元';
+     if(charge)lines.push('检针期间显示电费：'+showYen(charge)+( /税込/.test(charge.source_quote)?'（原文标记含税）':'')+'；这是期间费用信息，不应替代本次请款总额。');
+     if(invoice)lines.push('本次请款金额：'+showYen(invoice)+( /税込/.test(invoice.source_quote)?'（原文标记含税）':'')+'；这是账单当前列示的请款金额，不代表已经扣款。');
+     if(charge&&invoice&&Number(charge.normalized_value)!==Number(invoice.normalized_value)){
+       const diff=Math.abs(Number(charge.normalized_value)-Number(invoice.normalized_value));
+       lines.push('两项金额相差 '+diff.toLocaleString('ja-JP')+' 日元。原文没有说明差额原因，不能擅自判断是折扣、积分、补贴或税费调整，应查询正式明细。');
+     }
+     const card=field(fields,'card_advance_date');
+     if(card)lines.push('カード立替日：'+card.normalized_value+'。这表示通知所列的信用卡垫付日期，不是缴费截止日，也不能据此断定发卡机构已最终扣款。');
+     const due=field(fields,'due_date');
+     if(due)lines.push('另外，原文明确列出的办理／缴费期限：'+due.normalized_value+'，需核对支付规定。');
+     else lines.push('本段没有明确缴费截止日；检针结束日和卡垫付日期都不能当作截止期限。');
+     lines.push('建议：向电力公司或支付服务查验请款明细与卡交易状态；在家計簿中先核对是否已经记录，避免重复计费。');
+   }else{
+     summary='水电燃气通知';
+     lines.push('这是什么：生活公共费用通知。请区分账单金额、支付期限和是否已经实际扣款。');
+     if(amount)lines.push('原文金额线索：'+amount+'（待核对）。');
+   }
  }else if(category==='travel'||category==='hotel'){
    summary=category==='hotel'?'住宿预订通知':'出行／机票通知';
    lines.push('这是什么：预订或行程通知。预订成功与实际付款、入住或乘机不是同一状态。');

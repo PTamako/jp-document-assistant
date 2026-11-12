@@ -743,6 +743,57 @@ paths:
                   type: boolean
               required:
               - text
+  /api/documents/{documentId}/manual-income:
+    post:
+      tags:
+      - Documents
+      summary: 工资入账邮件缺少金额时由用户根据银行明细手动补录日元金额；不代表原文存在金额，不自动记账
+      operationId: createConfirmedManualSalaryIncome
+      parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount_jpy:
+                  oneOf:
+                  - type: string
+                    description: 正整数日元，可包含逗号
+                  - type: integer
+                    minimum: 1
+                    maximum: 999999999999
+                confirm_bank_amount:
+                  type: boolean
+                  const: true
+              required:
+              - amount_jpy
+              - confirm_bank_amount
+      responses:
+        '200':
+          description: 仅创建本人补录的净工资字段和待确认收入候选，不修改目标账本
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /api/documents/{documentId}/reinterpret:
     post:
       tags:
