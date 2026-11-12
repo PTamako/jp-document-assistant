@@ -49,6 +49,24 @@ const sessions=ref([]),sessionsNext=ref(null);
 
 const fieldLabel={due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称'};
 const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
+const topupAdvice=computed(()=>{
+  if(current.value?.category!=='topup')return null;
+  const fields=Array.isArray(current.value.fields)?current.value.fields:[];
+  const field=key=>fields.find(f=>f.field_key===key&&f.review_state!=='rejected')||null;
+  const amount=field('amount_jpy');
+  const stamp=field('transaction_at');
+  const service=field('service_name');
+  const raw=String(current.value.extracted_text_ja||'');
+  const destination=/Suica/i.test(raw)?'Suica':/PASMO/i.test(raw)?'PASMO':/PayPay/i.test(raw)?'PayPay':'待确认';
+  const amountNumber=Number(amount?.normalized_value);
+  return {
+    amount:Number.isSafeInteger(amountNumber)&&amountNumber>0?amountNumber.toLocaleString('ja-JP')+'円':'待核验',
+    time:stamp?.normalized_value||'待核验',
+    service:service?.normalized_value||'未提取',
+    destination,
+    reviewed:amount?.review_state==='confirmed'||amount?.review_state==='corrected'
+  };
+});
 function documentReviewLabel(d){
  const state=d?.review_status || (
   Array.isArray(d?.fields)&&d.fields.length ?
@@ -753,7 +771,21 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
       <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>原文版本与官方核验</h3><p>原文注明的日期：{{current.source_document_date||'未能确定（请核对原件）'}}</p><p v-if="current.source_date_quote" class="muted">来源：{{current.source_date_quote}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文说明</h3><p class="multiline">{{current.explanation_zh||'当前仅保存原件。图像 OCR 尚未验证，建议使用粘贴文字导入。'}}</p><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解并补充字段</button><p class="fine-print">只补充缺失字段，不覆盖已核验的数据，也不会修改其他 App 的记录。</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
       <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可使用文字导入进行规则提取。</div><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>原文：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
-      <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':'截止日：'+item.payload.due_on}}</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div><p class="fine-print">确认后才写入目标 App。</p></section>
+      <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3>
+        <div v-if="topupAdvice" class="content-card">
+          <h3>家計簿 · 资金转移建议</h3>
+          <p class="muted">这是一笔电子钱包充值，不是消费或新增收入。</p>
+          <p>充值金额：<strong>{{amountVisible?topupAdvice.amount:'••••••'}}</strong> <button class="text-button" @click="amountVisible=!amountVisible">{{amountVisible?'隐藏金额':'显示金额'}}</button></p>
+          <p>完成时间：{{topupAdvice.time}}</p>
+          <p>充值目标：{{topupAdvice.destination}}（请确认家計簿中已登记的充值卡）</p>
+          <p>充值服务：{{topupAdvice.service}}</p>
+          <p>扣款来源：<strong>待本人选择</strong>（不能从充值服务名称推断）</p>
+          <p class="fine-print">当前家計簿安全接口只支持收入／支出，还不能接收资金转移。请先在家計簿手动选择「资产转移／充值」并核对是否已记账；此建议不会自动写入、不会重复记账。</p>
+        </div>
+        <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted">{{item.candidate_kind==='finance'?'收支类型：'+item.payload.kind+'；金额须再次确认':'截止日：'+item.payload.due_on}}</p><button class="secondary small" @click="prepareCandidate(item)">查看预览 / 确认联动</button></div>
+        <p v-if="!topupAdvice&&!detailCandidates.some(c=>['finance','homeflow_task'].includes(c.candidate_kind))" class="muted">暂无待办或财务建议。这不代表邮件识别失败；可在「字段」中核对已提取的信息。</p>
+        <p v-else-if="!topupAdvice" class="fine-print">确认后才写入目标 App。</p>
+      </section>
       <section v-if="detailTab==='study'"><h3 class="section-title">值得记住的日文词语</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id"><strong>{{item.payload.term}}</strong><p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入</button></div><div v-if="!detailCandidates.some(c=>c.candidate_kind==='vocabulary')" class="empty">尚未找到可复用词语。</div></section>
       <section v-if="detailTab==='original'"><div class="content-card"><h3>原文与原件</h3><p class="multiline" v-if="current.extracted_text_ja">{{current.extracted_text_ja}}</p><p v-else class="muted">原文尚未提取，可查看附件。</p><button class="secondary full" @click="editText">人工输入 / 修正 OCR 文字</button><button class="secondary full icon-label" @click="extraFileInput?.click()"><UiIcon name="plus" :size="18"/>添加扫描页或附件</button><input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" /><div class="attachment-row" v-for="(a,i) in current.attachments" :key="a.id"><button class="secondary" @click="showOriginal(a)">查看 · {{a.file_label}}</button><button class="secondary small" :disabled="busy||i===0" :aria-label="`将${a.file_label}上移一页`" @click="moveAttachment(a,-1)"><UiIcon name="arrow-up" :size="16"/></button><button class="secondary small" :disabled="busy||i===current.attachments.length-1" :aria-label="`将${a.file_label}下移一页`" @click="moveAttachment(a,1)"><UiIcon name="arrow-down" :size="16"/></button><button class="secondary small" @click="runOcr(a)"><UiIcon name="scan" :size="16"/>识别文字</button><button class="secondary small danger-text" @click="trashAttachment(a)"><UiIcon name="trash" :size="16"/>移入回收站</button></div></div><p class="fine-print">原件仅在查看时加载。</p></section>
     </div>
