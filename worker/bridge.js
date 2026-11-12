@@ -58,6 +58,25 @@ export function classifyBridgeRejection(target,status,body){
  return {code:value[0],message:value[1],status};
 }
 
+// Only a signed read-only lookup may release an old failed fingerprint.
+// Never assume a timeout means the target ledger did not commit.
+async function lookupKakeboIdempotency(dest,{key,actor,documentId,candidateId}){
+ const payload={source:'jp-document-assistant',source_document_id:documentId,
+  source_candidate_id:candidateId,actor_user_id:actor,idempotency_key:key,
+  payload:{operation:'lookup'}};
+ const raw=JSON.stringify(payload),timestamp=String(Date.now());
+ try{
+  const signature=await hmacHex(dest.secret,timestamp+'\n'+raw);
+  const response=await dest.fetcher(new Request(dest.url,{method:'POST',
+   headers:{'Content-Type':'application/json','X-DA-Timestamp':timestamp,
+    'X-DA-Signature':signature,'Idempotency-Key':key},body:raw}));
+  const data=await response.json().catch(()=>null);
+  if(!response.ok||data?.ok!==true||typeof data.exists!=='boolean')return null;
+  if(data.exists&&(!data.remote_id||typeof data.remote_id!=='string'))return null;
+  return {exists:data.exists,remoteId:data.remote_id||null};
+ }catch{return null;}
+}
+
 async function checkedFields(env,docId){
   const rs=(await env.DB.prepare('SELECT field_key,normalized_value,review_state FROM document_fields WHERE document_id=?').bind(docId).all()).results||[];
   return new Map(rs.filter(x=>['confirmed','corrected'].includes(x.review_state)).map(x=>[x.field_key,x.normalized_value]));
@@ -187,12 +206,33 @@ export async function commitCandidate(request,env,p,id){
   const key=existing?.idempotency_key||`jda:${target}:${id}`;
   const requestPayload={source:'jp-document-assistant',source_document_id:item.document_id,source_candidate_id:id,actor_user_id:remoteUser,idempotency_key:key,payload};
   const raw=JSON.stringify(requestPayload),fingerprint=await hashString(raw),timestamp=String(Date.now());
-  // Never retry an uncertain remote write with a different date, amount or remote user.
-  if(existing?.request_fingerprint&&existing.request_fingerprint!==fingerprint)
-    return failure('RETRY_PAYLOAD_CHANGED','首次发送内容或账号已变化，请先核对目标 App，不允许复用此幂等键发送其他内容',409);
+  const staleBefore=new Date(Date.now()-120000).toISOString();
+  // Changed payloads are prohibited until the owner explicitly confirms the
+  // change AND the target's signed read-only lookup proves no prior entry.
+  if(existing?.request_fingerprint&&existing.request_fingerprint!==fingerprint){
+    if(target!=='kakebo'||existing.state!=='failed'||data.confirm_mapping_change!==true)
+      return failure('RETRY_PAYLOAD_CHANGED','已有发送记录。若要更换分类或支付方式，请勾选核对并重新提交；未自动记账',409);
+    if(existing.updated_at>staleBefore)return failure('SENDING','上次发送尚未结束，请稍后核对家計簿',409);
+    const reconciliation=await lookupKakeboIdempotency(dest,{
+      key,actor:remoteUser,documentId:item.document_id,candidateId:id});
+    if(!reconciliation)return failure('RECONCILIATION_UNAVAILABLE','暂时无法核对家計簿是否已收录，已阻止修改和重复记账',503);
+    const stampNow=isoNow();
+    if(reconciliation.exists){
+      const linked=await run(env.DB,`UPDATE integration_links
+        SET state='linked_existing',remote_id=?,synced_at=?,last_error_code=NULL,updated_at=?
+        WHERE candidate_id=? AND target=? AND request_fingerprint=? AND state='failed'`,
+        reconciliation.remoteId,stampNow,stampNow,id,target,existing.request_fingerprint);
+      if(linked.meta?.changes!==1)return failure('LINK_CONFLICT','同步记录已发生变化，请刷新',409);
+      return json({ok:true,already_synced:true,recovered_prior:true,remote_id:reconciliation.remoteId,target});
+    }
+    const replaced=await run(env.DB,`UPDATE integration_links
+      SET request_fingerprint=?,updated_at=?,last_error_code=NULL
+      WHERE candidate_id=? AND target=? AND request_fingerprint=? AND state='failed'`,
+      fingerprint,stampNow,id,target,existing.request_fingerprint);
+    if(replaced.meta?.changes!==1)return failure('LINK_CONFLICT','同步记录已发生变化，请刷新',409);
+  }
   if(existing&&!existing.request_fingerprint&&existing.attempt_count>0)
     return failure('LEGACY_RETRY_UNVERIFIED','旧联动缺少请求指纹，需人工核对目标 App 后再处理',409);
-  const staleBefore=new Date(Date.now()-120000).toISOString();
   if(existing?.state==='sending'&&existing.updated_at>staleBefore)
     return failure('SENDING','同一候选的联动正在处理中，没有发送第二份请求',409);
   const now=isoNow();
