@@ -67,3 +67,48 @@ test('unsupported file, huge input, corrupt encoding and attachment-only mail fa
   assert.throws(()=>extractEml(eml('From: spam@example.test\nMIME-Version: 1.0\nContent-Type: application/pdf\n\nJVBERi0=')),/没有可读取/);
   await assert.rejects(()=>readLocalText(new File([new Uint8Array([0x81,0xff,0xfe])],'bad.txt')),/无法读取文字编码|字符编码/);
 });
+
+
+test('ISO-2022-JP body and RFC 2047 subject import without Safari ISO decoder',()=>{
+  const raw=Buffer.from('1b244224344d784d51244e242a434e2469243b1b2842','hex'); // ご利用のお知らせ
+  const msg=[
+    'From: statement@example.invalid',
+    'Subject: =?ISO-2022-JP?B?'+raw.toString('base64')+'?=',
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="iso-2022-jp"',
+    'Content-Transfer-Encoding: base64','',raw.toString('base64')
+  ].join('\r\n');
+  const original=globalThis.TextDecoder;
+  globalThis.TextDecoder=class extends original{
+    constructor(label,options){
+      if(String(label).toLowerCase()==='iso-2022-jp')throw new RangeError('unsupported charset on Safari');
+      super(label,options);
+    }
+  };
+  try{
+    const result=extractEml(encoder.encode(msg));
+    assert.equal(result.title,'ご利用のお知らせ');
+    assert.match(result.text,/ご利用のお知らせ/);
+  }finally{globalThis.TextDecoder=original;}
+});
+
+test('slightly malformed ISO-2022-JP escape preserves visible Japanese text',()=>{
+  const raw=Buffer.concat([
+    Buffer.from('1b244224344d784d51244e242a434e2469243b1b2842','hex'),
+    Buffer.from([0x1b]) // incomplete trailing ISO escape in a real mail body
+  ]);
+  const msg=['From: notice@example.invalid','Subject: Notice',
+    'MIME-Version: 1.0','Content-Type: text/plain; charset=iso-2022-jp',
+    'Content-Transfer-Encoding: base64','',raw.toString('base64')].join('\r\n');
+  const result=extractEml(encoder.encode(msg));
+  assert.match(result.text,/ご利用のお知らせ/);
+});
+
+test('mislabeled ISO-2022-JP Gmail text recovers UTF-8, but rejects corrupt binary',()=>{
+  const good=['From: notice@example.invalid','Subject: Notice',
+    'Content-Type: text/plain; charset=iso-2022-jp',
+    'Content-Transfer-Encoding: base64','',Buffer.from('請求金額：1,520円').toString('base64')].join('\r\n');
+  assert.match(extractEml(encoder.encode(good)).text,/請求金額：1,520円/);
+  const corrupt=good.replace(/([A-Za-z0-9+/]{10,}={0,2})$/,Buffer.alloc(120,0xff).toString('base64'));
+  assert.throws(()=>extractEml(encoder.encode(corrupt)),/字符编码|损坏/);
+});
