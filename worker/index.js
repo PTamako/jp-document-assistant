@@ -25,10 +25,14 @@ const dbRun = (db,sql,...args) => db.prepare(sql).bind(...args).run();
 const dbFirst = (db,sql,...args) => db.prepare(sql).bind(...args).first();
 const dbAll = async (db,sql,...args) => (await db.prepare(sql).bind(...args).all()).results || [];
 const batch = (db,statements) => db.batch(statements.map(([sql,...args])=>db.prepare(sql).bind(...args)));
-function protectedResponse(resp){
+function protectedResponse(resp,request){
   if(!resp || resp.status===101)return resp;
   const h=new Headers(resp.headers);
-  h.set('Referrer-Policy','no-referrer');
+  // Browser-restricted Google Picker API keys must receive the website origin
+  // in the Referer header. Suppress paths/queries in cross-origin requests.
+  // Keep all private API responses strict: never send an API URL as referrer.
+  const isPrivateApi=new URL(request.url).pathname.startsWith('/api/');
+  h.set('Referrer-Policy',isPrivateApi?'no-referrer':'strict-origin-when-cross-origin');
   h.set('X-Content-Type-Options','nosniff');
   h.set('X-Frame-Options','DENY');
   h.set('Permissions-Policy','camera=(self), microphone=(), geolocation=()');
@@ -728,7 +732,7 @@ async function route(request,env){
 }
 export default {
   async fetch(request,env){
-    try{return protectedResponse(await route(request,env));}
+    try{return protectedResponse(await route(request,env),request);}
     catch(err){
       if(err?.status)return failure(err.code||'ERROR',err.message,err.status);
       // Intentionally no PII/details in logs.

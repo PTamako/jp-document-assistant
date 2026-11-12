@@ -22,3 +22,17 @@ test('Google OAuth/Picker/Gmail CSP allows required providers but keeps a strict
  assert.ok(!directives['script-src'].includes('*'));
  assert.ok(!directives['connect-src'].includes('*'));
 });
+
+test('Google Picker website-limited API keys receive only the website origin, while private APIs remain no-referrer',async()=>{
+ const meta=/name="referrer" content="([^"]+)"/.exec(html)?.[1];
+ assert.equal(meta,'strict-origin-when-cross-origin');
+ const {default:worker}=await import('../worker/index.js');
+ const assetResponse=await worker.fetch(new Request('https://example.com/'),{
+  ASSETS:{fetch:async()=>new Response('<html>ready</html>',{headers:{'Content-Type':'text/html'}})}
+ });
+ assert.equal(assetResponse.status,200);
+ assert.equal(assetResponse.headers.get('Referrer-Policy'),'strict-origin-when-cross-origin');
+ const privateResponse=await worker.fetch(new Request('https://example.com/api/health'),{});
+ assert.equal(privateResponse.status,200);
+ assert.equal(privateResponse.headers.get('Referrer-Policy'),'no-referrer');
+});
