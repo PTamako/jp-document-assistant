@@ -116,6 +116,9 @@ test('browser OAuth completes Gmail and Drive, even when Google omits optional t
  let calls=0;
  env.GOOGLE_OAUTH_FETCH=async(url,options)=>{
    calls++;
+   // Cloudflare workerd rejects redirect:error before any network traffic.
+   assert.equal(options.redirect,'manual');
+   assert.equal(options.cache,'no-store');
    if(String(url)==='https://oauth2.googleapis.com/token'){
      const payload=new URLSearchParams(options.body);
      assert.equal(payload.get('client_id'),env.GOOGLE_OAUTH_CLIENT_ID);
@@ -153,6 +156,30 @@ test('browser OAuth completes Gmail and Drive, even when Google omits optional t
    assert.equal(status.data.progress,null);
  }
  assert.equal(calls,4);
+});
+
+test('Google OAuth rejects 3xx manually instead of following unsafe redirects',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GOOGLE_OAUTH_CLIENT_ID='12345-test.apps.googleusercontent.com';
+ env.GOOGLE_OAUTH_CLIENT_SECRET='test-only-client-secret';
+ env.GOOGLE_TOKEN_ENCRYPTION_KEY='a'.repeat(64);
+ let calls=0;
+ env.GOOGLE_OAUTH_FETCH=async(url,options)=>{
+   calls++;
+   assert.equal(options.redirect,'manual');
+   assert.equal(String(url),'https://oauth2.googleapis.com/token');
+   return new Response(null,{status:302,headers:{Location:'https://example.test/unsafe'}});
+ };
+ const started=await req(env,'/api/google/oauth/start',{method:'POST',...auth(owner),data:{service:'gmail'}});
+ const state=new URL(started.data.authorization_url).searchParams.get('state');
+ const callback=await req(env,'/api/google/oauth/callback?state='+state+'&code=mock-test-authorization-code');
+ const html=await callback.response.text();
+ assert.match(html,/Google 授权服务返回异常跳转/);
+ assert.equal(calls,1,'redirect must not be followed');
+ const row=env.DB.sql.prepare('SELECT status,error_code FROM google_oauth_pending').get();
+ assert.equal(row.status,'failed');
+ assert.equal(row.error_code,'GOOGLE_UNEXPECTED_REDIRECT');
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM google_oauth_grants').get().n,0);
 });
 
 test('browser OAuth shows safe reason for invalid_client without leaking Google response',async()=>{
