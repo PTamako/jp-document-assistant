@@ -128,22 +128,31 @@ function mimeDataPart(part,depth=0){
 export function gmailPayloadToDocument(payload){
   const headers=payload?.headers;
   const candidates=mimeDataPart(payload);
-  const body=candidates.find(p=>p.kind==='text/plain')||candidates.find(p=>p.kind==='text/html');
-  if(!body)throw new Error('邮件没有可复制的文字正文，附件未下载，请复制文本手动导入');
-  const data=body.data;
-  if(!data||data.length>1400000||!/^[A-Za-z0-9_-]+={0,2}$/.test(data))
-    throw new Error('邮件正文为空、过大或编码损坏');
-  const base64=data.replace(/-/g,'+').replace(/_/g,'/');
-  const padded=base64.padEnd(Math.ceil(base64.length/4)*4,'=');
-  // Wrap Gmail body in a synthetic inert RFC822 envelope and reuse safe MIME
-  // parser. Never request attachmentId or load HTML images/resources.
-  const source=['From: '+header(headers,'from'),'Subject: '+header(headers,'subject'),
-    'Date: '+header(headers,'date'),'MIME-Version: 1.0',
-    'Content-Type: '+body.kind+'; charset="'+body.charset+'"',
-    'Content-Transfer-Encoding: base64','',''+padded].join('\r\n');
-  const doc=extractEml(new TextEncoder().encode(source));
-  return {...doc,source_type:'gmail',
-    warning:'只读取你选择邮件的文字正文；附件和追踪图片未读取。发件人/日期未经验证，保存前请人工核对。'};
+  // A damaged plain-text part must not hide a valid HTML alternative. Read
+  // candidates in preference order; HTML is reduced to inert text by extractEml.
+  const bodies=[...candidates.filter(p=>p.kind==='text/plain'),
+    ...candidates.filter(p=>p.kind==='text/html')];
+  if(!bodies.length)throw new Error('邮件没有可复制的文字正文，附件未下载，请复制文本手动导入');
+  let lastError;
+  for(const body of bodies){
+    try{
+      const data=body.data;
+      if(!data||data.length>1400000||!/^[A-Za-z0-9_-]+={0,2}$/.test(data))
+        throw new Error('邮件正文为空、过大或编码损坏');
+      const base64=data.replace(/-/g,'+').replace(/_/g,'/');
+      const padded=base64.padEnd(Math.ceil(base64.length/4)*4,'=');
+      // Wrap a selected Gmail part in an inert RFC822 envelope. No attachment
+      // requests, HTML execution or remote images.
+      const source=['From: '+header(headers,'from'),'Subject: '+header(headers,'subject'),
+        'Date: '+header(headers,'date'),'MIME-Version: 1.0',
+        'Content-Type: '+body.kind+'; charset="'+body.charset+'"',
+        'Content-Transfer-Encoding: base64','',''+padded].join('\r\n');
+      const doc=extractEml(new TextEncoder().encode(source));
+      return {...doc,source_type:'gmail',
+        warning:'只读取你选择邮件的文字正文；附件和追踪图片未读取。发件人/日期未经验证，保存前请人工核对。'};
+    }catch(error){lastError=error;}
+  }
+  throw lastError||new Error('邮件正文无法解码');
 }
 export async function gmailSelected(accessToken,id,fetcher=fetch){
   if(!validId(id))throw new Error('所选 Gmail 邮件 ID 无效');
