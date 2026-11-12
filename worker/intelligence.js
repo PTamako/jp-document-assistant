@@ -192,7 +192,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
 export async function getDocumentAiCache(db,doc){
  if(!doc.extracted_text_ja)return null;
  const row=await first(db,'SELECT provider,source_sha,model_id,prompt_version,state,result_json FROM document_ai_analyses WHERE document_id=?',doc.id);
- if(!row||row.provider!==(doc.ai_provider||'none')||row.source_sha!==await hashString(doc.extracted_text_ja)||row.prompt_version!==PROMPT||row.model_id!==modelFor(row.provider))return null;
- return {status:row.state,provider:row.provider,model:row.model_id,
+ if(!row||row.provider!==(doc.ai_provider||'none')||row.source_sha!==await hashString(doc.extracted_text_ja)||!([PROMPT,'document-v1-20261112'].includes(row.prompt_version))||row.model_id!==modelFor(row.provider))return null;
+ return {status:row.state,provider:row.provider,model:row.model_id,analysis_version:row.prompt_version,
   result:row.state==='success'?JSON.parse(row.result_json):null};
 }
