@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {drivePickerConfig,fetchPickedDriveFile,pickGoogleDriveFile,googlePickerReady} from '../web/src/google-drive-picker.js';
+import {drivePickerConfig,fetchPickedDriveFile,pickGoogleDriveFile,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization} from '../web/src/google-drive-picker.js';
 
 const credentials={VITE_GOOGLE_CLIENT_ID:'123-abcdef.apps.googleusercontent.com',
  VITE_GOOGLE_API_KEY:'AIzaabcdefghijklmnopqrstuvwxyz012345',
@@ -91,6 +91,57 @@ test('Drive missing Google library fails immediately instead of hanging in busy 
   assert.equal(googlePickerReady(),false);
   await assert.rejects(()=>pickGoogleDriveFile(credentials),/组件尚未准备好/);
  }finally{
+  if(original===undefined)delete globalThis.window;else globalThis.window=original;
+ }
+});
+
+test('a previously granted Drive token is reused for multiple picks without automatic revocation',async()=>{
+ const original=globalThis.window;
+ forgetDriveAuthorization();
+ let granted=0,pickerBuilds=0,revoked=0,chosenToken='';
+ const callback=(event)=>{};
+ const picker={
+  Action:{CANCEL:'cancel',PICKED:'picked',ERROR:'error'},
+  ViewId:{DOCS:'docs'},
+  PickerBuilder:function(){
+   pickerBuilds++;
+   let cb;
+   const builder={
+    addView(){return builder},
+    setOAuthToken(value){chosenToken=value;return builder},
+    setDeveloperKey(){return builder},
+    setAppId(){return builder},
+    setOrigin(){return builder},
+    setCallback(fn){cb=fn;return builder},
+    build(){return {setVisible(){cb({action:'cancel'})}};}
+   };
+   return builder;
+  }
+ };
+ globalThis.window={
+  location:{origin:'https://example.test'},
+  google:{picker,accounts:{oauth2:{
+   initTokenClient(conf){return {requestAccessToken(options){
+    granted++;assert.equal(options.prompt,'');
+    conf.callback({access_token:'token_not_shared_with_other_sessions',expires_in:3600});
+   }}},
+   hasGrantedAllScopes(){return true},
+   revoke(){revoked++}
+  }}}
+ };
+ try{
+  assert.equal(driveAuthorizationReady(),false);
+  assert.equal(await pickGoogleDriveFile(credentials),null);
+  assert.equal(driveAuthorizationReady(),true);
+  assert.equal(await pickGoogleDriveFile(credentials),null);
+  assert.equal(granted,1,'cached access token should bypass the second Google popup');
+  assert.equal(pickerBuilds,2);
+  assert.equal(chosenToken,'token_not_shared_with_other_sessions');
+  assert.equal(revoked,0,'file picker cancel/success must NOT revoke OAuth approval');
+  forgetDriveAuthorization();
+  assert.equal(driveAuthorizationReady(),false);
+ }finally{
+  forgetDriveAuthorization();
   if(original===undefined)delete globalThis.window;else globalThis.window=original;
  }
 });
