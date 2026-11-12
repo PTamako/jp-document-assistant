@@ -179,11 +179,18 @@ async function analyzeStored(env,doc,force=false){
   await batch(env.DB,stmts);
   return {cached:false,result};
 }
+function verifyDocumentAiChoice(provider,geminiConsent){
+  if(!['none','cloudflare','gemini'].includes(provider))bad('请为本份文书选择 AI 引擎或仅规则分析','INVALID_AI_PROVIDER',400);
+  if(provider==='gemini'&&geminiConsent!==true)bad('Gemini 免费 API 需针对本份文书明确授权','AI_PRIVACY_CONFIRM_REQUIRED',400);
+  return provider;
+}
 async function handleImportText(request,env,p){
   const data=await readJson(request);
+  const provider=verifyDocumentAiChoice(data.ai_provider,data.gemini_consent);
   if(!validString(data?.text,100000)||!['text','mail_forward','gmail','google_drive','local_file'].includes(data.source_type)||!['analyze_only','summary'].includes(data.retention))bad('文字、来源或保存方式无效');
   if(data.visibility && !['private','shared'].includes(data.visibility))bad('可见范围无效');
   const raw=data.text.trim(),parsed=parseJapaneseText(raw);
+  if(provider==='gemini'&&requiresPrivateDefault(parsed.category,raw))bad('私人或敏感文书不能使用 Gemini 免费 API，请为此文件选择 Cloudflare 或仅规则分析','SENSITIVE_GEMINI_BLOCKED',422);
   if(data.retention==='analyze_only')return json({ok:true,saved:false,analysis:parsed});
   const sha=await hashString(raw), now=isoNow();
   const previous=await dbFirst(env.DB,`SELECT id FROM documents WHERE owner_id=? AND content_sha256=? AND lifecycle='active'`,p.user_id,sha);
@@ -194,7 +201,8 @@ async function handleImportText(request,env,p){
   const visibility=(data.visibility==='shared'&&!sensitive)?'shared':'private';
   await batch(env.DB,[
     ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,extracted_text_ja,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,visibility,parsed.category,title,raw,'summary',sha,'draft',now,now],
-    ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,data.source_type,sha,now]
+    ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,data.source_type,sha,now],
+    ['UPDATE documents SET ai_provider=?,ai_consent_at=? WHERE id=?',provider,provider==='gemini'?now:null,id]
   ]);
   const doc=await ownedDocument(env.DB,id,p);
   await analyzeStored(env,doc);
@@ -216,6 +224,7 @@ async function handleFileImport(request,env,p){
   const len=Number(request.headers.get('Content-Length')||0);
   if(len>MAX_FILE_BYTES+10000)bad('文件超出 8MB 限制','FILE_TOO_LARGE',413);
   const form=await request.formData(),file=form.get('file');
+  const provider=verifyDocumentAiChoice(form.get('ai_provider'),form.get('gemini_consent')==='true');
   if(!file||typeof file.arrayBuffer!=='function'||file.size<=0||file.size>MAX_FILE_BYTES)bad('请选择不超过 8MB 的文件');
   if(form.get('retention')!=='original')bad('文件上传仅支持明确选择保存原件，普通分析请粘贴可复制文字');
   const ext=String(file.name||'').toLowerCase();
@@ -273,7 +282,8 @@ async function handleFileImport(request,env,p){
   try{await batch(env.DB,[
     ['INSERT INTO documents(id,owner_id,household_id,visibility,category,title,extracted_text_ja,import_mode,content_sha256,analysis_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,p.user_id,p.household_id,'private','other',label,extracted||null,'original',sha,extracted?'draft':'needs_review',now,now],
     ['INSERT INTO document_sources(id,document_id,source_type,content_sha256,created_at) VALUES(?,?,?,?,?)',randomToken(16),id,sourceKind,sha,now],
-    ['INSERT INTO attachments(id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',randomToken(16),id,oid,label,0,sha,now,now]
+    ['INSERT INTO attachments(id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',randomToken(16),id,oid,label,0,sha,now,now],
+    ['UPDATE documents SET ai_provider=?,ai_consent_at=? WHERE id=?',provider,provider==='gemini'?now:null,id]
   ]);}catch{
     // If a transient D1 failure follows a successful PUT, storage_objects is retained for compensating cleanup.
     bad('已上传但保存索引失败，请联系管理员检查存储清理','METADATA_FAILED',503);
