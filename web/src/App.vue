@@ -997,6 +997,10 @@ async function commitApprovedCandidate(){
  busy.value=true;
  const id=candidateDraft.id,docId=current.value.id;
  const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value};
+ if(body.kind==='finance'&&ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value){
+  problem(new Error('这笔消费有历史失败记录，请先勾选核对原记录后再提交'));
+  busy.value=false;return;
+ }
  if(body.kind==='finance'&&(!ledgerOptions.value.categories.some(x=>x.value===body.category)||
    !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){problem(new Error('请从家計簿同步的分类和支付方式中选择'));busy.value=false;return;}
  let confirmed=false,feedback='';
@@ -1435,12 +1439,12 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <div class="section-head"><h3>从备份恢复</h3></div><button class="secondary full" @click="backupInput?.click()">选择 ZIP / 加密 JDA 文件</button><input ref="backupInput" type="file" accept=".zip,.jda,application/zip" class="visually-hidden" @change="selectBackup" />
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='restoreBackup'"><h2>确认恢复备份</h2><p>检查恢复内容。仅在点击确认后写入 D1 和私有 R2，不重发三个 App 的历史财务/任务/学习记录。</p><div v-for="(x,i) in restorePreview" :key="i" class="recycle-row"><div class="item-info"><strong>{{x.title}}</strong><small>{{x.action==='skip_duplicate'?'已存在 · 跳过':'恢复资料'}}{{x.has_original_reference?' · 原件按备份内容恢复':''}}</small></div></div><div class="sheet-actions"><button class="secondary" @click="sheet='backup'">取消</button><button class="primary" :disabled="busy" @click="confirmRestore">确认恢复</button></div></template>
-      <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2><p class="fine-print">只有目标应用独立授权、服务端签名与账户映射配置完成才能写入。重复提交沿用同一幂等键。</p>
-        <label v-if="candidateDraft.kind==='finance'" class="form-label">实际付款 / 到账日期<input v-model="candidateDraft.date" type="date" /></label>
+      <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2><p class="fine-print">核对后才会记账；重复提交不会新增第二笔。</p>
+        <label v-if="candidateDraft.kind==='finance'" class="form-label">{{current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}<input v-model="candidateDraft.date" type="date" /></label>
         <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
-        <p v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="fine-print">此候选曾同步失败；更改此前的分类或支付方式时，系统会先在家計簿只读核对是否已有相应记账。</p><label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>如需修改原提交内容，我同意核对目标账本后再提交，且不重复记账</label>
+        <label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>这笔消费曾同步失败。我同意先核对家計簿旧记录，确认不重复后再提交。</label><p v-if="candidateDraft.kind==='finance'&&ledgerAttempted&&!ledgerMappingChangeConfirmed" class="fine-print" role="status">请先勾选上方确认项，才能提交这笔旧记录。</p>
         <label v-if="candidateDraft.kind==='finance'" class="form-label">备注<input v-model="candidateDraft.note" /></label>
         <label v-if="candidateDraft.kind==='homeflow_task'" class="form-label">任务名称<input v-model="candidateDraft.title" maxlength="120" /></label><p v-if="candidateDraft.kind==='homeflow_task'" class="fine-print">请先在「字段」核验原文日期；同步后创建的是 HomeFlow 待办，不会把配送时间当作缴费期限。</p>
         <div v-if="candidateDraft.kind==='homeflow_task'"><div class="choice-form-field"><span class="choice-field-label">任务可见范围</span><button type="button" class="choice-field-control" @click="openChoice('taskVisibility')"><span>{{choiceLabel('taskVisibility')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></div>
@@ -1450,7 +1454,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
         <p v-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)))" @click="commitApprovedCandidate">本人确认后同步</button></div></template>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
   </div>
