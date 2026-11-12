@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {drivePickerConfig,fetchPickedDriveFile,pickGoogleDriveFile} from '../web/src/google-drive-picker.js';
+import {drivePickerConfig,fetchPickedDriveFile,pickGoogleDriveFile,googlePickerReady} from '../web/src/google-drive-picker.js';
 
 const credentials={VITE_GOOGLE_CLIENT_ID:'123-abcdef.apps.googleusercontent.com',
  VITE_GOOGLE_API_KEY:'AIzaabcdefghijklmnopqrstuvwxyz012345',
@@ -60,4 +60,37 @@ test('Google file ID injection, unrecognized formats and rejected account permis
  await assert.rejects(()=>fetchPickedDriveFile({id:'validFileName_123',name:'invoice.pdf',mimeType:'application/pdf'},'token',{
   fetcher:async()=>new Response('no access',{status:403})}),/没有授予/);
  assert.equal(calls,0);
+});
+
+test('Drive popup request starts synchronously from a prepared click and reports popup block',async()=>{
+ const original=globalThis.window;
+ let popupCalled=0;
+ globalThis.window={
+  location:{origin:'https://jp-document-assistant.example.test'},
+  google:{
+   accounts:{oauth2:{
+    initTokenClient(config){return {requestAccessToken(){popupCalled++;config.error_callback({type:'popup_failed_to_open'});}}},
+    revoke(){}
+   }},
+   picker:{PickerBuilder:function(){}}
+  }
+ };
+ try{
+  assert.equal(googlePickerReady(),true);
+  const promise=pickGoogleDriveFile(credentials);
+  assert.equal(popupCalled,1,'Google requestAccessToken must run in the original click stack');
+  await assert.rejects(promise,/授权弹窗被拦截|Safari/);
+ }finally{
+  if(original===undefined)delete globalThis.window;else globalThis.window=original;
+ }
+});
+test('Drive missing Google library fails immediately instead of hanging in busy state',async()=>{
+ const original=globalThis.window;
+ globalThis.window={google:{}};
+ try{
+  assert.equal(googlePickerReady(),false);
+  await assert.rejects(()=>pickGoogleDriveFile(credentials),/组件尚未准备好/);
+ }finally{
+  if(original===undefined)delete globalThis.window;else globalThis.window=original;
+ }
 });

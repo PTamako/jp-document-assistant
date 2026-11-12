@@ -75,3 +75,16 @@ test('OAuth scope contract explicitly excludes previously granted scopes and bro
   assert.doesNotMatch(source,/localStorage|indexedDB|sessionStorage|document\.cookie/);
   assert.match(source,/gmailForget\(\)/);
 });
+
+test('Gmail popup request is synchronous, and OAuth error/timeout always settle',()=>{
+ const src=readFileSync(new URL('../web/src/gmail-import.js',import.meta.url),'utf8');
+ const begin=src.indexOf('export function gmailAuthorize()');
+ const end=src.indexOf('export async function gmailRevoke()',begin);
+ assert.ok(begin>=0&&end>begin);
+ const auth=src.slice(begin,end);
+ assert.doesNotMatch(auth,/await preloadGmailIdentity/);
+ assert.match(auth,/client\.requestAccessToken/);
+ assert.match(auth,/error_callback:/);
+ assert.match(auth,/setTimeout\(/);
+ assert.match(auth,/clearTimeout\(/);
+});
