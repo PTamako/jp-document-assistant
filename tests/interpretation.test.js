@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseJapaneseText,interpretCriticalClauses} from '../worker/analysis.js';
+import {parseJapaneseText,interpretCriticalClauses,extractCampaignActionHints} from '../worker/analysis.js';
 
 const suicaEmail = [
   'Suicaポケット受取完了：モバイルSuica',
@@ -85,4 +85,38 @@ test('interpretation is limited and cannot claim that a quoted condition was ver
  assert.equal(evidence.length,1);
  assert.equal(evidence[0].verified,false);
  assert.ok(evidence[0].source_quote.length>0);
+});
+
+test('ONIGO campaign extracts the explicitly dated 11/15(日) offer deadline without inventing a purchase',()=>{
+ const text=[
+ '件名：【よりどり2点5%OFF】セブンプレミアムゴールドのお肉加工品がお得！',
+ '今なら対象商品がよりどり2点で5%OFF！11/15(日)までの期間限定！',
+ '▼LINE ID連携で500円OFFクーポンプレゼント▼',
+ 'キャンペーン・お得情報メール'
+ ].join('\n');
+ const p=parseJapaneseText(text,{referenceYear:2026});
+ assert.equal(p.category,'campaign');
+ const partial=p.fields.find(f=>f.field_key==='due_date_partial');
+ const due=p.fields.find(f=>f.field_key==='due_date');
+ assert.equal(partial?.normalized_value,'11/15(日)');
+ assert.match(partial?.source_quote||'',/11\/15\(日\)まで/);
+ assert.equal(due?.normalized_value,'2026-11-15');
+ assert.equal(due?.review_state,'unreviewed');
+ assert.match(due?.source_quote||'',/年份自动补全/);
+ assert.equal(p.fields.some(f=>['amount_jpy','net_salary'].includes(f.field_key)),false,'discount is not a transaction');
+ const hints=extractCampaignActionHints(text);
+ assert.equal(hints.length,1);
+ assert.match(hints[0].description_zh,/500 日元优惠券/);
+ assert.equal(hints[0].requires_confirmation,true);
+});
+test('campaign dates need a deadline hint and weekday must agree with assumed year',()=>{
+ const noHint=parseJapaneseText('キャンペーンのお知らせ：商品番号 11/15 の紹介。',{referenceYear:2026});
+ assert.equal(noHint.fields.some(f=>f.field_key==='due_date'),false);
+ const wrongWeekday=parseJapaneseText('キャンペーン：11/15(土)までの期間限定！',{referenceYear:2026});
+ assert.equal(wrongWeekday.fields.find(f=>f.field_key==='due_date_partial')?.normalized_value,'11/15(土)');
+ assert.equal(wrongWeekday.fields.some(f=>f.field_key==='due_date'),false);
+ const withoutCoupon=extractCampaignActionHints('LINE IDを連携できます。');
+ assert.deepEqual(withoutCoupon,[]);
+ const ordinary=parseJapaneseText('宅配予定：11/15(日)までにお届けします。',{referenceYear:2026});
+ assert.equal(ordinary.fields.some(f=>f.field_key==='due_date_partial'),false);
 });
