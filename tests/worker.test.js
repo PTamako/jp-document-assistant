@@ -1368,3 +1368,82 @@ test('electricity mail import previews only invoiced 1770 JPY, not 1966 metering
  assert.equal(now.fields.find(x=>x.field_key==='amount_jpy')?.id,amount.id);
  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
 });
+
+
+test('future delivery notice creates one HomeFlow suggestion; only confirmed delivery date authorizes bridge',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const original=['佐川急便 お届け予定日時','2099/10/12　AM8:00～12:00','※ご都合の良い日時をご指定ください。'].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+   source_type:'text',retention:'summary',text:original,title:'配達予定の通知'
+ }});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const docId=imported.data.document_id;
+ const detail=(await req(env,'/api/documents/'+docId,auth(owner))).data.document;
+ assert.equal(detail.category,'delivery');
+ assert.equal(detail.fields.find(x=>x.field_key==='event_date')?.normalized_value,'2099-10-12');
+ assert.equal(detail.fields.some(x=>x.field_key==='due_date'),false);
+ const getCandidates=async()=>(await req(env,'/api/documents/'+docId+'/candidates',auth(owner))).data.items;
+ const candidate=(await getCandidates()).find(x=>x.candidate_kind==='homeflow_task');
+ assert.ok(candidate);
+ assert.equal(candidate.payload.task_type,'delivery');
+ assert.equal(candidate.payload.date_field_key,'event_date');
+ assert.equal(candidate.payload.delivery_window,'08:00～12:00');
+ assert.equal(candidate.payload.due_on,'2099-10-12');
+ let calls=0;
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{homeflow:'test_homeflow_owner'}});
+ env.HOMEFLOW_BRIDGE_SECRET='integration-test-bridge-secret-abcdefgh';
+ env.HOMEFLOW_BRIDGE_SERVICE={async fetch(r){
+   const body=JSON.parse(await r.text());
+   assert.equal(body.payload.dueOn,'2099-10-12');
+   assert.match(body.payload.title,/08:00～12:00/);
+   calls++;
+   return Response.json({ok:true,remote_id:'delivery-task-created'});
+ }};
+ const opts={method:'POST',...auth(owner),data:{
+   confirm:'CONFIRM_TASK',title:candidate.payload.title,visibility:'private'
+ },extraHeaders:{'Idempotency-Key':'delivery_test_key_20991012'}};
+ const denied=await req(env,'/api/candidates/'+candidate.id+'/commit',opts);
+ assert.equal(denied.response.status,409);
+ assert.equal(calls,0);
+ const event=detail.fields.find(x=>x.field_key==='event_date');
+ const approve=await req(env,'/api/fields/'+event.id,{method:'PATCH',...auth(owner),data:{review_state:'confirmed',normalized_value:'2099-10-12'}});
+ assert.equal(approve.response.status,200,JSON.stringify(approve.data));
+ const sent=await req(env,'/api/candidates/'+candidate.id+'/commit',opts);
+ assert.equal(sent.response.status,200,JSON.stringify(sent.data));
+ assert.equal(calls,1);
+ const second=await req(env,'/api/candidates/'+candidate.id+'/commit',opts);
+ assert.equal(second.data.already_synced,true);
+ assert.equal(calls,1);
+});
+test('reinterpret backfills one future delivery suggestion and leaves prior candidate IDs unchanged',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const old=['お届け予定日時','2099/10/12　AM8:00～12:00','ご都合のよい日時をご指定ください'].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text:old}});
+ assert.equal(imported.response.status,201);
+ const id=imported.data.document_id;
+ // Pretend pre-fix parser stored the date field but no HomeFlow proposal.
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task'").run(id);
+ const first=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ assert.equal(first.response.status,200,JSON.stringify(first.data));
+ const firstCandidates=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ const reminders=firstCandidates.filter(x=>x.candidate_kind==='homeflow_task');
+ assert.equal(reminders.length,1);
+ const twice=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ assert.equal(twice.response.status,200,JSON.stringify(twice.data));
+ const second=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.filter(x=>x.candidate_kind==='homeflow_task');
+ assert.equal(second.length,1);
+ assert.equal(second[0].id,reminders[0].id);
+});
+test('past delivery mail cannot add a HomeFlow candidate even after reinterpreting',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const old='佐川急便 お届け予定日時\n2026/10/12（月） AM8:00～12:00';
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text:old}});
+ assert.equal(imported.response.status,201);
+ const id=imported.data.document_id;
+ for(let i=0;i<2;i++){
+   if(i)assert.equal((await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}})).response.status,200);
+   const candidates=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+   assert.equal(candidates.some(x=>x.candidate_kind==='homeflow_task'),false);
+ }
+});
