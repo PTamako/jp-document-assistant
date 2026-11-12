@@ -2041,6 +2041,66 @@ test('previously confirmed split-line card mail backfills one finance candidate 
  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM integration_links').get().n),0);
 });
 
+test('verified SMBC transaction date appears in Today without a false missing deadline',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const content=[
+  '件名：ご利用のお知らせ【三井住友カード】',
+  'お客様のカードご利用内容をお知らせいたします。',
+  '◇利用日：2026/05/28 19:06',
+  '◇利用先：セブン－イレブン',
+  '◇利用取引：買物',
+  '◇利用金額：151円'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+  data:{text:content,source_type:'text',retention:'summary'}});
+ assert.equal(imported.response.status,201);
+ const document=(await req(env,'/api/documents/'+imported.data.document_id,auth(owner))).data.document;
+ const timestamp=document.fields.find(f=>f.field_key==='transaction_at');
+ assert.equal(timestamp.normalized_value,'2026-05-28 19:06');
+ const confirm=await req(env,'/api/fields/'+timestamp.id,{method:'PATCH',...auth(owner),
+  data:{normalized_value:'2026-05-28 19:06',review_state:'confirmed'}});
+ assert.equal(confirm.response.status,200);
+ const today=await req(env,'/api/today?limit=10',auth(owner));
+ assert.equal(today.response.status,200);
+ const item=today.data.items.find(d=>d.id===imported.data.document_id);
+ assert.ok(item,'reviewable card authorization is listed on Today');
+ assert.equal(item.category,'card_spend');
+ assert.equal(item.verified_transaction_at,'2026-05-28 19:06');
+ assert.equal(item.due_date,null);
+});
+test('ledger candidate preview fetches registered categories and payment sources via signed read-only request',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+  data:{text:'いつも三井住友カードをご利用いただきありがとうございます。\nカードのご利用内容です\nご利用日時：2026/11/08 13:58\nマクドナルドモバイルオーダー（買物） 1,520円',
+   source_type:'text',retention:'summary'}});
+ assert.equal(imported.response.status,201);
+ const id=imported.data.document_id;
+ const candidate=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.find(x=>x.candidate_kind==='finance');
+ assert.ok(candidate);
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'allowed-owner'}});
+ env.KAKEBO_BRIDGE_SECRET='signed-test-long-secret-for-ledger-options-123';
+ let catalogCalls=0;
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(request){
+  catalogCalls++;
+  const raw=await request.text(),stamp=request.headers.get('X-DA-Timestamp');
+  assert.equal(request.headers.get('X-DA-Signature'),await hmacHex(env.KAKEBO_BRIDGE_SECRET,stamp+'\n'+raw));
+  const data=JSON.parse(raw);
+  assert.equal(data.payload.operation,'options');
+  assert.equal(data.payload.entryType,'expense');
+  assert.equal(data.actor_user_id,'allowed-owner');
+  return Response.json({ok:true,categories:[{value:'饮食料品',label:'飲食料品'}],
+   payment_sources:[{value:'三井住友カード',label:'三井住友カード'}]});
+ }};
+ const preview=await req(env,'/api/candidates/'+candidate.id+'/preview',auth(owner));
+ assert.equal(preview.response.status,200,JSON.stringify(preview.data));
+ assert.equal(preview.data.available,true);
+ assert.equal(preview.data.ledger_options.categories[0].value,'饮食料品');
+ assert.equal(preview.data.ledger_options.categories[0].label,'飲食料品');
+ assert.equal(preview.data.ledger_options.paymentSources[0].value,'三井住友カード');
+ assert.equal(catalogCalls,1);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM integration_links').get().n),0);
+});
 test('Gmail code-model grants remain encrypted and user-bound; only selected messages are read',async()=>{
  const env=makeEnv(),owner=await boot(env);
  const noConfig=await req(env,'/api/google/gmail/status',auth(owner));

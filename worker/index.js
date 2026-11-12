@@ -622,7 +622,11 @@ async function route(request,env){
 WHEN NOT EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.review_state='unreviewed') THEN 'reviewed'
 WHEN EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.review_state!='unreviewed') THEN 'partial'
 ELSE 'unreviewed' END review_status,
-      (SELECT f.normalized_value FROM document_fields f WHERE f.document_id=d.id AND f.field_key='due_date' LIMIT 1) due_date
+      (SELECT f.normalized_value FROM document_fields f WHERE f.document_id=d.id AND f.field_key='due_date' LIMIT 1) due_date,
+      (SELECT f.normalized_value FROM document_fields f
+        WHERE f.document_id=d.id AND f.field_key IN ('transaction_at','transaction_date')
+          AND f.review_state IN ('confirmed','corrected')
+        ORDER BY CASE f.field_key WHEN 'transaction_at' THEN 0 ELSE 1 END LIMIT 1) verified_transaction_at
       FROM documents d WHERE d.lifecycle='active' AND d.archived_at IS NULL AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))
       AND (d.analysis_status='needs_review' OR EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.field_key='due_date'))
       ORDER BY CASE WHEN due_date IS NULL THEN 1 ELSE 0 END,due_date ASC,d.created_at DESC LIMIT ? OFFSET ?`,p.user_id,p.household_id,limit+1,offset);
