@@ -36,6 +36,9 @@ const explanationText=computed(()=>chineseExplanation(aiAnalysis.value?.explanat
 const aiStatusLabel={success:'AI 已分析',pending:'AI 处理中',failed:'AI 上次分析失败'};
 const aiFailureLabels={
  gemini_quota_or_rate_limited:'Gemini 配额或请求频率受限',
+ gemini_daily_limit:'Gemini 今日 20 次已用完（美西午夜重置）',
+ gemini_minute_limit:'Gemini 每分钟最多 5 次，请稍后重试',
+ gemini_budget_unavailable:'Gemini 次数暂无法核验，已停止调用',
  gemini_access_denied:'Gemini 密钥、权限或地区受限',
  gemini_model_unavailable:'Gemini 模型暂不可用',
  gemini_invalid_request:'Gemini 请求参数有误',
@@ -119,8 +122,8 @@ const choices={
  visibility:{title:'可见范围',items:[{value:'all',label:'全部'},{value:'mine',label:'我拥有的'},{value:'shared',label:'家庭共享'}]},
  archived:{title:'归档状态',items:[{value:'active',label:'未归档'},{value:'archived',label:'已归档'},{value:'all',label:'全部'}]},
  favorite:{title:'收藏',items:[{value:'all',label:'全部'},{value:'yes',label:'仅收藏'}]},
- aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini'}]},
- docAiProvider:{title:'当前文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini'}]},
+ aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 3.6 Flash'}]},
+ docAiProvider:{title:'当前文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 3.6 Flash'}]},
  textSource:{title:'文书来源',items:[{value:'text',label:'粘贴文本'},{value:'mail_forward',label:'苹果邮件复制 / 转发'},{value:'gmail',label:'Gmail 逐封选择'},{value:'google_drive',label:'Google Drive 复制'},{value:'local_file',label:'本地文档文本'}]},
  textRetention:{title:'保存方式',items:[{value:'summary',label:'保存文字和分析结果'},{value:'analyze_only',label:'仅分析，不保存'}]},
  importOcrEngine:{title:'识别方式',items:[{value:'local',label:'本机 PaddleOCR'},{value:'workers_ai',label:'Workers AI 图片 OCR'},{value:'ocr_space',label:'OCR.space'}]},
@@ -1064,7 +1067,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="loadUsage">刷新服务用量 <UiIcon name="refresh-cw" :size="17"/></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
-        <div class="info-note" v-if="usage">Workers AI 解读 {{usage.document_ai_utc_day?.calls??0}}/{{usage.document_ai_utc_day?.limit??0}} · Workers AI OCR {{usage.app_utc_day?.calls??0}}/{{usage.app_utc_day?.limit??0}} · OCR.space {{usage.ocr_space_utc_day?.calls??0}}/{{usage.ocr_space_utc_day?.limit??0}}（今日）</div>
+        <div class="info-note" v-if="usage">Gemini 3.6 {{usage.gemini_daily?.calls??0}}/{{usage.gemini_daily?.limit??20}}（两人共用·美西日） · Workers AI 解读 {{usage.document_ai_utc_day?.calls??0}}/{{usage.document_ai_utc_day?.limit??0}} · Workers AI OCR {{usage.app_utc_day?.calls??0}}/{{usage.app_utc_day?.limit??0}} · OCR.space {{usage.ocr_space_utc_day?.calls??0}}/{{usage.ocr_space_utc_day?.limit??0}}</div>
         <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
@@ -1094,7 +1097,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <div class="content-card explain-panel">
           <div class="explain-heading">
             <h3>中文讲解</h3>
-            <button class="explain-provider" type="button" @click="openDocAiProvider" aria-label="选择这份文书的 AI 引擎">{{({cloudflare:'Workers AI',gemini:'Gemini',none:'仅规则'})[current.ai_provider]||'仅规则'}}<UiIcon name="chevron-right" :size="15"/></button>
+            <button class="explain-provider" type="button" @click="openDocAiProvider" aria-label="选择这份文书的 AI 引擎">{{({cloudflare:'Workers AI',gemini:'Gemini 3.6 Flash',none:'仅规则'})[current.ai_provider]||'仅规则'}}<UiIcon name="chevron-right" :size="15"/></button>
           </div>
           <div class="explain-actions">
             <button v-if="current.ai_provider!=='none'" class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button>

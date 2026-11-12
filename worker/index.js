@@ -14,6 +14,7 @@ import { oauthCallback,handleBrowserGoogle } from './google-browser-oauth.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {workersAiImportPreview} from './ocr-import-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
+import {geminiQuotaUsage} from './gemini-budget.js';
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
 import { validateOfficeBytes } from '../web/src/document-text.js';
@@ -673,12 +674,14 @@ ELSE 'unreviewed' END review_status,
     const aiUsage=await dbFirst(env.DB,'SELECT calls FROM ai_analysis_daily WHERE day_utc=?',dayUtc);
     const analysisLimitRaw=Number(env.AI_ANALYSIS_DAILY_LIMIT??2);
     const analysisLimit=Number.isSafeInteger(analysisLimitRaw)?Math.max(0,Math.min(5,analysisLimitRaw)):0;
+    const geminiUsage=await geminiQuotaUsage(env.DB);
     return json({local_today:usage||{ai_calls:0,imported_files:0},
       app_utc_day:{day_utc:dayUtc,calls:summary?.calls||0,reserved:summary?.reserved||0,limit:appLimit},
       document_ai_utc_day:{day_utc:dayUtc,calls:aiUsage?.calls||0,limit:analysisLimit},
+      gemini_daily:geminiUsage,
       ocr_space_utc_day:{day_utc:dayUtc,calls:ocrSpaceUsage?.calls||0,limit:spaceLimit},
       cloudflare_account_remaining:null,cloudflare_account_remaining_status:'unknown',
-      note:'Workers AI OCR、文书 AI、OCR.space 分开计数；不代表供应商账号实际剩余额度'});
+      note:'文书助手内的用量，不含 Google 项目的其他 API 调用'});
   }
   const exportOriginal=path.match(/^\/api\/backups\/original\/([a-f0-9]{32})\/([a-f0-9]{32})$/i);
   if(method==='GET'&&exportOriginal)return backupOriginal(env,p,exportOriginal[1],exportOriginal[2]);
