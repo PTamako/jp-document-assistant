@@ -170,7 +170,8 @@ test('AI engine is chosen and consented per document, never globally or invoked 
  const sensitive=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
    title:'工资',text:'給与明細 差引支給額 120000円',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
  }});
- assert.equal(sensitive.response.status,422,JSON.stringify(sensitive.data));
+ assert.equal(sensitive.response.status,201,JSON.stringify(sensitive.data));
+ assert.equal((await doc(sensitive.data.document_id)).ai_provider,'gemini');
 });
 
 test('Japanese yearless deadline and action are real review fields, never a guessed HomeFlow due date',async()=>{
