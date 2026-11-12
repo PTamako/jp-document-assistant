@@ -10,6 +10,7 @@ import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
+import { oauthCallback,handleBrowserGoogle } from './google-browser-oauth.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
@@ -512,8 +513,11 @@ async function route(request,env){
     return json({ok:true,initialized:Number(state?.count||0)>0});
   }
   if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
+  // The callback deliberately needs no browser cookie: one-time state binds it to the PWA user.
+  if(method==='GET'&&path==='/api/google/oauth/callback')return oauthCallback(request,env,url);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
+  if(path.startsWith('/api/google/oauth/')||path.startsWith('/api/google/drive/'))return handleBrowserGoogle(request,env,p,url);
   if(path.startsWith('/api/google/gmail/'))return handleGoogleGmail(request,env,p,path,url);
   if(method==='GET'&&path==='/api/calendar/status')return calendarStatus(env,p);
   if(method==='POST'&&path==='/api/calendar/subscription')return createCalendarSubscription(request,env,p);
