@@ -33,6 +33,8 @@ const aiStatusLabel={success:'AI 已分析',pending:'AI 处理中',failed:'AI �
 const swipeOpenId=ref(''),swipeTrashTarget=ref(null);
 const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),localTextInput=ref(null),localImportNote=ref(''),inputMode=ref('text');
 const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original'),fileSource=ref('local_file'),ocrProgress=ref('');
+// Consent is per selected file/page; never persisted in settings or retained after closing the import sheet.
+const importOcrSpaceConsent=ref(false),importOcrSpacePage=ref(1),importPdfPages=ref(1);
 const drivePickerAvailable=!!drivePickerConfig();
 const iosStandalonePwa=isIosStandalonePwa();
 const mainSiteUrl=typeof window==='undefined'?'':window.location.origin+'/';
@@ -430,7 +432,7 @@ async function saveDocAiProvider(){
  try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
  closeSheet();await openDoc(id);flash('已保存这份文书的 AI 选择，尚未调用 AI');}catch(e){problem(e);}finally{busy.value=false;}
 }
-function closeSheet(){missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function primeGooglePicker(){
   if(!drivePickerAvailable||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
   drivePickerLoadingUi.value=true;
@@ -475,6 +477,7 @@ async function parseSelectedFileWithOcr(file,epoch){
     }
     if(!unchanged())return;
     fileText.value=result.text||'';
+    if(isPdf)importPdfPages.value=Math.max(1,Number(result.pages_read)||1);
     fileWarning.value=result.warning||(
       isImage?'已由本机 PaddleOCR 提取候选文字，请核对姓名、金额、日期和漏行。':'');
     if(isPdf&&fileSource.value==='google_drive'){
@@ -494,7 +497,7 @@ async function parseSelectedFileWithOcr(file,epoch){
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;
   fileDraft.value=file;fileSource.value='local_file';sheet.value='import';inputMode.value='file';
-  fileText.value='';fileWarning.value='';ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;
+  fileText.value='';fileWarning.value='';ocrProgress.value='';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;aiProvider.value='';geminiConsent.value=false;
   const supported=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name)||/^image\/(?:jpeg|png|webp)$/.test(file.type);
   fileRetention.value=/(?:\.pdf$)/i.test(file.name)||/^image\//.test(file.type)?'original':'summary';
   if(!supported)return;
@@ -523,7 +526,7 @@ async function importFromGoogleDrive(){
       inputMode.value='text';
     }else{
       fileDraft.value=file;fileSource.value='google_drive';inputMode.value='file';
-      fileText.value='';fileWarning.value='';
+      fileText.value='';fileWarning.value='';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;
       const isTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
       fileRetention.value=/\.pdf$/i.test(file.name)||/^image\//.test(file.type)?'original':isTextLayer?'summary':'original';
       if(isTextLayer||/^image\/(?:jpeg|png|webp)$/.test(file.type))
@@ -543,6 +546,37 @@ async function importLocalText(event){
     textDraft.text=result.text;textDraft.title=result.title;textDraft.source_type=result.source_type;
     inputMode.value='text';localImportNote.value=result.warning;sheet.value='import';
   }catch(e){problem(e);}finally{busy.value=false;if(localTextInput.value)localTextInput.value.value='';}
+}
+async function runImportOcrSpace(){
+ if(!fileDraft.value||busy.value||!importOcrSpaceConsent.value)return;
+ const selected=fileDraft.value,epoch=accountEpoch.snapshot();
+ if(!(/\\.pdf$/i.test(selected.name)||selected.type==='application/pdf'))return;
+ const page=Number(importOcrSpacePage.value);
+ if(!Number.isSafeInteger(page)||page<1||page>importPdfPages.value){
+   problem(new Error('请选择当前 PDF 中有效的页码'));return;
+ }
+ busy.value=true;
+ try{
+   ocrProgress.value='正在本机将 PDF 第 '+page+' 页转换为小于 900KB 的图片（尚未上传）…';
+   const {renderPdfOcrPreview}=await import('./pdf-text.js');
+   const rendered=await renderPdfOcrPreview(selected,{pageNumber:page,maxBytes:900*1024});
+   accountEpoch.assertCurrent(epoch);
+   if(fileDraft.value!==selected)return;
+   ocrProgress.value='已同意发送第 '+page+' 页至 OCR.space Engine 3，识别中…';
+   const form=new FormData();
+   form.append('file',rendered.blob,'scanned-page.jpg');
+   form.append('confirm_ocr_space','true');
+   form.append('confirm_private_upload','true');
+   const answer=await api('/api/ocr-space/preview',{method:'POST',body:form,form:true});
+   accountEpoch.assertCurrent(epoch);
+   if(fileDraft.value!==selected)return;
+   const candidate=String(answer.text||'').trim();
+   if(!candidate)throw new Error('OCR.space 没有返回可用文字');
+   fileText.value=fileText.value.trim()?fileText.value.trim()+'\n\n'+candidate:candidate;
+   fileWarning.value='OCR.space 已返回第 '+page+' 页的日文候选。请核对姓名、金额、日期和漏行后再保存；其他页不会自动识别。';
+   flash('备用 OCR 已识别第 '+page+' 页，文字已填入下方可编辑区域');
+ }catch(e){problem(e);fileWarning.value='OCR.space 本次识别未完成：'+String(e?.message||'未知错误').slice(0,180);}
+ finally{if(fileDraft.value===selected)ocrProgress.value='';busy.value=false;}
 }
 async function retryLocalOcr(){
  if(!fileDraft.value||busy.value)return;
@@ -931,7 +965,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeou
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
   <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button>
   <div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print" role="status">{{fileWarning}}</p><p v-if="fileDraft && /\\.pdf$/i.test(fileDraft.name) && !fileText.trim()" class="fine-print">本机识别失败时，可以先保存 PDF 原件，再在「原文」页点击「OCR.space 备用识别」，你同意后才会发送至第三方。</p><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print" role="status">{{fileWarning}}</p><div v-if="fileDraft && (/\\.pdf$/i.test(fileDraft.name)||fileDraft.type==='application/pdf')" class="content-card"><h3>扫描 PDF · OCR.space 备用识别</h3><p class="fine-print">本机 PaddleOCR 失败也可以直接使用。仅将你选择的一页转成压缩 JPEG，确认后发送至第三方 OCR.space；不必先上传或保存 PDF 到 R2。每日有免费调用限制。</p><label class="form-label">要识别的 PDF 页码（共 {{importPdfPages}} 页）<input type="number" min="1" :max="importPdfPages" step="1" v-model.number="importOcrSpacePage"/></label><label class="check-row"><input type="checkbox" v-model="importOcrSpaceConsent"/>我同意将所选扫描页发送至 OCR.space 服务器，并确认其中不包含不应外传的个人或机密资料。</label><button class="secondary full" type="button" :disabled="busy||!importOcrSpaceConsent" @click="runImportOcrSpace"><UiIcon name="scan" :size="17"/>OCR.space 备用识别当前页</button><p class="fine-print">识别结果先填入下方文本框，由你修改确认；不会直接同步 HomeFlow、知学或家計簿。</p></div><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
 
         <div class="choice-form-field"><span class="choice-field-label">这份文书使用的 AI</span><button type="button" class="choice-field-control" @click="openChoice('aiProvider')"><span>{{choiceLabel('aiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p class="fine-print">每份文书单独选择，不保存全局偏好。首次导入在服务已启用时尝试 AI 分析，同版本命中缓存不会重复调用。</p>
