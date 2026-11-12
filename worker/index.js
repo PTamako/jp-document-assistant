@@ -40,7 +40,7 @@ function protectedResponse(resp,request){
   h.set('X-Content-Type-Options','nosniff');
   h.set('X-Frame-Options','DENY');
   h.set('Permissions-Policy','camera=(self), microphone=(), geolocation=()');
-  if(!h.has('Content-Security-Policy'))h.set('Content-Security-Policy',"default-src 'self'; img-src 'self' blob: data:; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://gmail.googleapis.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://apis.google.com https://cdn.jsdelivr.net https://paddle-model-ecology.bj.bcebos.com; font-src 'self'; object-src 'none'; frame-src 'self' blob: https://accounts.google.com https://docs.google.com https://drive.google.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  if(!h.has('Content-Security-Policy'))h.set('Content-Security-Policy',"default-src 'self'; img-src 'self' blob: data:; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://gmail.googleapis.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://apis.google.com https://cdn.jsdelivr.net https://paddle-model-ecology.bj.bcebos.com; font-src 'self'; object-src 'none'; frame-src 'self' blob: https://accounts.google.com https://docs.google.com https://drive.google.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
   return new Response(resp.body,{status:resp.status,statusText:resp.statusText,headers:h});
 }
 function requireBinding(env,key){ if(!env[key]) bad(`尚未配置 ${key}，操作不可用`,'NOT_CONFIGURED',503); }
@@ -173,7 +173,7 @@ async function analyzeStored(env,doc,force=false){
       JSON.stringify({kind,amount_jpy:Number(amount.normalized_value),currency:'JPY',payment_confirmed:false,category:result.category,
         transaction_date:stamp?.normalized_value?.slice(0,10)||null,merchant:merchant?.normalized_value||null,note}),now,now]);
   }
-  const due=result.fields.find(f=>f.field_key==='due_date');
+  const due=result.fields.find(f=>f.field_key==='due_date'&&!f.source_quote?.startsWith('年份自动补全'));
   const deliveryTask=deliveryTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
   if(deliveryTask){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify(deliveryTask),now,now]);}
   else if(due){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify({title:`确认：${doc.title.slice(0,40)}`,due_on:due.normalized_value,visibility:doc.visibility,requires_confirmation:true}),now,now]);}
@@ -688,15 +688,21 @@ ELSE 'unreviewed' END review_status,
       if(!partialMatch||Number(digits(partialMatch[1]))!==Number(body.due_date.slice(5,7))||
         Number(digits(partialMatch[2]))!==Number(body.due_date.slice(8,10)))
         bad('所选日期的月日必须与原文一致，年份必须人工确认','DATE_SOURCE_MISMATCH',422);
-      const already=await dbFirst(env.DB,"SELECT id FROM document_fields WHERE document_id=? AND field_key='due_date'",id);
-      if(already)bad('完整截止日期已存在，请直接核对该字段','DATE_ALREADY_EXISTS',409);
+      const already=await dbFirst(env.DB,"SELECT id,review_state,source_quote FROM document_fields WHERE document_id=? AND field_key='due_date'",id);
+      // Auto-filled year remains a proposal. It can be replaced by an explicitly
+      // confirmed year; real dates or already reviewed values cannot be reset.
+      if(already&&(!already.source_quote?.startsWith('年份自动补全')||already.review_state!=='unreviewed'))
+        bad('截止日期已核验或来自完整原文，不能使用年份补全操作','DATE_ALREADY_EXISTS',409);
       const now=isoNow(),fieldId=randomToken(16),candidateId=randomToken(16);
       const source='人工核实年份（原文只写月日）：'+String(partial.source_quote||partial.normalized_value).slice(0,160);
       // Never regenerate or replace any prior integration key. Remote tasks
       // are created only after a second, separate explicit confirmation.
       await batch(env.DB,[
-       ['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,source_quote,review_state,reviewed_by,updated_at) SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM document_fields WHERE document_id=? AND field_key=?)',
-        fieldId,id,'due_date',body.due_date,'date',source,'corrected',p.user_id,now,id,'due_date'],
+       already?
+        ['UPDATE document_fields SET normalized_value=?,source_quote=?,review_state=?,reviewed_by=?,updated_at=? WHERE id=? AND document_id=? AND review_state=? AND source_quote LIKE ?',
+         body.due_date,source,'corrected',p.user_id,now,already.id,id,'unreviewed','年份自动补全%']:
+        ['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,source_quote,review_state,reviewed_by,updated_at) SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM document_fields WHERE document_id=? AND field_key=?)',
+         fieldId,id,'due_date',body.due_date,'date',source,'corrected',p.user_id,now,id,'due_date'],
        ['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind=?)',
         candidateId,id,'homeflow_task',JSON.stringify({title:'确认：'+doc.title.slice(0,40),due_on:body.due_date,visibility:doc.visibility,requires_confirmation:true,date_field_key:'due_date'}),now,now,id,'homeflow_task']
       ]);

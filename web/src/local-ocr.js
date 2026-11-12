@@ -6,7 +6,10 @@ export const ORT_WASM_VERSION='1.31.1';
 const ORT_WASM_BASE='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/';
 // Only the WASM binary is remote. JS/OCR runtime remains same-origin and
 // cannot upload any scanned document images to the CDN.
-const wasmPaths={wasm:ORT_WASM_BASE+'ort-wasm-simd-threaded.jsep.wasm'};
+// Official PaddleOCR SDK/ONNX Runtime expects a WASM asset URL PREFIX,
+ // not {wasm: url}. The previous object left the runtime unable to resolve
+ // its required binaries on iOS Safari.
+const wasmPaths=ORT_WASM_BASE;
 let enginePromise;
 export function normalizeOcrItems(results){
   const items=Array.isArray(results?.[0]?.items)?results[0].items:[];
@@ -21,14 +24,20 @@ export async function recognizeJapaneseImage(file,{loadSdk}={}){
   if(!enginePromise){
     enginePromise=(async()=>{
       const loader=loadSdk||(()=>import('@paddleocr/paddleocr-js'));
-      const {PaddleOCR}=await loader();
+      let sdk;
+      try{sdk=await loader();}catch(e){throw Error('加载本机 PaddleOCR 运行代码失败：'+String(e?.message||e).slice(0,100));}
+      const {PaddleOCR}=sdk;
       if(!PaddleOCR||typeof PaddleOCR.create!=='function')throw Error('PaddleOCR SDK 不可用');
-      return PaddleOCR.create({lang:'japan',ocrVersion:'PP-OCRv6',
-        ortOptions:{backend:'wasm',numThreads:1,wasmPaths}});
+      try{
+        return await PaddleOCR.create({lang:'japan',ocrVersion:'PP-OCRv6',
+          ortOptions:{backend:'wasm',numThreads:1,wasmPaths}});
+      }catch(e){throw Error('加载日文模型或 ONNX WASM 失败（请检查网络、Safari 内存）：'+String(e?.message||e).slice(0,140));}
     })().catch(error=>{enginePromise=null;throw error;});
   }
   const engine=await enginePromise;
-  const results=await engine.predict(file);
+  let results;
+  try{results=await engine.predict(file);}
+  catch(e){throw Error('PaddleOCR 图片推理失败：'+String(e?.message||e).slice(0,140));}
   const parsed=normalizeOcrItems(results);
   if(!parsed.text)throw Error('未识别出可用文字；请换清晰图片或手动补充');
   return {...parsed,engine:'PaddleOCR PP-OCRv6 Small',needs_review:true};

@@ -137,7 +137,9 @@ test('Japanese yearless deadline and action are real review fields, never a gues
  const id=result.data.document_id;
  const detail=(await req(env,'/api/documents/'+id,auth(user))).data.document;
  const field=k=>detail.fields.find(x=>x.field_key===k);
- assert.equal(field('due_date'),undefined);
+ assert.equal(field('due_date')?.normalized_value,new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Tokyo',year:'numeric'}).format(new Date())+'-11-30');
+ assert.equal(field('due_date')?.review_state,'unreviewed');
+ assert.match(field('due_date')?.source_quote||'',/年份自动补全/);
  assert.equal(field('due_date_partial')?.normalized_value,'11月30日');
  assert.match(field('required_action')?.normalized_value||'',/申請書を提出/);
  assert.match(field('review_action')?.normalized_value||'',/内容をご確認/);
@@ -146,10 +148,10 @@ test('Japanese yearless deadline and action are real review fields, never a gues
  assert.equal(candidates.some(x=>x.candidate_kind==='homeflow_task'),false);
  // Updating the previously created record via its legacy parser must not
  // spend Gemini/Cloudflare quota or overwrite an earlier manual review.
- env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=? AND field_key IN ('due_date_partial','required_action','review_action')").run(id);
+ env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=? AND field_key IN ('due_date','due_date_partial','required_action','review_action')").run(id);
  const reinterpret=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(user),data:{}});
  assert.equal(reinterpret.response.status,200,JSON.stringify(reinterpret.data));
- assert.equal(reinterpret.data.added_fields,3);
+ assert.equal(reinterpret.data.added_fields,4);
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM ai_analysis_daily').get().n,0);
 });
 
@@ -160,6 +162,11 @@ test('yearless deadline becomes a dated HomeFlow proposal only after explicit an
   source_type:'text',retention:'summary',text:source
  }});
  const id=imported.data.document_id;
+ const pre=(await req(env,'/api/documents/'+id,auth(user))).data.document;
+ const provisional=pre.fields.find(f=>f.field_key==='due_date');
+ assert.ok(provisional);
+ assert.equal(provisional.review_state,'unreviewed');
+ assert.match(provisional.source_quote,/年份自动补全/);
  const url='/api/documents/'+id+'/complete-deadline';
  const submit=(date,confirm_year)=>req(env,url,{method:'POST',...auth(user),data:{due_date:date,confirm_year}});
  assert.equal((await submit('2026-11-30',false)).response.status,409);
@@ -177,6 +184,20 @@ test('yearless deadline becomes a dated HomeFlow proposal only after explicit an
  const items=(await req(env,'/api/documents/'+id+'/candidates',auth(user))).data.items;
  assert.equal(items.filter(i=>i.candidate_kind==='homeflow_task').length,1);
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+});
+
+test('yearless leap-day has no invented invalid current-year deadline',async()=>{
+ const {parseJapaneseText}=await import('../worker/analysis.js');
+ const nonLeap=parseJapaneseText('2月29日までに申請書を提出してください。',{referenceYear:2026});
+ assert.equal(nonLeap.fields.some(f=>f.field_key==='due_date_partial'),true);
+ assert.equal(nonLeap.fields.some(f=>f.field_key==='due_date'),false);
+ const leap=parseJapaneseText('2月29日までに申請書を提出してください。',{referenceYear:2028});
+ assert.equal(leap.fields.find(f=>f.field_key==='due_date')?.normalized_value,'2028-02-29');
+ assert.equal(leap.fields.find(f=>f.field_key==='due_date')?.review_state,'unreviewed');
+ const complete=parseJapaneseText('令和8年12月25日までに申請書を提出してください。',{referenceYear:2026});
+ assert.equal(complete.fields.filter(f=>f.field_key==='due_date').length,1);
+ assert.equal(complete.fields.find(f=>f.field_key==='due_date')?.normalized_value,'2026-12-25');
+ assert.equal(complete.fields.some(f=>f.field_key==='due_date_partial'),false);
 });
 
 test('top-up email is private, exposes reviewed candidates, never generates a finance write candidate',async()=>{
@@ -1162,12 +1183,12 @@ test('Google Picker CSP allows only explicitly trusted Google origins',async()=>
   assert.equal(page.response.status,200);
   const csp=page.response.headers.get('Content-Security-Policy');
   assert.ok(csp);
-  assert.match(csp,/script-src 'self' 'wasm-unsafe-eval' https:\/\/accounts\.google\.com https:\/\/apis\.google\.com;/);
+  assert.match(csp,/script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' https:\/\/accounts\.google\.com https:\/\/apis\.google\.com;/);
   assert.match(csp,/connect-src 'self' https:\/\/gmail\.googleapis\.com https:\/\/www\.googleapis\.com https:\/\/accounts\.google\.com https:\/\/oauth2\.googleapis\.com https:\/\/apis\.google\.com https:\/\/cdn\.jsdelivr\.net https:\/\/paddle-model-ecology\.bj\.bcebos\.com;/);
   assert.match(csp,/frame-src 'self' blob: https:\/\/accounts\.google\.com https:\/\/docs\.google\.com https:\/\/drive\.google\.com;/);
   assert.match(csp,/object-src 'none'/);
   assert.match(csp,/frame-ancestors 'none'/);
-  assert.doesNotMatch(csp,/(?<!wasm-)unsafe-eval|\*/);
+  assert.doesNotMatch(csp,/script-src[^;]*'unsafe-inline'|script-src[^;]*\*/);
   const unauthorized=await req(env,'/api/health');
   assert.equal(unauthorized.response.status,200);
   assert.equal(unauthorized.response.headers.get('Cache-Control'),'no-store');

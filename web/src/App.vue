@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick, watch } from 'vue';
 import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
@@ -54,7 +54,7 @@ const aiProvider=ref(''),geminiConsent=ref(false),docAiProvider=ref('none'),docG
 const sessions=ref([]),sessionsNext=ref(null);
 
 const missingYearDateDraft=ref(''),missingYearConfirmed=ref(false);
-const fieldLabel={due_date_partial:'截止日期（年份待确认）',required_action:'必须办理的事项',review_action:'需要确认的内容',merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
+const fieldLabel={due_date_partial:'原文截止日（月日）',required_action:'必须办理的事项',review_action:'需要确认的内容',merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
 const candidateLabel={finance:'家計簿财务预览',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
 const canManualSalary=computed(()=>current.value?.category==='salary'&&!current.value?.fields?.some(f=>f.field_key==='net_salary')&&/(?:入金内容|振込(?:による)?ご入金|振込入金)/.test(String(current.value?.extracted_text_ja||'').normalize('NFKC')));
 const topupAdvice=computed(()=>{
@@ -160,6 +160,17 @@ function closeNestedSheet(){
 
 const showDue=(v)=>v?String(v):'日期待确认';
 const pageData=computed(()=>pages[activeTab.value]||{items:[],next:null,loaded:true});
+// Non-blocking global banners disappear in three seconds. Actual confirmation
+// dialogs never expire automatically: the user must choose Confirm/Cancel.
+let noticeTimeout=null,errorTimeout=null;
+watch(notice,value=>{
+  if(noticeTimeout!==null)clearTimeout(noticeTimeout);
+  noticeTimeout=value?setTimeout(()=>{notice.value='';noticeTimeout=null;},3000):null;
+});
+watch(error,value=>{
+  if(errorTimeout!==null)clearTimeout(errorTimeout);
+  errorTimeout=value?setTimeout(()=>{error.value='';errorTimeout=null;},3000):null;
+});
 function flash(message){notice.value=message;error.value='';}
 function problem(err){error.value=err?.message || '操作失败'; notice.value='';}
 async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={}){
@@ -381,12 +392,23 @@ async function selectTab(tab){
 async function searchDocs(){pages.docs.loaded=false;await loadTab('docs');closeSheet();}
 async function loadUsage(){try{usage.value=await api('/api/usage');}catch(e){problem(e);}}
 async function cleanupStorage(){busy.value=true;try{const result=await api('/api/storage/cleanup-orphans',{method:'POST',body:{}});flash(result.pending?'部分 R2 文件清理失败，请稍后手动重试':`已清理 ${result.removed} 个无引用原件；不扫描 R2 全桶`);}catch(e){problem(e);}finally{busy.value=false;}}
-async function openDoc(id){
+async function openDoc(id,{preserveTab=false,preserveScroll=false}={}){
   swipeOpenId.value='';
-  detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];detailTab.value='explain';
+  const sameDocument=preserveTab&&current.value?.id===id;
+  const tabBefore=detailTab.value;
+  const scrollBefore=preserveScroll&&sameDocument
+    ?document.querySelector('.detail-body')?.scrollTop:null;
+  detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];
+  if(!sameDocument)detailTab.value='explain';
   try{
     const d=await api(`/api/documents/${id}`);current.value=d.document;
     const c=await api(`/api/documents/${id}/candidates`);detailCandidates.value=c.items||[];
+    if(sameDocument)detailTab.value=tabBefore;
+    if(scrollBefore!==null&&scrollBefore!==undefined){
+      await nextTick();
+      const container=document.querySelector('.detail-body');
+      if(container)container.scrollTop=scrollBefore;
+    }
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
@@ -455,6 +477,9 @@ async function parseSelectedFileWithOcr(file,epoch){
     fileText.value=result.text||'';
     fileWarning.value=result.warning||(
       isImage?'已由本机 PaddleOCR 提取候选文字，请核对姓名、金额、日期和漏行。':'');
+    if(isPdf&&fileSource.value==='google_drive'){
+      fileWarning.value='Google Drive PDF 已成功下载并读取（'+(result.pages_read||'?')+' 页）。'+fileWarning.value;
+    }
     if(isPdf&&(result.ocr_pages_attempted||result.pages_without_text?.length)){
       // Keep scanned originals available for source verification.
       fileRetention.value='original';
@@ -568,10 +593,10 @@ async function saveManualSalary(){
   flash('人工工资金额已保存；收入候选已生成，确认后才会同步家計簿');
  }catch(e){problem(e);}finally{busy.value=false;}
 }
-function startField(field){fieldDraft.id=field.id;fieldDraft.value=field.normalized_value||'';fieldDraft.state=field.review_state==='unreviewed'?'confirmed':field.review_state;fieldDraft.confirmRemote=false;sheet.value='field';}
+function startField(field){if(field.field_key==='due_date'&&field.review_state==='unreviewed'&&field.source_quote?.startsWith('年份自动补全')){openCompleteDeadline();return;}fieldDraft.id=field.id;fieldDraft.value=field.normalized_value||'';fieldDraft.state=field.review_state==='unreviewed'?'confirmed':field.review_state;fieldDraft.confirmRemote=false;sheet.value='field';}
 async function saveField(){busy.value=true;try{
   const result=await api(`/api/fields/${fieldDraft.id}`,{method:'PATCH',body:{normalized_value:fieldDraft.value,review_state:fieldDraft.state,confirm_remote_unchanged:fieldDraft.confirmRemote}});
-  const id=current.value.id;sheet.value='';await openDoc(id);
+  const id=current.value.id;sheet.value='';await openDoc(id,{preserveTab:true,preserveScroll:true});
   refreshDocumentViews();
   if(pages[activeTab.value])await loadTab(activeTab.value);
   flash(result.linked_records_unchanged?'本地字段已修改；已同步的目标 App 记录不会自动改变，请前往目标 App 核对':'字段已保存');
@@ -639,14 +664,18 @@ async function appendFiles(event){const files=Array.from(event.target.files||[])
  busy.value=true;try{for(const f of files){const optimized=await compressImage(f);const form=new FormData();form.append('file',optimized,optimized.name);form.append('retention','original');await api(`/api/documents/${current.value.id}/attachments`,{method:'POST',body:form,form:true});}
  await openDoc(current.value.id);flash(`已添加 ${files.length} 页原件，尚待人工确认识别内容`);
  }catch(e){problem(e);}finally{busy.value=false;if(extraFileInput.value)extraFileInput.value.value='';}}
-function openCompleteDeadline(){missingYearDateDraft.value='';missingYearConfirmed.value=false;sheet.value='confirmDeadline';}
+function openCompleteDeadline(){
+ const proposed=current.value?.fields?.find(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全'));
+ missingYearDateDraft.value=proposed?.normalized_value||'';
+ missingYearConfirmed.value=false;sheet.value='confirmDeadline';
+}
 async function confirmCompleteDeadline(){
  if(!current.value||busy.value||!missingYearConfirmed.value||!missingYearDateDraft.value)return;
  busy.value=true;const id=current.value.id;
  try{
   await api('/api/documents/'+id+'/complete-deadline',{method:'POST',body:{due_date:missingYearDateDraft.value,confirm_year:true}});
   sheet.value='';missingYearDateDraft.value='';missingYearConfirmed.value=false;
-  await openDoc(id);flash('已按你核实的年份补全截止日；HomeFlow 待办仍需再次确认后同步');
+  await openDoc(id,{preserveTab:true,preserveScroll:true});flash('已按你确认的年份保存截止日；HomeFlow 待办仍需再次确认后同步');
  }catch(e){problem(e);}finally{busy.value=false;}
 }
 async function refreshInterpretation(){
@@ -784,7 +813,7 @@ function todayReviewBadge(d){
 const labelFor=(key)=>key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 onMounted(async()=>{await boot();if(!user.value)await refreshInitStatus();});
-onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
+onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
 
 <template>
@@ -872,7 +901,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
       <div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div>
       <section v-if="detailTab==='explain'"><div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card"><h3>文件日期与官方核验</h3><p>文件日期线索：{{current.source_document_date||'未能确定（请核对文件）'}}</p><p>当前官方有效性：{{current.official_current_verified_at||'尚未核验'}}</p><p class="fine-print">此处只记录上传文书的日期线索，不自动推断你符合政策或优惠资格。</p></div><div class="content-card"><h3>中文讲解</h3><p class="fine-print">本份文书 AI 引擎：{{({cloudflare:'Cloudflare AI',gemini:'Gemini 免费 API',none:'仅规则分析'})[current.ai_provider]||'仅规则分析'}} · {{current.ai_analysis?.status ? (aiStatusLabel[current.ai_analysis.status]||'等待核对') : '规则讲解可用'}}</p><button class="secondary full" type="button" @click="openDocAiProvider">为这份文书选择 AI</button><button v-if="current.ai_provider!=='none'" class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 智能解读 / 使用缓存</button><p class="multiline">{{chineseExplanation(aiAnalysis?.explanation_zh||current.explanation_zh)||'目前没有可供讲解的文字内容，请检查识别结果。'}}</p><div v-if="aiAnalysis?.important_points_zh?.length" class="stack"><h3>AI 提炼重点（需核对原文）</h3><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">• {{line}}</p></div><button class="secondary full icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="17"/>重新讲解并补充字段</button><p class="fine-print">只补充缺失字段，不覆盖已核验的数据，也不会修改其他 App 的记录。</p></div><p class="fine-print">仅解释上传版本；政策、法律与活动的现行有效性未经官方核实。</p></section>
-      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可点击「重新讲解并补充字段」提取原文中的日期及办理事项。</div><button v-if="current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&!current.fields?.some(f=>f.field_key==='due_date')" class="secondary full" @click="openCompleteDeadline">核实年份并补全截止日期（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
+      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可点击「重新讲解并补充字段」提取原文中的日期及办理事项。</div><button v-if="current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&(!current.fields?.some(f=>f.field_key==='due_date')||current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全')))" class="secondary full" @click="openCompleteDeadline">确认／修改默认年份（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{field.field_key==='due_date'&&field.source_quote?.startsWith('年份自动补全')?'截止日期（按今年自动补全·待确认）':labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">账单金额不是已支付。工资单金额也不是已到账；必须对照原件确认。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div v-if="canManualSalary" class="content-card"><p>已识别工资入账通知，但邮件没有金额。</p><button class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写到账金额，生成家計簿收入建议</button></div>
         <div v-if="topupAdvice" class="content-card">
           <h3>家計簿 · 资金转移建议</h3>
@@ -902,13 +931,13 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
   <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button>
   <div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
-        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+        <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="ocrProgress" class="fine-print" role="status">{{ocrProgress}}</p><p v-if="fileWarning" class="fine-print" role="status">{{fileWarning}}</p><p v-if="fileDraft && /\\.pdf$/i.test(fileDraft.name) && !fileText.trim()" class="fine-print">本机识别失败时，可以先保存 PDF 原件，再在「原文」页点击「OCR.space 备用识别」，你同意后才会发送至第三方。</p><label v-if="/\.(pdf|docx|xlsx|pptx|jpe?g|png|webp)$/i.test(fileDraft?.name||'')" class="form-label">提取的文字（请核对后保存）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="OCR 尚未提取到内容，可手动补充原文"></textarea></label><button v-if="fileDraft && /\.(pdf|jpe?g|png|webp)$/i.test(fileDraft.name)" class="secondary full" type="button" :disabled="busy" @click="retryLocalOcr">重新运行本机日文 OCR</button><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
 
         <div class="choice-form-field"><span class="choice-field-label">这份文书使用的 AI</span><button type="button" class="choice-field-control" @click="openChoice('aiProvider')"><span>{{choiceLabel('aiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p class="fine-print">每份文书单独选择，不保存全局偏好。首次导入在服务已启用时尝试 AI 分析，同版本命中缓存不会重复调用。</p>
         <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>我已确认这份文书不含私人或机密信息，并同意今后启用时发送给 Gemini 免费 API。只有启用并执行所选 Gemini 分析时才发送。</label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
-      <template v-else-if="sheet==='confirmDeadline'"><h2>补全截止日期的年份</h2><p class="fine-print">原文只有月日，系统不会猜测年份。请核对正式文件或办理机构后，亲自选定完整日期；月日必须与原文一致。</p><label class="form-label">完整截止日期<input type="date" v-model="missingYearDateDraft"/></label><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template>
+      <template v-else-if="sheet==='confirmDeadline'"><h2>补全截止日期的年份</h2><p class="fine-print">原文只有月日，系统默认使用日本当前年份作为候选；这不代表文书实际年份。请核对正式文件或办理机构，可修改年份；月日必须与原文一致。确认前不会创建 HomeFlow 待办。</p><label class="form-label">完整截止日期<input type="date" v-model="missingYearDateDraft"/></label><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template>
       <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">只影响当前文书。保存后可点「AI 智能解读」，同版本命中缓存时不会再次调用。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>我确认这份文书不含个人或机密资料，同意未来启用时发送给 Gemini 免费 API。只有启用并执行所选 Gemini 分析时才发送。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>

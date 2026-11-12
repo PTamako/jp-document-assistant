@@ -195,7 +195,8 @@ function extractElectricityFields(text) {
 // Relative dates and requested actions are useful review fields, but must
 // never be promoted to a schedulable YYYY-MM-DD deadline without a year.
 // This also works when an AI summary exists but is not part of document_fields.
-export function extractActionableTextFields(text,hasFullDueDate=false) {
+export const currentJapanYear=()=>Number(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Tokyo',year:'numeric'}).format(new Date()));
+export function extractActionableTextFields(text,hasFullDueDate=false,{defaultYear=currentJapanYear()}={}) {
   const result=[];
   const add=(field_key,normalized_value,source_quote)=>{
     if(result.some(f=>f.field_key===field_key)||!normalized_value||!source_quote.includes(normalized_value))return;
@@ -217,6 +218,15 @@ export function extractActionableTextFields(text,hasFullDueDate=false) {
       if(!/(?:期限|締切|必着|までに|まで|提出|申請)/.test(local)
         ||/(?:配達予定|配送予定|口座引落|お届け予定)/.test(local))continue;
       add('due_date_partial',m[0],line||m[0]);
+      // The user asked for the current Japanese calendar year as a useful
+      // default. It remains UNREVIEWED and cannot create a remote task.
+      const inferred=validDate(defaultYear,month,day);
+      if(inferred){
+        result.push({field_key:'due_date',value_type:'date',
+          normalized_value:inferred.date,
+          source_quote:'年份自动补全（日本当前年 '+defaultYear+'，待确认）：'+(line||m[0]).slice(0,125),
+          review_state:'unreviewed'});
+      }
       break;
     }
   }
@@ -227,7 +237,7 @@ export function extractActionableTextFields(text,hasFullDueDate=false) {
   return result;
 }
 
-export function parseJapaneseText(raw) {
+export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   const text = String(raw || '').slice(0,100000);
   const category = classifyText(text);
   const clauses=interpretCriticalClauses(text);
@@ -236,7 +246,7 @@ export function parseJapaneseText(raw) {
   const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):category==='card_spend'?extractCardPurchaseFields(text):category==='salary'&&isSalaryDepositNotice(text)?extractSalaryDepositFields(text):[];
   const due=dates.find(d=>d.due_hint && !/(?:お届け予定|配達予定|配送予定|口座引落|引き落とし予定|受取完了)/.test(d.source_quote));
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
-  for(const item of extractActionableTextFields(text,!!due))fields.push(item);
+  for(const item of extractActionableTextFields(text,!!due,{defaultYear:referenceYear}))fields.push(item);
   // Scheduled debit and delivery dates are events, NOT actionable deadlines.
   // Restrict event extraction to those notice categories so receipts cannot make tasks.
   if (category==='bank'||category==='delivery'){
@@ -244,7 +254,7 @@ export function parseJapaneseText(raw) {
     if(event && event!==due)fields.push({field_key:'event_date',value_type:'date',normalized_value:event.date,source_quote:event.source_quote,review_state:'unreviewed'});
   }
   if (dates.some(x=>x.weekday_mismatch)) issues.push('日期与原文星期不一致，请核对原件');
-  if(!due && dates.length===0 && /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2})/.test(text)) issues.push('存在未注明年份的日期，无法直接确认截止日');
+  if(!due && fields.some(f=>f.field_key==='due_date_partial'))issues.push('原文仅有月日：已暂按日本当前年份补全，年份须人工确认后才能创建正式待办');
   for(const {key,re} of priority){
     if(fields.some(f=>f.field_key===key))continue; // Prioritize explicitly labelled amounts and prevent duplicates.
     if(category==='topup' && key==='amount_jpy')continue; // No payment or income inference from a top-up.
