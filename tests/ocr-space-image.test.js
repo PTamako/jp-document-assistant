@@ -37,6 +37,18 @@ test('JPEG PNG and WebP import controls include explicit-consent OCR.space fallb
  assert.match(app,/importOcrSpaceConsent/);
  assert.match(app,/image\\\/\(\?:jpeg\|png\|webp\)/);
  assert.match(app,/ocr-space\/preview/);
- assert.match(app,/发送所选图片至第三方识别/);
- assert.match(app,/同意发送给 OCR.space/);
+ // OCR.space must be a provider option, not a separate oversized card/action.
+ assert.match(app,/importOcrEngine:\{title:'识别方式'/);
+ assert.match(app,/value:'local',label:'本机 PaddleOCR'/);
+ assert.match(app,/value:'ocr_space',label:'OCR.space'/);
+ assert.match(app,/@click="openChoice\('importOcrEngine'\)"/);
+ assert.match(app,/@click="runSelectedImportOcr"/);
+ assert.match(app,/importOcrEngine==='ocr_space'/);
+ assert.match(app,/同意发送所选/);
+ assert.doesNotMatch(app,/<h3>OCR\.space<\/h3>/);
+ assert.doesNotMatch(app,/>OCR\.space 识别<\/button>/);
+ assert.doesNotMatch(app,/>重新运行本机日文 OCR<\/button>/);
+ const css=readFileSync(new URL('../web/src/style.css',import.meta.url),'utf8');
+ assert.match(css,/\.ocr-method-row\{/);
+ assert.match(css,/\.ocr-cloud-options\{/);
 });
