@@ -46,8 +46,13 @@ async function openSeal(env,grant,userId){
   }catch{bad('Google 授权密钥无法解密，请联系管理员；不会清除原记录','GOOGLE_DECRYPT_FAILED',503)}
 }
 async function googleFetch(env,url,options){
+  // Cloudflare workerd rejects redirect:'error' before making the request.
+  // 'manual' avoids following a redirect, including on refresh and Gmail API calls.
   const fetcher=env.GOOGLE_OAUTH_FETCH||fetch;
-  return fetcher(url,{...options,cache:'no-store',redirect:'error'});
+  const response=await fetcher(url,{...options,cache:'no-store',redirect:'manual'});
+  if(response.status>=300&&response.status<400)
+    bad('Google API 返回异常跳转','GOOGLE_UNEXPECTED_REDIRECT',502);
+  return response;
 }
 async function tokenRequest(env,params){
   const r=await googleFetch(env,TOKEN_ENDPOINT,{method:'POST',
