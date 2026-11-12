@@ -92,7 +92,12 @@ function validatedPayload(target,item,approved,body){
     if(!['income','expense'].includes(x.kind))bad('信用卡还款/账单不能直接作为收支','NOT_EXPENSE',409);
     if(body.payment_confirmed!==true||!/^(?:19|20)\d\d-\d\d-\d\d$/.test(body.date||''))bad('请确认真实付款或到账日期','CONFIRM_REQUIRED',409);
     if(!trim(body.category,80)||!trim(body.payment_source,100))bad('请选择目标账本的类别与支付账户','MISSING_MAPPING',422);
-    return {operation:'entry',type:x.kind,date:body.date,amount,category:trim(body.category,80),paymentSource:trim(body.payment_source,100),note:trim(body.note,180),source_kind:'document_assistant'};
+    // Prefer the user's verified merchant, falling back to the extracted
+    // candidate. The source of truth is server-side, not browser-sent text.
+    const merchant=trim(approved.get('merchant')||x.merchant,100);
+    return {operation:'entry',type:x.kind,date:body.date,amount,category:trim(body.category,80),
+      paymentSource:trim(body.payment_source,100),merchant,note:trim(body.note,180),
+      source_kind:'document_assistant'};
   }
   if(target==='homeflow'){
     const dateField=x.task_type==='delivery'?'event_date':'due_date';
