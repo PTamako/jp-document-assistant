@@ -180,9 +180,11 @@ async function analyzeStored(env,doc,force=false){
   return {cached:false,result};
 }
 function verifyDocumentAiChoice(provider,geminiConsent){
-  if(!['none','cloudflare','gemini'].includes(provider))bad('请为本份文书选择 AI 引擎或仅规则分析','INVALID_AI_PROVIDER',400);
-  if(provider==='gemini'&&geminiConsent!==true)bad('Gemini 免费 API 需针对本份文书明确授权','AI_PRIVACY_CONFIRM_REQUIRED',400);
-  return provider;
+  // Backwards-compatible API: legacy clients without AI field remain rules-only.
+  const selected=provider===null||provider===undefined?'none':provider;
+  if(!['none','cloudflare','gemini'].includes(selected))bad('请为本份文书选择 AI 引擎或仅规则分析','INVALID_AI_PROVIDER',400);
+  if(selected==='gemini'&&geminiConsent!==true)bad('Gemini 免费 API 需针对本份文书明确授权','AI_PRIVACY_CONFIRM_REQUIRED',400);
+  return selected;
 }
 async function handleImportText(request,env,p){
   const data=await readJson(request);
@@ -660,6 +662,15 @@ ELSE 'unreviewed' END review_status,
       if(method==='PATCH')return updateDoc(request,env,p,doc);
     }
     if(method==='POST'&&rest==='ocr')return ocrAttachment(request,env,p,id);
+    if(method==='PATCH'&&rest==='ai-provider'){
+      const doc=await ownedDocument(env.DB,id,p,'active'),body=await readJson(request,1200);
+      const provider=verifyDocumentAiChoice(body.ai_provider,body.gemini_consent);
+      if(provider==='gemini'&&doc.extracted_text_ja&&requiresPrivateDefault(doc.category,doc.extracted_text_ja))
+        bad('私人或敏感文书不能使用 Gemini 免费 API','SENSITIVE_GEMINI_BLOCKED',422);
+      const now=isoNow();
+      await dbRun(env.DB,'UPDATE documents SET ai_provider=?,ai_consent_at=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=?',provider,provider==='gemini'?now:null,now,id,p.user_id);
+      return json({ok:true,document_id:id,ai_provider:provider,ai_invoked:false});
+    }
     if(method==='PATCH'&&rest==='source-text'){
       const d=await ownedDocument(env.DB,id,p,'active');
       const body=await readJson(request,110000);
