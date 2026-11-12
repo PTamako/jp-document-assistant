@@ -709,6 +709,8 @@ test('changed failed financial mapping requires signed absence check and explici
  const original=await send({});
  assert.equal(original.response.status,503);
  assert.equal(original.data.code,'BRIDGE_UNCONFIRMED');
+ // Simulate an older settled failure; do not remap an in-flight request.
+ env.DB.sql.prepare("UPDATE integration_links SET updated_at='2026-01-01T00:00:00.000Z'").run();
  const changed=await send({category:'饮食料品'});
  assert.equal(changed.response.status,409);
  assert.equal(changed.data.code,'RETRY_PAYLOAD_CHANGED');
@@ -747,6 +749,7 @@ test('recovery lookup finds an existing remote entry and never posts another tra
   data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true,date:'2026-11-12',
    category:'税金',payment_source:'現金',...opts},extraHeaders:{'Idempotency-Key':'safe-ledger-retry-123'}});
  assert.equal((await send({})).response.status,503);
+ env.DB.sql.prepare("UPDATE integration_links SET updated_at='2026-01-01T00:00:00.000Z'").run();
  const reconciled=await send({category:'饮食料品',confirm_mapping_change:true});
  assert.equal(reconciled.response.status,200,JSON.stringify(reconciled.data));
  assert.equal(reconciled.data.recovered_prior,true);
