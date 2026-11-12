@@ -210,6 +210,16 @@ export async function handleBrowserGoogle(request,env,p,url){
        await digest(flow),p.user_id,service);
      progress=r?(r.status==='pending'&&r.expires_at<utc()?'expired':r.status):null;
      progressError=r?.status==='failed'?GOOGLE_ERRORS[r.error_code]||'Google 授权未完成':null;
+   }else if(!grant||grant.status!=='connected'){
+     // PWA and Safari don't necessarily share their session state. A short-lived
+     // per-account status allows the standalone PWA to show the callback result.
+     const recent=await dbFirst(env.DB,
+       "SELECT status,error_code,expires_at,created_at FROM google_oauth_pending WHERE user_id=? AND service=? ORDER BY created_at DESC LIMIT 1",
+       p.user_id,service);
+     if(recent&&Date.parse(recent.created_at)>Date.now()-15*60*1000){
+       progress=recent.status==='pending'&&recent.expires_at<utc()?'expired':recent.status;
+       progressError=recent.status==='failed'?GOOGLE_ERRORS[recent.error_code]||'Google 授权未完成':null;
+     }
    }
    return json({enabled:true,connected:grant?.status==='connected',
      needs_reauthorization:grant?.status==='reauth_required',
