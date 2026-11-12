@@ -8,6 +8,7 @@ import { planBackup, exportBackup, previewImport, confirmImport } from './backup
 import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
 import { ocrAttachment } from './ocr.js';
+import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
 import { validateOfficeBytes } from '../web/src/document-text.js';
@@ -179,6 +180,10 @@ async function analyzeStored(env,doc,force=false){
   await batch(env.DB,stmts);
   return {cached:false,result};
 }
+async function analyzeIfEnabled(env,doc){
+  try{return await analyzeDocumentAi(env,doc,{sensitive:requiresPrivateDefault(doc.category,doc.extracted_text_ja||'')});}
+  catch{return {ai_status:'failed_safe'};}
+}
 function verifyDocumentAiChoice(provider,geminiConsent){
   // Backwards-compatible API: legacy clients without AI field remain rules-only.
   const selected=provider===null||provider===undefined?'none':provider;
@@ -208,7 +213,8 @@ async function handleImportText(request,env,p){
   ]);
   const doc=await ownedDocument(env.DB,id,p);
   await analyzeStored(env,doc);
-  return json({ok:true,saved:true,reused:false,document_id:id},201);
+  const ai=await analyzeIfEnabled(env,await ownedDocument(env.DB,id,p,'active'));
+  return json({ok:true,saved:true,reused:false,document_id:id,ai_status:ai.ai_status},201);
 }
 function fileSignature(mime,bytes){
   if(mime==='image/jpeg')return bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff;
@@ -291,14 +297,15 @@ async function handleFileImport(request,env,p){
     bad('已上传但保存索引失败，请联系管理员检查存储清理','METADATA_FAILED',503);
   }
   if(extracted)await analyzeStored(env,await ownedDocument(env.DB,id,p));
-  return json({ok:true,saved:true,document_id:id,text_layer_used:!!extracted,ocr_status:'not_available',
+  const ai=extracted?await analyzeIfEnabled(env,await ownedDocument(env.DB,id,p,'active')):{ai_status:'awaiting_text'};
+  return json({ok:true,saved:true,document_id:id,ai_status:ai.ai_status,text_layer_used:!!extracted,ocr_status:extracted?'text_extracted':'awaiting_text',
     message:extracted?'已使用文件文字层生成待核对字段':'没有可复制文字，需人工输入或手动 OCR'},201);
 }
 async function hashStringBytes(bytes){const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');}
 async function getDocDetail(db,doc){
   const fields=await dbAll(db,`SELECT id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,review_state,source_page FROM document_fields WHERE document_id=? ORDER BY field_key`,doc.id);
   const attachments=await dbAll(db,`SELECT id,file_label,page_no,state FROM attachments WHERE document_id=? AND state='active' ORDER BY sort_order`,doc.id);
-  return {...listShape(doc),ai_provider:doc.ai_provider||'none',summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
+  return {...listShape(doc),ai_provider:doc.ai_provider||'none',ai_analysis:await getDocumentAiCache(db,doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
     source_document_date:doc.source_document_date||null,source_date_quote:doc.source_date_quote||null,
     official_current_verified_at:doc.official_current_verified_at||null,
     fields,attachments,confirmed_at:doc.confirmed_at};
@@ -662,6 +669,13 @@ ELSE 'unreviewed' END review_status,
       if(method==='PATCH')return updateDoc(request,env,p,doc);
     }
     if(method==='POST'&&rest==='ocr')return ocrAttachment(request,env,p,id);
+    if(method==='POST'&&rest==='ai/analyze'){
+      const doc=await ownedDocument(env.DB,id,p,'active');
+      const body=await readJson(request,900);
+      if(body.confirm!==true)bad('请确认对当前文书执行所选 AI 分析','AI_CONFIRM_REQUIRED',409);
+      const result=await analyzeIfEnabled(env,doc);
+      return json({ok:true,...result});
+    }
     if(method==='PATCH'&&rest==='ai-provider'){
       const doc=await ownedDocument(env.DB,id,p,'active'),body=await readJson(request,1200);
       const provider=verifyDocumentAiChoice(body.ai_provider,body.gemini_consent);
