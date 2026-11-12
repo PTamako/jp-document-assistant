@@ -18,8 +18,8 @@ export function explainNotice({text,category,fields}){
  const directDebit=/(?:口座引[き]?落[とし]?|口座振替|引落(?:し)?(?:予定日|金額|額))/.test(text);
  const delivery=category==='delivery'||/(?:お届け予定日時|配達予定日|配送予定日|お荷物のお届け)/.test(text);
  if(receipt){
-   summary='交通卡充值通知';
-   lines.push('这是什么：原文提到 Suica／交通系 IC 的充值或领取。这是交通卡资金变化的通知，不等于搭乘交通工具产生的新消费。');
+   summary=/(?:Suica|PASMO|ICOCA|TOICA|Kitaca|SUGOCA|nimoca|はやかけん|交通系IC)/i.test(text)?'交通卡充值／余额转移通知':'电子钱包充值／余额转移通知';
+   lines.push('这是什么：原文提到电子钱包或交通卡的充值、领取或资金转入。这是储值余额变化的通知，不等于刷卡购物或乘车时新增的消费。');
    if(/(?:完了しました|受取完了|チャージ完了)/.test(text))lines.push('当前状态：原文写有“完成”，表示通知声称该笔充值已经完成；仍以官方账户余额／交易记录为准。');
    if(amount)lines.push('涉及金额：'+amount+'（来自通知原文，需与交通卡交易记录核对）。');
    if(date)lines.push('原文记录日期：'+date+'。这是交易／领取日期，不是办理截止日。');
