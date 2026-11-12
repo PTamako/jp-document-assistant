@@ -9,6 +9,7 @@ import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
+import { handleGoogleGmail } from './google-oauth.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
@@ -513,6 +514,7 @@ async function route(request,env){
   if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
+  if(path.startsWith('/api/google/gmail/'))return handleGoogleGmail(request,env,p,path,url);
   if(method==='GET'&&path==='/api/calendar/status')return calendarStatus(env,p);
   if(method==='POST'&&path==='/api/calendar/subscription')return createCalendarSubscription(request,env,p);
   if(method==='POST'&&path==='/api/calendar/revoke')return revokeCalendarSubscription(env,p);

@@ -13,7 +13,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -1746,4 +1746,89 @@ test('Olive card purchase creates an expense review candidate that confirms 1520
  const again=await send();
  assert.equal(again.data.already_synced,true);
  assert.equal(calls,1);
+});
+
+
+test('Gmail code-model grants remain encrypted and user-bound; only selected messages are read',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const noConfig=await req(env,'/api/google/gmail/status',auth(owner));
+ assert.equal(noConfig.response.status,200);
+ assert.equal(noConfig.data.enabled,false);
+ env.GOOGLE_OAUTH_CLIENT_ID='123-abc.apps.googleusercontent.com';
+ env.GOOGLE_OAUTH_CLIENT_SECRET='unit-test-only-client-secret';
+ env.GOOGLE_TOKEN_ENCRYPTION_KEY='cd'.repeat(32);
+ const scope='https://www.googleapis.com/auth/gmail.readonly';
+ let refreshCount=0,fullCount=0,metadataCount=0,listCount=0;
+ env.GOOGLE_OAUTH_FETCH=async(url,options)=>{
+   const u=new URL(url);
+   if(u.origin==='https://oauth2.googleapis.com'&&u.pathname==='/token'){
+     const form=new URLSearchParams(options.body);
+     assert.equal(form.get('client_secret'),env.GOOGLE_OAUTH_CLIENT_SECRET);
+     if(form.get('grant_type')==='authorization_code'){
+       assert.equal(form.get('redirect_uri'),'https://app.example.test');
+       assert.equal(form.get('code'),'test-google-code-123');
+       return Response.json({access_token:'private-access-token',refresh_token:'private-refresh-token',
+         scope,token_type:'Bearer',expires_in:3600});
+     }
+     assert.equal(form.get('grant_type'),'refresh_token');
+     assert.equal(form.get('refresh_token'),'private-refresh-token');
+     refreshCount++;
+     return Response.json({access_token:'private-access-token',scope,expires_in:3600});
+   }
+   if(u.origin==='https://oauth2.googleapis.com'&&u.pathname==='/revoke')
+     return new Response('',{status:200});
+   if(u.pathname==='/gmail/v1/users/me/profile')
+     return Response.json({emailAddress:'owner@gmail.example'});
+   assert.equal(options.headers.Authorization,'Bearer private-access-token');
+   if(u.pathname==='/gmail/v1/users/me/messages'){
+     listCount++;assert.equal(u.searchParams.get('maxResults'),'5');
+     return Response.json({messages:[{id:'googleMailA123'}]});
+   }
+   if(u.pathname==='/gmail/v1/users/me/messages/googleMailA123'){
+     if(u.searchParams.get('format')==='metadata'){
+       metadataCount++;
+       return Response.json({payload:{headers:[{name:'Subject',value:'請求金額のご案内'},
+         {name:'From',value:'notice@example.invalid'}, {name:'Date',value:'2026-11-12'}]}});
+     }
+     assert.equal(u.searchParams.get('format'),'full');fullCount++;
+     return Response.json({payload:{mimeType:'text/plain',headers:[],body:{
+       data:Buffer.from('支払い期限：11月30日').toString('base64url')}}});
+   }
+   throw Error('Unexpected Google endpoint '+u.pathname);
+ };
+ const pending=await req(env,'/api/google/gmail/status',auth(owner));
+ assert.equal(pending.data.enabled,true);
+ assert.equal(pending.data.connected,false);
+ const badCsrf=await req(env,'/api/google/gmail/connect',{method:'POST',cookie:owner.cookie,data:{code:'test-google-code-123'}});
+ assert.equal(badCsrf.response.status,403);
+ const connected=await req(env,'/api/google/gmail/connect',{method:'POST',...auth(owner),data:{code:'test-google-code-123'}});
+ assert.equal(connected.response.status,200,JSON.stringify(connected.data));
+ assert.equal(connected.data.google_email,'owner@gmail.example');
+ assert.doesNotMatch(JSON.stringify(connected.data),/private-refresh-token|private-access-token/);
+ const record=env.DB.sql.prepare('SELECT * FROM google_oauth_grants WHERE user_id=?').get(owner.user.id);
+ assert.equal(record.service,'gmail');
+ assert.equal(record.google_email,'owner@gmail.example');
+ assert.ok(record.refresh_iv);
+ assert.doesNotMatch(record.refresh_cipher,/private-refresh-token/);
+ const status=await req(env,'/api/google/gmail/status',auth(owner));
+ assert.equal(status.data.connected,true);
+ assert.equal(status.data.google_email,'owner@gmail.example');
+ const list=await req(env,'/api/google/gmail/messages?q=newer_than%3A30d',auth(owner));
+ assert.equal(list.response.status,200,JSON.stringify(list.data));
+ assert.equal(list.data.items.length,1);
+ assert.equal(list.data.items[0].subject,'請求金額のご案内');
+ assert.equal(fullCount,0,'list must never read any mail body');
+ assert.equal(listCount,1);
+ assert.equal(metadataCount,1);
+ const one=await req(env,'/api/google/gmail/messages/googleMailA123',auth(owner));
+ assert.equal(one.response.status,200);
+ assert.equal(one.data.payload.mimeType,'text/plain');
+ assert.equal(fullCount,1,'only the selected mail body is fetched');
+ assert.equal(refreshCount,2,'one short-lived access token per explicit user request');
+ const revoke=await req(env,'/api/google/gmail/disconnect',{method:'POST',...auth(owner),data:{}});
+ assert.equal(revoke.response.status,200);
+ assert.equal(revoke.data.remotely_revoked,true);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM google_oauth_grants').get().n,0);
+ const after=await req(env,'/api/google/gmail/messages',auth(owner));
+ assert.equal(after.response.status,409);
 });

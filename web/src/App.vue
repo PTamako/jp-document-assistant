@@ -4,7 +4,8 @@ import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
 import { isIosStandalonePwa } from './google-auth-context.js';
-import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke} from './gmail-import.js';
+import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke,gmailPayloadToDocument} from './gmail-import.js';
+import {gmailAuthorizePersistent} from './gmail-persistent.js';
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
@@ -40,6 +41,7 @@ const iosStandalonePwa=isIosStandalonePwa();
 const mainSiteUrl=typeof window==='undefined'?'':window.location.origin+'/';
 const drivePickerReadyUi=ref(false),drivePickerLoadingUi=ref(false);
 const gmailAvailable=gmailConfigured(),gmailAuthorizedUi=ref(false),gmailIdentityReadyUi=ref(false),gmailIdentityLoadingUi=ref(false),gmailQuery=ref('newer_than:30d'),gmailItems=ref([]),gmailNext=ref(null),gmailBusy=ref(false);
+const gmailPersistent=ref({enabled:false,connected:false,google_email:null,client_id:''});
 let gmailGeneration=0;
 const salaryAmountDraft=ref(''),salaryAmountConfirmed=ref(false);
 const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),inviteEmail=ref(''),inviteToken=ref('');
@@ -220,7 +222,13 @@ async function openGmailSheet(){
   gmailBusy.value=false;gmailAuthorizedUi.value=gmailConnected();
   gmailItems.value=[];gmailNext.value=null;sheet.value='gmail';
   gmailIdentityReadyUi.value=gmailIdentityReady();
-  if(gmailIdentityReadyUi.value)return;
+  try{
+    const status=await api('/api/google/gmail/status');
+    if(sheet.value!=='gmail')return;
+    gmailPersistent.value=status;
+    gmailAuthorizedUi.value=(status.enabled&&status.connected)||gmailConnected();
+  }catch(e){if(sheet.value==='gmail')problem(e);}
+  if(sheet.value!=='gmail'||gmailAuthorizedUi.value||gmailIdentityReadyUi.value)return;
   gmailIdentityLoadingUi.value=true;
   try{
     await preloadGmailIdentity();
@@ -230,16 +238,37 @@ async function openGmailSheet(){
 }
 async function connectGmail(){
   if(!gmailIdentityReadyUi.value)return problem(new Error('Google 登录组件尚未准备好，请等待加载完成'));
+  const epoch=accountEpoch.snapshot();
   gmailBusy.value=true;
-  try{await gmailAuthorize();gmailAuthorizedUi.value=gmailConnected();flash('Gmail 已连接。权限无需每次同意，但访问令牌只在本次应用运行期间有效。');}
-  catch(e){problem(e);}finally{gmailBusy.value=false;}
+  try{
+    if(gmailPersistent.value.enabled){
+      const result=await gmailAuthorizePersistent({
+        clientId:gmailPersistent.value.client_id,
+        exchangeCode:code=>api('/api/google/gmail/connect',{method:'POST',body:{code}})
+      });
+      accountEpoch.assertCurrent(epoch);
+      gmailPersistent.value={...gmailPersistent.value,connected:true,needs_reauthorization:false,google_email:result.google_email};
+      gmailAuthorizedUi.value=true;
+      flash('Gmail 长期连接已建立。令牌由 Cloudflare 加密保管，过期时自动续期。');
+    }else{
+      await gmailAuthorize();
+      accountEpoch.assertCurrent(epoch);
+      gmailAuthorizedUi.value=gmailConnected();
+      flash('Gmail 临时连接成功。长期免重复授权尚需配置 Cloudflare Google OAuth。');
+    }
+  }catch(e){problem(e);}finally{gmailBusy.value=false;}
 }
 async function loadGmailMessages(append=false){
-  if(!gmailConnected()){gmailAuthorizedUi.value=false;return problem(new Error('Gmail 授权已过期，请重新授权'));}
+  if(!gmailPersistent.value.connected&&!gmailConnected()){
+    gmailAuthorizedUi.value=false;return problem(new Error('Gmail 授权已过期，请重新授权'));
+  }
   const serial=++gmailGeneration;
   gmailBusy.value=true;
   try{
-    const result=await gmailList(gmailQuery.value,append?gmailNext.value||'':'');
+    const result=gmailPersistent.value.connected
+      ?await api('/api/google/gmail/messages?q='+encodeURIComponent(gmailQuery.value)+
+        '&pageToken='+encodeURIComponent(append?gmailNext.value||'':''))
+      :await gmailList(gmailQuery.value,append?gmailNext.value||'':'');
     if(serial!==gmailGeneration||!user.value)return;
     const old=append?gmailItems.value:[];
     const ids=new Set(old.map(x=>x.id));
@@ -251,7 +280,9 @@ async function loadGmailMessages(append=false){
 async function selectGmailMessage(id){
   const serial=++gmailGeneration;gmailBusy.value=true;
   try{
-    const doc=await gmailReadOne(id);
+    const doc=gmailPersistent.value.connected
+      ?gmailPayloadToDocument((await api('/api/google/gmail/messages/'+encodeURIComponent(id))).payload)
+      :await gmailReadOne(id);
     if(serial!==gmailGeneration||!user.value)return;
     aiProvider.value='';geminiConsent.value=false;
     textDraft.title=doc.title;textDraft.text=doc.text;
@@ -264,11 +295,21 @@ async function selectGmailMessage(id){
 async function disconnectGmail(){
   gmailGeneration++;gmailItems.value=[];gmailNext.value=null;
   gmailBusy.value=true;
-  try{await gmailRevoke();flash('已清除 Gmail Token 并请求 Google 撤销授权');}
+  try{
+    if(gmailPersistent.value.enabled&&(gmailPersistent.value.connected||gmailPersistent.value.needs_reauthorization)){
+      const result=await api('/api/google/gmail/disconnect',{method:'POST',body:{}});
+      gmailPersistent.value={...gmailPersistent.value,connected:false,needs_reauthorization:false,google_email:null};
+      gmailForget();
+      flash(result.remotely_revoked?'Gmail 已断开并撤销 Google 权限':'Gmail 本应用连接已删除；Google 远端撤销尚未确认');
+    }else{
+      await gmailRevoke();flash('已清除 Gmail Token 并请求 Google 撤销授权');
+    }
+  }
   catch(e){problem(e);}finally{gmailAuthorizedUi.value=false;gmailBusy.value=false;}
 }
 function clearGmailSession(){
   gmailGeneration++;gmailBusy.value=false;gmailForget();forgetDriveAuthorization();gmailAuthorizedUi.value=false;
+  gmailPersistent.value={enabled:false,connected:false,google_email:null,client_id:''};
   gmailItems.value=[];gmailNext.value=null;
 }
 async function boot(){
@@ -1014,9 +1055,11 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeou
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">返回</button></div>
       </template>
       <template v-else-if="sheet==='gmail'"><h2>Gmail · 只读选取</h2>
-        <p class="fine-print">每次最多浏览五封；只在选择邮件后读取正文。授权令牌仅在应用运行期间保留，Google 已授予的权限不再强制重复同意。 保存前需确认所选邮件内容。</p>
-        <button v-if="!gmailAuthorizedUi" class="primary full" :disabled="gmailBusy||gmailIdentityLoadingUi||!gmailIdentityReadyUi" @click="connectGmail">{{gmailIdentityLoadingUi?'正在准备 Google 登录…':'授权 Gmail 只读访问'}}</button><button v-if="!gmailAuthorizedUi&&!gmailIdentityLoadingUi&&!gmailIdentityReadyUi" class="text-button full" type="button" @click="openGmailSheet">重试加载 Google 登录组件</button>
+        <p class="fine-print">每次最多浏览五封，只读取你主动选择的邮件正文。{{gmailPersistent.enabled?'Cloudflare 将加密保存 Gmail 长期授权并自动续期；手机不保存 Google 令牌。':'当前为临时授权，关闭 PWA 后可能需要重新连接；长期授权需要后台完成安全配置。'}} 保存前需确认内容。</p>
+        <button v-if="gmailPersistent.enabled&&gmailPersistent.needs_reauthorization" class="secondary full" :disabled="gmailBusy" @click="disconnectGmail">清除过期的 Gmail 长期授权</button>
+        <button v-if="!gmailAuthorizedUi" class="primary full" :disabled="gmailBusy||gmailIdentityLoadingUi||!gmailIdentityReadyUi" @click="connectGmail">{{gmailIdentityLoadingUi?'正在准备 Google 登录…':gmailPersistent.enabled?'连接 Gmail（长期授权）':'授权 Gmail 只读访问（临时）'}}</button><button v-if="!gmailAuthorizedUi&&!gmailIdentityLoadingUi&&!gmailIdentityReadyUi" class="text-button full" type="button" @click="openGmailSheet">重试加载 Google 登录组件</button>
         <template v-else>
+          <p v-if="gmailPersistent.connected&&gmailPersistent.google_email" class="fine-print">已长期连接：{{gmailPersistent.google_email}}</p>
           <label class="form-label">Gmail 搜索条件<input v-model.trim="gmailQuery" maxlength="180" placeholder="newer_than:30d" /></label>
           <button class="secondary full" :disabled="gmailBusy" @click="loadGmailMessages(false)">搜索邮件（每页五封）</button>
           <div v-if="!gmailItems.length" class="empty">尚未查询，或没有符合条件的邮件。</div>
@@ -1025,7 +1068,7 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeou
             <button class="secondary small" :disabled="gmailBusy" @click="selectGmailMessage(m.id)">选取正文</button>
           </div>
           <button v-if="gmailNext" class="text-button full" :disabled="gmailBusy" @click="loadGmailMessages(true)">继续查看五封</button>
-          <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">撤销 Gmail 授权</button>
+          <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">{{gmailPersistent.connected?'断开 Gmail 长期连接':'撤销 Gmail 临时授权'}}</button>
         </template>
         <p class="fine-print">Gmail 只读授权受 Google 限制。如果主屏幕 PWA 的 Google 弹窗失败，可直接从苹果邮件复制正文，或使用「文件」导入；Apple Mail 聚合邮箱无法通过 Gmail API 直接读取。</p><button v-if="iosStandalonePwa" class="text-button full" type="button" @click="sheet='safariGoogleGuide'">Google 弹窗无法使用？查看替代导入方式</button>
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
