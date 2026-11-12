@@ -8,7 +8,7 @@ test('complete OpenAPI YAML parses strictly and defines no duplicated routes or 
  assert.deepEqual(doc.errors.map(e=>e.message),[],doc.errors.map(e=>e.message).join('\n'));
  const spec=doc.toJS();
  assert.equal(spec.openapi,'3.1.0');
- assert.equal(Object.keys(spec.paths).length,59);
+ assert.equal(Object.keys(spec.paths).length,60);
  assert.ok(spec.paths['/api/calendar/{token}.ics'].get);
  assert.equal(spec.paths['/api/calendar/{token}.ics'].post,undefined);
  assert.ok(spec.paths['/api/auth/change-password'].post);
@@ -21,7 +21,7 @@ test('complete OpenAPI YAML parses strictly and defines no duplicated routes or 
  assert.equal(usage.cloudflare_account_remaining.type,'null');
  const ids=Object.values(spec.paths).flatMap(route=>Object.entries(route)
   .filter(([method])=>['get','post','patch','put','delete'].includes(method)).map(([,op])=>op.operationId));
- assert.equal(ids.length,60);assert.equal(new Set(ids).size,60);
+ assert.equal(ids.length,61);assert.equal(new Set(ids).size,61);
  for(const [path,method,operation] of [
   ['/api/auth/sessions','get','listOwnSessions'],
   ['/api/auth/sessions/revoke','post','revokeOwnSession'],
