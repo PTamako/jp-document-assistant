@@ -106,13 +106,44 @@ function validatedPayload(target,item,approved,body){
 export async function getBridgeStatus(env,p){
   return json({targets:Object.fromEntries(['kakebo','homeflow','zhixue'].map(t=>[t,{configured:!!config(env,t),account_mapping_ready:!!authorizedMapping(env,p.user_id,t),requires_explicit_confirmation:true,identity_mapping:'server_approved'}]))});
 }
+// Load only live catalogue labels; do not expose account numbers, balances,
+// transaction history, or the identity mapping through this endpoint.
+export async function ledgerPickerOptions(env,userId,kind){
+ const dest=config(env,'kakebo'),actor=authorizedMapping(env,userId,'kakebo');
+ if(!dest)return {error:'家計簿安全联动尚未配置'};
+ if(!actor)return {error:'家計簿账号尚未完成授权映射'};
+ if(!['income','expense'].includes(kind))return {error:'不支持的记账类型'};
+ const body=JSON.stringify({source:'jp-document-assistant',actor_user_id:actor,
+  payload:{operation:'options',entryType:kind}});
+ const stamp=String(Date.now());
+ try{
+  const signature=await hmacHex(dest.secret,stamp+'\n'+body);
+  const response=await dest.fetcher(new Request(dest.url,{method:'POST',headers:{
+   'Content-Type':'application/json','X-DA-Timestamp':stamp,'X-DA-Signature':signature
+  },body}));
+  const parsed=await response.json().catch(()=>null);
+  if(!response.ok||!parsed?.ok)return {error:classifyBridgeRejection('kakebo',response.status,parsed)?.message||'暂时无法读取家計簿选项'};
+  const safeList=(items,max)=>Array.isArray(items)?items.slice(0,120).filter(x=>
+   typeof x?.value==='string'&&x.value.length>0&&x.value.length<=max&&
+   typeof x?.label==='string'&&x.label.length>0&&x.label.length<=max
+  ).map(x=>({value:x.value,label:x.label})):[];
+  const categories=safeList(parsed.categories,80);
+  const paymentSources=safeList(parsed.payment_sources,80);
+  if(!categories.length||!paymentSources.length)return {error:'家計簿当前没有可用的分类或支付方式'};
+  return {data:{categories,paymentSources}};
+ }catch{return {error:'读取家計簿选项失败，请检查联动服务'};}
+}
+
 export async function candidatePreview(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
   const target=TARGETS[item.candidate_kind];
   const fields=await checkedFields(env,item.document_id);
   const link=await first(env.DB,'SELECT state,remote_id,attempt_count,last_error_code FROM integration_links WHERE candidate_id=?',id);
-  return json({candidate_id:id,target,kind:item.candidate_kind,payload:JSON.parse(item.payload_json),
+  const payload=JSON.parse(item.payload_json);
+  const picker=target==='kakebo'?await ledgerPickerOptions(env,p.user_id,payload.kind):null;
+  return json({candidate_id:id,target,kind:item.candidate_kind,payload,ledger_options:picker?.data||null,
+    ledger_options_error:picker?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
     integration:link||null,available:!!config(env,target),
     account_mapping_ready:!!authorizedMapping(env,p.user_id,target),
