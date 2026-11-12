@@ -1,5 +1,5 @@
 import { randomToken, hashString, hmacHex, safeEqual, newCredential, checkPassword, parseCookie, cookieForSession, clearingCookie, sameOrigin, normalizedEmail, validatePassword, isoNow } from './security.js';
-import { parseJapaneseText } from './analysis.js';
+import { parseJapaneseText,extractCampaignActionHints } from './analysis.js';
 import {isSalaryDepositNotice} from './payment-notices.js';
 import { deliveryTaskSuggestion } from './delivery-task.js';
 import { json, failure, readJson, bad, validString } from './http.js';
@@ -316,6 +316,7 @@ async function getDocDetail(db,doc){
   const fields=await dbAll(db,`SELECT id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,review_state,source_page FROM document_fields WHERE document_id=? ORDER BY field_key`,doc.id);
   const attachments=await dbAll(db,`SELECT a.id,a.file_label,a.page_no,a.state,o.mime FROM attachments a JOIN storage_objects o ON o.id=a.object_id WHERE a.document_id=? AND a.state='active' ORDER BY a.sort_order`,doc.id);
   return {...listShape(doc),ai_provider:doc.ai_provider||'none',ai_analysis:await getDocumentAiCache(db,doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
+     campaign_hints:doc.category==='campaign'?extractCampaignActionHints(doc.extracted_text_ja):[],
     source_document_date:doc.source_document_date||null,source_date_quote:doc.source_date_quote||null,
     official_current_verified_at:doc.official_current_verified_at||null,
     fields,attachments,confirmed_at:doc.confirmed_at};
@@ -704,11 +705,14 @@ ELSE 'unreviewed' END review_status,
       const partial=await dbFirst(env.DB,"SELECT normalized_value,source_quote,review_state FROM document_fields WHERE document_id=? AND field_key='due_date_partial'",id);
       if(!partial||partial.review_state==='rejected')
         bad('没有有效的缺少年份截止日线索','NO_PARTIAL_DEADLINE',409);
-      const partialMatch=/([0-9０-９]{1,2})\s*月\s*([0-9０-９]{1,2})\s*日/.exec(partial.normalized_value);
+      const partialMatch=/([0-9０-９]{1,2})\s*月\s*([0-9０-９]{1,2})\s*日|([0-9０-９]{1,2})\s*[\/／]\s*([0-9０-９]{1,2})/.exec(partial.normalized_value);
       const digits=x=>String(x).replace(/[０-９]/g,c=>String(c.charCodeAt(0)-65296));
-      if(!partialMatch||Number(digits(partialMatch[1]))!==Number(body.due_date.slice(5,7))||
-        Number(digits(partialMatch[2]))!==Number(body.due_date.slice(8,10)))
+      if(!partialMatch||Number(digits(partialMatch[1]||partialMatch[3]))!==Number(body.due_date.slice(5,7))||
+        Number(digits(partialMatch[2]||partialMatch[4]))!==Number(body.due_date.slice(8,10)))
         bad('所选日期的月日必须与原文一致，年份必须人工确认','DATE_SOURCE_MISMATCH',422);
+      const sourceWeek=/[（(]([日月火水木金土])[)）]/.exec(partial.normalized_value)?.[1];
+      if(sourceWeek&&['日','月','火','水','木','金','土'][new Date(body.due_date+'T00:00:00Z').getUTCDay()]!==sourceWeek)
+        bad('所选年份与原文星期不一致，请核对活动日期','DATE_WEEKDAY_MISMATCH',422);
       const already=await dbFirst(env.DB,"SELECT id,review_state,source_quote FROM document_fields WHERE document_id=? AND field_key='due_date'",id);
       // Auto-filled year remains a proposal. It can be replaced by an explicitly
       // confirmed year; real dates or already reviewed values cannot be reset.
@@ -725,7 +729,7 @@ ELSE 'unreviewed' END review_status,
         ['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,source_quote,review_state,reviewed_by,updated_at) SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM document_fields WHERE document_id=? AND field_key=?)',
          fieldId,id,'due_date',body.due_date,'date',source,'corrected',p.user_id,now,id,'due_date'],
        ['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind=?)',
-        candidateId,id,'homeflow_task',JSON.stringify({title:'确认：'+doc.title.slice(0,40),due_on:body.due_date,visibility:doc.visibility,requires_confirmation:true,date_field_key:'due_date'}),now,now,id,'homeflow_task']
+        candidateId,id,'homeflow_task',JSON.stringify({title:(doc.category==='campaign'?'活动截止提醒：':'确认：')+doc.title.slice(0,40),due_on:body.due_date,visibility:doc.visibility,requires_confirmation:true,date_field_key:'due_date'}),now,now,id,'homeflow_task']
       ]);
       return json({ok:true,deadline_year_user_confirmed:true,remote_sync:false});
     }
