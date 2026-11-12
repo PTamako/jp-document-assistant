@@ -7,9 +7,10 @@ export function parseOcrSpaceResult(data){
  if(data?.IsErroredOnProcessing||![1,2].includes(Number(data?.OCRExitCode)))return null;
  const pages=Array.isArray(data.ParsedResults)?data.ParsedResults:[];
  if(!pages.length||pages.length>3)return null;
- const text=pages.map((p,i)=>Number(p.FileParseExitCode)===1&&typeof p.ParsedText==='string'?
-  '【扫描第 '+(i+1)+' 页】\n'+p.ParsedText.trim():'').filter(Boolean).join('\n\n').trim();
- return text.length>=6&&text.length<=100000&&/[ぁ-んァ-ン一-龯々]/.test(text)?text:null;
+ const found=pages.map((p,i)=>({page:i+1,content:Number(p.FileParseExitCode)===1&&typeof p.ParsedText==='string'?p.ParsedText.trim():''})).filter(x=>x.content);
+ if(!found.length||!found.some(x=>/[ぁ-んァ-ン一-龯々]/.test(x.content)))return null;
+ const text=found.map(x=>'【扫描第 '+x.page+' 页】\n'+x.content).join('\n\n');
+ return text.length<=100000?text:null;
 }
 export async function ocrSpaceAttachment(request,env,p,documentId){
  const body=await readJson(request,1200);
@@ -51,7 +52,7 @@ export async function ocrSpaceAttachment(request,env,p,documentId){
     .map(x=>x.toString(16).padStart(2,'0')).join('');
   if(digest!==row.sha256)throw Error('ORIGINAL_MISMATCH');
   const form=new FormData();
-  form.append('file',new Blob([bytes],{type:row.mime}),'document.'+(row.mime==='application/pdf'?'pdf':'png'));
+  form.append('file',new Blob([bytes],{type:row.mime}),'document.'+({ 'application/pdf':'pdf','image/jpeg':'jpg','image/png':'png','image/webp':'webp' }[row.mime]));
   form.append('OCREngine','3');form.append('language','auto');form.append('scale','true');
   const response=await (env.OCR_SPACE_FETCH||fetch)('https://api.ocr.space/parse/image',{
    method:'POST',headers:{apikey:env.OCR_SPACE_API_KEY},body:form,
