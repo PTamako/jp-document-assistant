@@ -18,10 +18,9 @@ test('Google OAuth/Picker/Gmail CSP allows required providers but keeps a strict
  assert.ok(directives['frame-src'].includes('https://docs.google.com'));
  assert.ok(directives['frame-src'].includes('https://accounts.google.com'));
  assert.ok(!directives['script-src'].includes("'unsafe-inline'"));
- // Safari/ONNX JS glue uses Function-generated code in addition to WASM.
- // We still forbid inline scripts and wildcard script hosts.
- assert.ok(directives['script-src'].includes("'unsafe-eval'"));
- assert.ok(!directives['script-src'].includes("'unsafe-inline'"));
+ // The main app must never accept JavaScript string evaluation.
+ assert.ok(!directives['script-src'].includes("'unsafe-eval'"));
+ assert.deepEqual(directives['worker-src'],["'self'"]);
  assert.ok(!directives['script-src'].includes('*'));
  assert.ok(!directives['script-src'].includes('*'));
  assert.ok(!directives['connect-src'].includes('*'));
@@ -39,4 +38,18 @@ test('Google Picker website-limited API keys receive only the website origin, wh
  const privateResponse=await worker.fetch(new Request('https://example.com/api/health'),{});
  assert.equal(privateResponse.status,200);
  assert.equal(privateResponse.headers.get('Referrer-Policy'),'no-referrer');
+});
+
+
+test('dynamic JavaScript is permitted only inside the exact bundled PaddleOCR worker',async()=>{
+ const {default:worker}=await import('../worker/index.js');
+ const ASSETS={fetch:async()=>new Response('export {};',{headers:{'Content-Type':'text/javascript'}})};
+ const csp=async path=>(await worker.fetch(new Request('https://example.com'+path),{ASSETS})).headers.get('Content-Security-Policy');
+ const ocrCsp=await csp('/assets/worker-entry-Ab3_90.js');
+ assert.match(ocrCsp,/script-src[^;]*'unsafe-eval'/);
+ assert.match(ocrCsp,/worker-src 'none'/);
+ assert.match(ocrCsp,/connect-src[^;]*paddle-model-ecology/);
+ for(const path of ['/','/assets/app-Z1.js','/assets/worker-entry.js','/assets/worker-entry-Ab3_90.js.map']){
+   assert.doesNotMatch(await csp(path),/'unsafe-eval'/,'unexpected dynamic eval at '+path);
+ }
 });
