@@ -312,7 +312,7 @@ async function handleFileImport(request,env,p){
 async function hashStringBytes(bytes){const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');}
 async function getDocDetail(db,doc){
   const fields=await dbAll(db,`SELECT id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,review_state,source_page FROM document_fields WHERE document_id=? ORDER BY field_key`,doc.id);
-  const attachments=await dbAll(db,`SELECT id,file_label,page_no,state FROM attachments WHERE document_id=? AND state='active' ORDER BY sort_order`,doc.id);
+  const attachments=await dbAll(db,`SELECT a.id,a.file_label,a.page_no,a.state,o.mime FROM attachments a JOIN storage_objects o ON o.id=a.object_id WHERE a.document_id=? AND a.state='active' ORDER BY a.sort_order`,doc.id);
   return {...listShape(doc),ai_provider:doc.ai_provider||'none',ai_analysis:await getDocumentAiCache(db,doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
     source_document_date:doc.source_document_date||null,source_date_quote:doc.source_date_quote||null,
     official_current_verified_at:doc.official_current_verified_at||null,
