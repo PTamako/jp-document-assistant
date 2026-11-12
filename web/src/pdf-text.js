@@ -1,5 +1,10 @@
 // Lazy-loaded PDF.js: PDF parsing uses the *local* text layer, never an AI call.
 // Browser worker URL is packaged as a version-matched same-origin Vite asset.
+// A model or worker startup error is not a problem with a particular PDF page.
+// Stop repeating expensive model initialization across the remaining pages.
+export function isOcrEngineFailure(reason){
+  return /(?:本机日文模型推理或加载失败|OCR 工作线程|隔离 OCR 工作线程|PaddleOCR|ONNX|WASM|no available backend|unsafe-eval|Can't find variable: document|document is not defined|模型加载超时)/i.test(String(reason||''));
+}
 export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=null,maxOcrPages=10,onProgress=null}={}){
   if(file.size>8*1024*1024||!file.size)throw Error('PDF 文件必须在 8MB 以内');
   const bytes=new Uint8Array(await file.arrayBuffer());
@@ -15,7 +20,7 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
   try{
     document=await task.promise;
     if(document.numPages>maxPages)throw Error(`PDF 超过 ${maxPages} 页，请先拆分文档再导入`);
-    const pages=[],empty=[],ocrFailed=[];let ocrCount=0;
+    const pages=[],empty=[],ocrFailed=[];let ocrCount=0,ocrStoppedReason='';
     for(let pageNumber=1;pageNumber<=document.numPages;pageNumber++){
       const page=await document.getPage(pageNumber);
       try{
@@ -30,7 +35,7 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
           if(result.length+pages.reduce((n,s)=>n+s.length,0)>maxChars)throw Error('PDF 文字超过 10 万字符，请拆分导入');
         }
         result=result.trim();
-        if(!result && typeof ocrPage==='function' && ocrCount<maxOcrPages){
+        if(!result && typeof ocrPage==='function' && ocrCount<maxOcrPages && !ocrStoppedReason){
           ocrCount++;
           try {
             onProgress?.(`扫描第 ${pageNumber}/${document.numPages} 页，正在本机识别日文…`);
@@ -50,7 +55,14 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
               if(!blob)throw Error('无法将扫描页转换成图片');
               result=String((await ocrPage(blob,pageNumber))?.text||'').trim();
             }finally{canvas.width=0;canvas.height=0;}
-          }catch(e){ocrFailed.push({page:pageNumber,reason:String(e?.message||'识别失败').slice(0,120)});}
+          }catch(e){
+            const reason=String(e?.message||'识别失败').slice(0,180);
+            ocrFailed.push({page:pageNumber,reason});
+            if(isOcrEngineFailure(reason)){
+              ocrStoppedReason=reason;
+              onProgress?.('本机 OCR 引擎故障，已停止重复加载；可使用 OCR.space 备用识别。');
+            }
+          }
         }
         if(result)pages.push(`【PDF 第 ${pageNumber} 页】\n${result}`);
         else empty.push(pageNumber);
@@ -61,7 +73,7 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
       pages_without_text:empty,ocr_pages_attempted:ocrCount,ocr_failed:ocrFailed,
       warning:empty.length?
         (`第 ${empty.join('、')} 页仍未识别出文字。`+
-         (ocrFailed.length?('失败原因：'+ocrFailed.slice(0,2).map(x=>`第${x.page}页 ${x.reason}`).join('；')+'。'):'请核对原件或使用 OCR.space 备用识别。')):
+         (ocrFailed.length?('失败原因：'+ocrFailed.slice(0,2).map(x=>`第${x.page}页 ${x.reason}`).join('；')+'。'+(ocrStoppedReason?'后续扫描页已暂停本机 OCR，避免重复失败。可使用 OCR.space 备用识别。':'')):'请核对原件或使用 OCR.space 备用识别。')):
          (ocrCount?'扫描页已使用本机 OCR，内容仍须逐项核对原件。':'已提取 PDF 文字层，金额、日期和版面应核对原件。')};
   }finally{
     try{if(document)await document.destroy();else await task.destroy();}catch{}
