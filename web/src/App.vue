@@ -47,6 +47,8 @@ const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0);
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
+// Selection belongs to THIS import only; never stored as a global/device default.
+const aiProvider=ref(''),geminiConsent=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
 
 const fieldLabel={merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
@@ -87,6 +89,7 @@ const choices={
  visibility:{title:'可见范围',items:[{value:'all',label:'全部'},{value:'mine',label:'我拥有的'},{value:'shared',label:'家庭共享'}]},
  archived:{title:'归档状态',items:[{value:'active',label:'未归档'},{value:'archived',label:'已归档'},{value:'all',label:'全部'}]},
  favorite:{title:'收藏',items:[{value:'all',label:'全部'},{value:'yes',label:'仅收藏'}]},
+ aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则分析（不调用 AI）'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 免费 API'}]},
  textSource:{title:'文书来源',items:[{value:'text',label:'粘贴文本'},{value:'mail_forward',label:'苹果邮件复制 / 转发'},{value:'gmail',label:'Gmail 逐封选择'},{value:'google_drive',label:'Google Drive 复制'},{value:'local_file',label:'本地文档文本'}]},
  textRetention:{title:'保存方式',items:[{value:'summary',label:'保存文字和分析结果'},{value:'analyze_only',label:'仅分析，不保存'}]},
  fileRetention:{title:'保存方式',items:[{value:'analyze_only',label:'仅分析，不保存'},{value:'summary',label:'仅保存文字，不上传 R2'},{value:'original',label:'保存私有原件到 R2'}]},
@@ -100,6 +103,7 @@ function choiceValue(field){
   case 'visibility':return visibilityFilter.value;
   case 'archived':return archivedFilter.value;
   case 'favorite':return favoriteFilter.value;
+  case 'aiProvider':return aiProvider.value;
   case 'textSource':return textDraft.source_type;
   case 'textRetention':return textDraft.retention;
   case 'fileRetention':return fileRetention.value;
@@ -133,6 +137,7 @@ function selectChoice(value){
   case 'visibility':visibilityFilter.value=value;break;
   case 'archived':archivedFilter.value=value;break;
   case 'favorite':favoriteFilter.value=value;break;
+  case 'aiProvider':aiProvider.value=value;geminiConsent.value=false;break;
   case 'textSource':textDraft.source_type=value;break;
   case 'textRetention':textDraft.retention=value;break;
   case 'fileRetention':fileRetention.value=value;break;
@@ -378,7 +383,7 @@ async function openDoc(id){
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
 function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;}
-function closeSheet(){choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){aiProvider.value='';geminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailQuery.value='newer_than:30d';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function primeGooglePicker(){
   if(!drivePickerAvailable||drivePickerReadyUi.value||drivePickerLoadingUi.value)return;
   drivePickerLoadingUi.value=true;
@@ -404,7 +409,7 @@ async function copySafariSite(){
 }
 async function selectFile(event){
   const file=event.target.files?.[0];if(!file)return;
-  fileDraft.value=file;fileSource.value='local_file';sheet.value='import';inputMode.value='file';fileText.value='';fileWarning.value='';
+  fileDraft.value=file;fileSource.value='local_file';sheet.value='import';inputMode.value='file';fileText.value='';fileWarning.value='';aiProvider.value='';geminiConsent.value=false;
   const hasTextLayer=/\.(?:pdf|docx|xlsx|pptx)$/i.test(file.name);
   fileRetention.value=hasTextLayer?'summary':'original';
   if(!hasTextLayer)return;
@@ -461,21 +466,23 @@ async function importLocalText(event){
   }catch(e){problem(e);}finally{busy.value=false;if(localTextInput.value)localTextInput.value.value='';}
 }
 async function importDocument(){
+  if(!aiProvider.value){problem(new Error('请为这份文书选择 AI 引擎，或明确选择仅规则分析'));return;}
+  if(aiProvider.value==='gemini'&&!geminiConsent.value){problem(new Error('使用 Gemini 免费 API 前请确认隐私提示'));return;}
   busy.value=true;error.value='';
   try{
     let result;
     if(inputMode.value==='text'){
       if(!textDraft.text.trim())throw new Error('请先粘贴或输入日文内容');
-      result=await api('/api/documents/import/text',{method:'POST',body:{title:textDraft.title,text:textDraft.text,source_type:textDraft.source_type,retention:textDraft.retention}});
+      result=await api('/api/documents/import/text',{method:'POST',body:{title:textDraft.title,text:textDraft.text,source_type:textDraft.source_type,retention:textDraft.retention,ai_provider:aiProvider.value,gemini_consent:geminiConsent.value}});
     }else{
       if(!fileDraft.value)throw new Error('请先选择 PDF、Word、Excel、PowerPoint 或照片');
       if(fileRetention.value!=='original'){
         if(!fileText.value.trim())throw new Error('没有文字层，请人工填写或明确选择保留原件');
         result=await api('/api/documents/import/text',{method:'POST',body:{title:fileDraft.value.name,text:fileText.value,
-          source_type:fileSource.value,retention:fileRetention.value}});
+          source_type:fileSource.value,retention:fileRetention.value,ai_provider:aiProvider.value,gemini_consent:geminiConsent.value}});
       }else{
         const compressed=await compressImage(fileDraft.value);
-        const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');form.append('source_type',fileSource.value);
+        const form=new FormData();form.append('file',compressed,compressed.name);form.append('retention','original');form.append('source_type',fileSource.value);form.append('ai_provider',aiProvider.value);form.append('gemini_consent',String(geminiConsent.value));
         if(fileText.value.trim())form.append('extracted_text',fileText.value);
         result=await api('/api/documents/import/file',{method:'POST',body:form,form:true});
       }
@@ -813,6 +820,10 @@ onBeforeUnmount(()=>{clearPrivateWorkspace();fileDraft.value=null;});
   <button class="secondary full import-source-toggle" type="button" @click="sheet='importSources'">选择导入来源（本地 / Gmail / Google Drive）<UiIcon name="chevron-right" :size="18"/></button>
   <div class="segments"><button :class="{selected:inputMode==='text'}" @click="inputMode='text'">粘贴文字</button><button :class="{selected:inputMode==='file'}" @click="inputMode='file'">文件 / 照片</button></div><template v-if="inputMode==='text'"><label class="form-label">标题（可选）<input v-model="textDraft.title" maxlength="200" placeholder="例如：11 月电费通知" /></label><label class="form-label">日文内容<textarea v-model="textDraft.text" rows="7" maxlength="100000" placeholder="从苹果邮件复制正文，或粘贴可复制的 PDF／Google Drive 文字…"></textarea></label><p v-if="localImportNote" class="fine-print">{{localImportNote}}</p><div class="choice-form-field"><span class="choice-field-label">来源</span><button type="button" class="choice-field-control" @click="openChoice('textSource')"><span>{{choiceLabel('textSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('textRetention')"><span>{{choiceLabel('textRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div></template>
         <template v-else><div class="upload-box"><p>{{fileDraft?fileDraft.name:'选择 PDF、Word、Excel、PowerPoint 或照片'}}</p><button class="secondary" @click="fileInput?.click()">选取文件</button><input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/*,.pdf,.docx,.xlsx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="visually-hidden" @change="selectFile" /></div><p v-if="fileWarning" class="fine-print">{{fileWarning}}</p><label v-if="/\.(pdf|docx|xlsx|pptx)$/i.test(fileDraft?.name||'')" class="form-label">文件文字层（可核对修改）<textarea v-model="fileText" rows="6" maxlength="100000" placeholder="扫描页请人工输入原文"></textarea></label><div class="choice-form-field"><span class="choice-field-label">保存方式</span><button type="button" class="choice-field-control" @click="openChoice('fileRetention')"><span>{{choiceLabel('fileRetention')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><p class="fine-print">支持本地文字提取；图片按需压缩。</p></template>
+
+        <div class="choice-form-field"><span class="choice-field-label">这份文书使用的 AI</span><button type="button" class="choice-field-control" @click="openChoice('aiProvider')"><span>{{choiceLabel('aiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <p class="fine-print">每份文书单独选择，不会作为全局设置。当前 AI 新分析功能仍在开发；现有规则提取照常运行。</p>
+        <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>我已确认这份文书不含私人或机密信息，并同意今后启用时发送给 Gemini 免费 API。当前不会发送。</label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
