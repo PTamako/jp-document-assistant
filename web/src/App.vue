@@ -12,6 +12,7 @@ import TabIcon from './TabIcon.vue';
 import UiIcon from './UiIcon.vue';
 import { invalidateDocumentLists } from './document-list-cache.js';
 import { chineseExplanation } from './chinese-explanation.js';
+import { studySyncState } from './study-sync-status.js';
 import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
@@ -1209,7 +1210,31 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <div v-if="aiAnalysis?.finance_suggestions?.length" class="content-card"><h3>AI · 家計簿建议</h3><p v-for="(item,i) in aiAnalysis.finance_suggestions" :key="i">{{item.description_zh}}</p><p class="fine-print">此处没有新增账目；实际到账或消费必须经你确认。</p></div>
         <p v-else-if="!topupAdvice" class="fine-print">确认后才写入目标 App。</p>
       </section>
-      <section v-if="detailTab==='study'"><h3 class="section-title">从生活文书中学习日语</h3><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id"><strong>{{item.payload.term}}</strong><p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入</button></div><div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='sentence')" :key="item.id"><h3>实用句子</h3><p>{{item.payload.sentence}}</p><p class="muted">{{item.payload.translation_zh}}</p><button class="secondary small" @click="prepareCandidate(item)">脱敏并确认加入知学</button><p class="fine-print">通过授权账户的签名接口同步至知学生词本中的「文书例句」，不会自动覆盖已有词条。</p></div><div v-if="!detailCandidates.some(c=>['vocabulary','sentence'].includes(c.candidate_kind))" class="empty">尚未找到可复用的生词或句子。</div></section>
+      <section v-if="detailTab==='study'">
+        <h3 class="section-title">从生活文书中学习日语</h3>
+        <div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='vocabulary')" :key="item.id">
+          <div class="study-word-head">
+            <strong>{{item.payload.term}}</strong>
+            <span v-if="studySyncState(item)==='linked'" class="study-sync-tag">✓ 已加入知学</span>
+            <span v-else-if="studySyncState(item)==='failed'" class="study-sync-tag error">同步失败</span>
+            <span v-else-if="studySyncState(item)==='sending'" class="study-sync-tag neutral">同步中</span>
+          </div>
+          <p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p>
+          <button v-if="!['linked','sending'].includes(studySyncState(item))" class="secondary small" @click="prepareCandidate(item)">{{studySyncState(item)==='failed'?'重试加入':'脱敏并确认加入'}}</button>
+        </div>
+        <div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='sentence')" :key="item.id">
+          <div class="study-word-head">
+            <h3>实用句子</h3>
+            <span v-if="studySyncState(item)==='linked'" class="study-sync-tag">✓ 已加入知学</span>
+            <span v-else-if="studySyncState(item)==='failed'" class="study-sync-tag error">同步失败</span>
+            <span v-else-if="studySyncState(item)==='sending'" class="study-sync-tag neutral">同步中</span>
+          </div>
+          <p>{{item.payload.sentence}}</p><p class="muted">{{item.payload.translation_zh}}</p>
+          <button v-if="!['linked','sending'].includes(studySyncState(item))" class="secondary small" @click="prepareCandidate(item)">{{studySyncState(item)==='failed'?'重试加入':'脱敏并确认加入知学'}}</button>
+          <p class="fine-print">通过授权账户的签名接口同步至知学生词本中的「文书例句」，不会自动覆盖已有词条。</p>
+        </div>
+        <div v-if="!detailCandidates.some(c=>['vocabulary','sentence'].includes(c.candidate_kind))" class="empty">尚未找到可复用的生词或句子。</div>
+      </section>
       <section v-if="detailTab==='original'">
         <div class="content-card original-panel">
           <div class="original-section-heading">
