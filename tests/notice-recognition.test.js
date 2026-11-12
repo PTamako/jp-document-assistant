@@ -39,7 +39,7 @@ test('stored-value Suica topup retains no expense inference and explains transfe
  assert.equal(get(p,'amount_jpy')?.normalized_value,'1000');
  assert.equal(get(p,'transaction_at')?.normalized_value,'2026-11-08 13:04');
  assert.equal(get(p,'due_date'),undefined);
- assert.match(p.explanation_zh,/交通卡资金变化/);
+ assert.match(p.explanation_zh,/储值余额变化/);
  assert.match(p.explanation_zh,/账户间转移/);
  assert.doesNotMatch(p.explanation_zh,/存在未注明年份的日期/);
 });
