@@ -12,7 +12,7 @@ const pii=/(?:[\w.+-]+@[\w.-]+|〒\s?\d{3}-?\d{4}|(?:\d[\s-]?){10,}|マイナン
 const modelFor=p=>p==='gemini'?GEMINI_MODEL:CF_MODEL;
 
 export function normalizeAiAnalysis(raw,source){
- const content=String(raw||'').replace(/^` ` `(?:json)?\s*/i,'').trim();
+ const content=String(raw||'').replace(/^```(?:json)?\s*/i,'').replace(/```\s*$/,'').trim();
  let obj;try{obj=JSON.parse(content);}catch{return null;}
  if(!obj||typeof obj!=='object'||Array.isArray(obj))return null;
  const summary_zh=str(obj.summary_zh,500),explanation_zh=str(obj.explanation_zh,3000);
