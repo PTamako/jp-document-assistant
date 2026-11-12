@@ -8,6 +8,7 @@ import { planBackup, exportBackup, previewImport, confirmImport } from './backup
 import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
 import { ocrAttachment } from './ocr.js';
+import { ocrSpaceAttachment } from './ocr-space.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
@@ -669,6 +670,7 @@ ELSE 'unreviewed' END review_status,
       if(method==='PATCH')return updateDoc(request,env,p,doc);
     }
     if(method==='POST'&&rest==='ocr')return ocrAttachment(request,env,p,id);
+    if(method==='POST'&&rest==='ocr-space')return ocrSpaceAttachment(request,env,p,id);
     if(method==='POST'&&rest==='ai/analyze'){
       const doc=await ownedDocument(env.DB,id,p,'active');
       const body=await readJson(request,900);
