@@ -1,6 +1,6 @@
 import { explainNotice } from './notice-context.js';
 import { chineseExplanation } from '../web/src/chinese-explanation.js';
-import {isSalaryDepositNotice,isCardPurchaseNotice,extractCardPurchaseFields,extractSalaryDepositFields} from './payment-notices.js';
+import {isSalaryDepositNotice,isCardPurchaseNotice,extractCardPurchaseFields,extractSalaryDepositFields,extractCommerceFields} from './payment-notices.js';
 // Safe, deterministic Japanese document pre-analysis. This is NOT OCR or a generative translation.
 const gloss = [
   ['納付期限', '缴纳期限', 'のうふきげん'],
@@ -278,7 +278,7 @@ export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   const clauses=interpretCriticalClauses(text);
   const issues=[];
   const dates=extractDates(text);
-  const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):category==='card_spend'?extractCardPurchaseFields(text):category==='salary'&&isSalaryDepositNotice(text)?extractSalaryDepositFields(text):[];
+  const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):category==='card_spend'?extractCardPurchaseFields(text):category==='shopping'?extractCommerceFields(text):category==='salary'&&isSalaryDepositNotice(text)?extractSalaryDepositFields(text):[];
   const due=dates.find(d=>d.due_hint && !/(?:お届け予定|配達予定|配送予定|口座引落|引き落とし予定|受取完了)/.test(d.source_quote));
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
   for(const item of extractActionableTextFields(text,!!due,{defaultYear:referenceYear,category}))fields.push(item);
