@@ -39,6 +39,21 @@ test('saved image attachments show both Workers AI and OCR.space controls',()=>{
  assert.match(app,/@click="openOcrSpace\(a\)"/);
  assert.match(app,/sheet==='ocrConfirm'/);
 });
+test('import file/photo OCR provider picker offers Workers AI for images and PDF pages',()=>{
+ const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
+ assert.match(app,/value:'workers_ai',label:'Workers AI 图片 OCR'/);
+ assert.match(app,/async function runImportWorkersAi\(\)/);
+ assert.match(app,/\/api\/workers-ai-ocr\/preview/);
+ assert.match(app,/form\.append\('confirm_workers_ai','true'\)/);
+ assert.match(app,/importOcrEngine==='workers_ai'/);
+ assert.match(app,/renderPdfOcrPreview\(selected,\{pageNumber:page,maxBytes:900\*1024\}\)/);
+ assert.match(app,/renderImageOcrPreview\(selected,\{maxBytes:900\*1024\}\)/);
+ assert.match(app,/importOcrSpaceConsent/);
+ assert.match(app,/ocrProgress\.value='Workers AI 识别中…'/);
+ const worker=readFileSync(new URL('../worker/index.js',import.meta.url),'utf8');
+ assert.match(worker,/if\(method==='POST'&&path==='\/api\/workers-ai-ocr\/preview'\)/);
+});
+
 test('JPEG PNG and WebP import controls include explicit-consent OCR.space fallback',()=>{
  const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
  assert.match(app,/renderImageOcrPreview\(selected,\{maxBytes:900\*1024\}\)/);
