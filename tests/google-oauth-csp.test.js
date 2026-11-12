@@ -53,3 +53,9 @@ test('dynamic JavaScript is permitted only inside the exact bundled PaddleOCR wo
    assert.doesNotMatch(await csp(path),/'unsafe-eval'/,'unexpected dynamic eval at '+path);
  }
 });
+
+
+test('production static assets route only OCR worker through HTTP CSP handler',()=>{
+ const wrangler=readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8');
+ assert.match(wrangler,/"run_worker_first":\s*\["\/assets\/worker-entry-\*\.js"\]/);
+});
