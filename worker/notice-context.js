@@ -1,3 +1,4 @@
+import { deliveryWindow } from './delivery-task.js';
 // Source-grounded, no-network explanations for recurring Japanese life notices.
 // This is not a translation model. Never infer a paid transaction, legal validity,
 // or a deadline from a mere scheduled/receipt date.
@@ -47,8 +48,8 @@ export function explainNotice({text,category,fields}){
    summary='包裹配送通知';
    lines.push('这是什么：快递配送或预计送达通知，和支付凭证不是一回事。');
    if(date)lines.push('原文列出的日期：'+date+'。这是预计配送／送达日期，不是必须付款或办理的截止日。');
-   const slot=evidenceLine(text,/お届け予定日時|お届け予定日|配達予定|配送予定/);
-   if(slot)lines.push('配送时间线索（日文原文）：'+slot);
+   const window=deliveryWindow(text);
+   if(window)lines.push('预计配送时段：'+window+'。');
    lines.push('建议：如果需要改时间或查询进度，请通过快递公司官方 App／官网核对；“预计送达”不代表“已签收”。');
  }else if(category==='salary'){
    if(/(?:入金内容|振込(?:による)?ご入金|振込入金|お振込によるご入金)/.test(text.normalize('NFKC'))){
