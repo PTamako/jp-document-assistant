@@ -14,6 +14,8 @@ test('Paddle model version is pinned and Japanese text stays unverified',async()
  assert.equal(options.lang,'japan');
  assert.equal(options.ocrVersion,'PP-OCRv6');
  assert.equal(options.worker,true,'OpenCV must execute outside the main PWA');
- assert.match(options.ortOptions.wasmPaths,/@1\.31\.1\/dist\//);
+ assert.match(options.ortOptions.wasmPaths.wasm,/@1\.31\.1\/dist\//);
+ assert.match(options.ortOptions.wasmPaths.mjs,/\/ocr\/ort-wasm-simd-threaded\.jsep\.mjs$/);
+ assert.doesNotMatch(options.ortOptions.wasmPaths.mjs,/cdn\.jsdelivr/);
  assert.equal(result.needs_review,true);
 });
