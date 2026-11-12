@@ -149,7 +149,10 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  if(source.length>9000)return {ai_status:'too_long'};
  const sourceHash=await hashString(source),model=modelFor(provider);
  const old=await first(env.DB,'SELECT * FROM document_ai_analyses WHERE document_id=?',doc.id);
- if(old?.provider===provider&&old?.source_sha===sourceHash&&old?.model_id===model&&old?.prompt_version===PROMPT){
+ // Preserve prior successful analysis across a prompt-only upgrade;
+ // the user can backfill missing structured fields with rules without
+ // consuming their limited Gemini / Cloudflare daily allowance.
+ if(old?.provider===provider&&old?.source_sha===sourceHash&&old?.model_id===model&&[PROMPT,'document-v1-20261112'].includes(old?.prompt_version)){
   if(old.state==='success'){
    const result=JSON.parse(old.result_json);
    const added_fields=await addGroundedFieldSuggestions(env,doc,result);
