@@ -1,0 +1,35 @@
+name: Diagnose deployed Google Picker key (temporary)
+on:
+  pull_request:
+    paths: ['.github/workflows/google-key-diagnostic-temp.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Live header and public-key probe without OAuth or documents
+        run: |
+          node --input-type=module <<'JS'
+          import{createHash}from'node:crypto';
+          const base='https://jp-document-assistant.yupan6706.workers.dev',expected='189eba592785be9a6e63a1ee2efd202d1aca07997e7c6593418e18e08e13b6a7';
+          const a=await fetch(base+'/',{cache:'no-store'}),h=await a.text(),b=await fetch(base+'/api/health',{cache:'no-store'});
+          console.log('site:',a.status,a.headers.get('referrer-policy'),/name="referrer" content="([^"]+)"/.exec(h)?.[1]);
+          console.log('api:',b.status,b.headers.get('referrer-policy'));
+          if(a.headers.get('referrer-policy')!=='strict-origin-when-cross-origin'||b.headers.get('referrer-policy')!=='no-referrer')throw Error('Wrong live referrer headers');
+          const names=[...h.matchAll(/<script[^>]+src="([^"]+\.js)"/g)].map(x=>x[1]);
+          const matches=[];
+          for(const name of names){const url=new URL(name,base);if(url.origin!==base)continue;
+            const body=await(await fetch(url)).text();matches.push(...[...body.matchAll(/AIza[A-Za-z0-9_-]{35}/g)].map(x=>x[0]));}
+          const key=[...new Set(matches)].find(k=>createHash('sha256').update(k).digest('hex')===expected);
+          console.log('live Google client key matches expected:',!!key);
+          if(!key)throw Error('Missing actual deployed API key');
+          for(const [label,ref]of[['site',base+'/'],['docs','https://docs.google.com/'],['none',null]]){
+            const url=new URL('https://www.googleapis.com/drive/v3/about');url.searchParams.set('fields','user');url.searchParams.set('key',key);
+            const res=await fetch(url,{headers:ref?{Referer:ref}:{}});
+            const data=await res.json().catch(()=>({}));
+            console.log('probe',label,'http',res.status,'googleStatus',data.error?.status||'none','reason',data.error?.details?.[0]?.reason||'none');
+          }
+          console.log('No Google user data read or written; no raw API keys printed.');
+          JS
