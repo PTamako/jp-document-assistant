@@ -9,6 +9,7 @@ import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
 import TabIcon from './TabIcon.vue';
+import { invalidateDocumentLists } from './document-list-cache.js';
 import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
@@ -252,6 +253,12 @@ async function loadTab(tab,append=false){
     page.next=d.next_offset;page.loaded=true;
   }catch(e){if(token===loadSerial)problem(e);}finally{if(token===loadSerial)loadingPage.value=false;}
 }
+function refreshDocumentViews(documentId=null){
+ // Discard any in-flight response based on a pre-deletion snapshot.
+ loadSerial++;
+ loadingPage.value=false;
+ invalidateDocumentLists(pages,documentId);
+}
 async function selectTab(tab){
   swipeOpenId.value='';
   activeTab.value=tab;
@@ -400,16 +407,19 @@ async function trashFromList(){
   try{
     await api(`/api/documents/${target.id}/trash`,{method:'POST',body:{}});
     closeSheet();
-    pages.docs.loaded=false;
-    await loadTab('docs');
-    flash('文书已移入回收站，可从「我的 → 回收站」恢复');
+    refreshDocumentViews(target.id);
+    if(pages[activeTab.value])await loadTab(activeTab.value);
+    flash('文书已移入回收站，「今日」与「联动」已同步更新，可从回收站恢复');
   }catch(e){problem(e);}
   finally{busy.value=false;}
 }
 async function trashCurrent(){busy.value=true;try{
   await api(`/api/documents/${current.value.id}/trash`,{method:'POST',body:{}});
-  closeSheet();closeDetail();for(const p of Object.values(pages))p.loaded=false;await loadTab(activeTab.value);
-  flash('已移入回收站，原件保留可恢复');
+  const deletedId=current.value.id;
+  closeSheet();closeDetail();
+  refreshDocumentViews(deletedId);
+  if(pages[activeTab.value])await loadTab(activeTab.value);
+  flash('已移入回收站，「今日」与「联动」已同步更新，原件保留可恢复');
 }catch(e){problem(e);}finally{busy.value=false;}}
 async function showRecycle(){sheet.value='recycle';await refreshTrash();}
 async function refreshTrash(reset=true){try{if(reset)recycleOffset.value=0;
@@ -508,13 +518,19 @@ async function commitApprovedCandidate(){busy.value=true;try{const id=candidateD
 
 async function restore(id){busy.value=true;try{
   const d=await api(`/api/documents/${id}/restore`,{method:'POST',body:{}});
-  await refreshTrash();for(const p of Object.values(pages))p.loaded=false;flash(d.warning||'文书已恢复');
+  await refreshTrash();
+  refreshDocumentViews();
+  if(pages[activeTab.value])await loadTab(activeTab.value);
+  flash(d.warning||'文书已恢复，文书库、今日与联动将在打开时显示最新内容');
 }catch(e){problem(e);}finally{busy.value=false;}}
 const pendingDelete=ref(null);
 function askPermanent(id){pendingDelete.value=id;sheet.value='permanent';}
 async function permanentDelete(){busy.value=true;try{
   const result=await api(`/api/documents/${pendingDelete.value}/permanent-delete`,{method:'POST',body:{confirm:'DELETE_FOREVER'}});
-  pendingDelete.value=null;sheet.value='recycle';await refreshTrash();flash(result.warning||'文书与无需再引用的 R2 原件已执行清理');
+  const deletedId=pendingDelete.value;
+  pendingDelete.value=null;sheet.value='recycle';await refreshTrash();
+  refreshDocumentViews(deletedId);
+  flash(result.warning||'文书与无需再引用的 R2 原件已执行清理');
 }catch(e){problem(e);}finally{busy.value=false;}}
 async function issueInvite(){busy.value=true;try{
   const d=await api('/api/household/invites',{method:'POST',body:{invitee_email:inviteEmail.value}});inviteToken.value=d.invite_token;flash('邀请码仅供指定邮箱，48小时有效');
