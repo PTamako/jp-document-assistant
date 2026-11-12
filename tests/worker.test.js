@@ -57,6 +57,45 @@ async function boot(env){
 }
 function auth(p){return {cookie:p.cookie,csrf:p.csrf};}
 
+test('selected Cloudflare AI analyzes a source once and caches grounded study candidates without cross-app writes',async()=>{
+ const env=makeEnv(),u=await boot(env);
+ const source='営業時間を確認してください。ご不明な点は窓口へご連絡ください。';
+ let calls=0;
+ env.ENABLE_DOCUMENT_AI='true';
+ env.AI_ANALYSIS_DAILY_LIMIT='2';
+ env.AI={run:async(model,opts)=>{
+  calls++;
+  assert.equal(model,'@cf/qwen/qwen3.8-27b');
+  assert.ok(opts.messages.length);
+  return {response:JSON.stringify({
+   summary_zh:'这是一份营业时间说明，请自行核对。',
+   explanation_zh:'建议先确认营业时间，有不明事项可联系窗口。',
+   important_points_zh:['确认营业时间'],
+   vocabulary:[{term:'営業時間',reading:'えいぎょうじかん',meaning_zh:'营业时间',source_quote:'営業時間'}],
+   sentences:[{sentence:'営業時間を確認してください。',translation_zh:'请确认营业时间。',source_quote:'営業時間を確認してください。'}],
+   homeflow_suggestions:[],finance_suggestions:[]
+  })};
+ }};
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
+  source_type:'text',retention:'summary',text:source,ai_provider:'cloudflare'
+ }});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ assert.equal(imported.data.ai_status,'success');
+ assert.equal(calls,1);
+ const id=imported.data.document_id;
+ const detail=await req(env,'/api/documents/'+id,auth(u));
+ assert.equal(detail.data.document.ai_analysis.status,'success');
+ assert.match(detail.data.document.ai_analysis.result.explanation_zh,/营业/);
+ const candidates=await req(env,'/api/documents/'+id+'/candidates',auth(u));
+ assert.equal(candidates.data.items.filter(x=>x.candidate_kind==='sentence').length,1);
+ assert.equal(candidates.data.items.filter(x=>x.candidate_kind==='vocabulary').length,1);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+ const cached=await req(env,'/api/documents/'+id+'/ai/analyze',{method:'POST',...auth(u),data:{confirm:true}});
+ assert.equal(cached.data.ai_status,'cached');
+ assert.equal(calls,1);
+ assert.equal(env.DB.sql.prepare('SELECT calls FROM ai_analysis_daily').get().calls,1);
+});
+
 test('AI engine is chosen and consented per document, never globally or invoked on import',async()=>{
  const env=makeEnv(),u=await boot(env);
  const first=await req(env,'/api/documents/import/text',{method:'POST',...auth(u),data:{
