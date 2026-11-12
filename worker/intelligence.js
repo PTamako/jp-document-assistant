@@ -1,7 +1,7 @@
 import {hashString,randomToken,isoNow} from './security.js';
+import {GEMINI_MODEL,reserveGeminiRequest} from './gemini-budget.js';
 
 const CF_MODEL='@cf/qwen/qwen3.8-27b';
-const GEMINI_MODEL='gemini-3.5-flash';
 // Thinking tokens count toward maxOutputTokens; MEDIUM balances quality and cost.
 export const GEMINI_THINKING_LEVEL='MEDIUM';
 export const GEMINI_MAX_OUTPUT_TOKENS=8192;
@@ -205,8 +205,22 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
   await run(env.DB,"INSERT OR IGNORE INTO document_ai_analyses(document_id,provider,source_sha,model_id,prompt_version,state,updated_at) VALUES(?,?,?,?,?,'pending',?)",
    doc.id,provider,sourceHash,model,PROMPT,now);
  if(claim.meta?.changes!==1)return {ai_status:'in_progress'};
- // Gemini uses the owner's API key. Let Google enforce its own billing/rate
- // policies; this app's small shared daily quota applies only to Workers AI.
+ // Gemini daily quota belongs to the Google project's Pacific calendar day;
+ // both household members share the same atomic D1 counter.
+ if(provider==='gemini'){
+  let quota;
+  try{quota=await reserveGeminiRequest(env.DB);}catch{
+   try{await run(env.DB,"UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=? WHERE document_id=? AND source_sha=?",
+    JSON.stringify({failure_code:'gemini_budget_unavailable'}),isoNow(),doc.id,sourceHash);}catch{}
+   return {ai_status:'gemini_budget_unavailable'};
+  }
+  if(!quota.allowed){
+   await run(env.DB,"UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=? WHERE document_id=? AND source_sha=?",
+    JSON.stringify({failure_code:quota.code}),isoNow(),doc.id,sourceHash);
+   return {ai_status:quota.code};
+  }
+ }
+ // Cloudflare Workers AI keeps its independent 5/day cap.
  if(provider==='cloudflare'){
   const n=Number(env.AI_ANALYSIS_DAILY_LIMIT??5),limit=Number.isSafeInteger(n)?Math.max(0,Math.min(5,n)):0;
   if(!limit){await run(env.DB,"UPDATE document_ai_analyses SET state='failed',updated_at=? WHERE document_id=?",isoNow(),doc.id);return {ai_status:'budget_disabled'};}
