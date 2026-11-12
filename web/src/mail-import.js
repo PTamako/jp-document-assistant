@@ -10,10 +10,80 @@ const charsetAliases = {
   'windows-31j':'shift_jis','cp932':'shift_jis','iso2022jp':'iso-2022-jp',
   'latin1':'windows-1252',
 };
+// ISO-2022-JP mail is still widely used by Japanese banks and shops. Some
+// Safari/WebKit builds reject the label, and real MIME messages may contain a
+// broken escape at the end. Translate its JIS X 0208 pairs to Shift_JIS as a
+// small, self-contained fallback; this requires no network, script or package.
+function iso2022JpViaShiftJis(bytes) {
+  const chunks=[],pending=[];
+  const flush=()=>{
+    if(pending.length){
+      chunks.push(new TextDecoder('shift_jis',{fatal:false}).decode(new Uint8Array(pending)));
+      pending.length=0;
+    }
+  };
+  let state='ascii';
+  for(let i=0;i<bytes.length;i++){
+    const b=bytes[i];
+    if(b===0x1b){
+      const b1=bytes[i+1],b2=bytes[i+2];
+      if(b1===0x28&&b2===0x42){state='ascii';i+=2;continue;}
+      if(b1===0x28&&b2===0x4a){state='roman';i+=2;continue;}
+      if(b1===0x28&&b2===0x49){state='kana';i+=2;continue;}
+      if(b1===0x24&&(b2===0x40||b2===0x42)){state='jis';i+=2;continue;}
+      pending.push(0xff);continue;
+    }
+    if(state==='jis'){
+      if(b===0x0a||b===0x0d||b===0x09){pending.push(b);continue;}
+      const next=bytes[i+1];
+      if(b>=0x21&&b<=0x7e&&next>=0x21&&next<=0x7e){
+        const lead=((b-0x21)>>1)+(b<=0x5e?0x81:0xc1);
+        const trail=(b&1)?next+(next<0x60?0x1f:0x20):next+0x7e;
+        pending.push(lead,trail);i++;continue;
+      }
+      pending.push(0xff);continue;
+    }
+    if(state==='kana'){
+      pending.push(b>=0x21&&b<=0x5f?b+0x80:b<=0x20?b:0xff);
+      continue;
+    }
+    if(state==='roman'&&(b===0x5c||b===0x7e)){
+      flush();chunks.push(b===0x5c?'¥':'‾');continue;
+    }
+    pending.push(b<=0x7f?b:0xff);
+  }
+  flush();
+  return chunks.join('');
+}
+function acceptableDecode(value) {
+  if(!value.trim())return false;
+  const damaged=(value.match(/\uFFFD/g)||[]).length;
+  return damaged<=Math.max(3,Math.floor(value.length*0.02));
+}
 function decode(bytes, charset='utf-8') {
   const cs=String(charset||'utf-8').trim().toLowerCase();
-  try{return new TextDecoder(charsetAliases[cs]||cs,{fatal:true}).decode(bytes);}
-  catch {throw new Error(`该文件的字符编码（${cs.slice(0,30)}）不支持或数据已损坏，请复制正文粘贴导入`);}
+  const encoding=charsetAliases[cs]||cs;
+  try{return new TextDecoder(encoding,{fatal:true}).decode(bytes);}
+  catch {
+    if(encoding==='iso-2022-jp'){
+      // Some Gmail MIME parts are UTF-8 despite an old charset label.
+      // Only try this when there are no ISO-2022 escape sequences.
+      if(!bytes.includes(0x1b)){
+        for(const alternative of ['utf-8','shift_jis']){
+          try{
+            const decoded=new TextDecoder(alternative,{fatal:true}).decode(bytes);
+            if(acceptableDecode(decoded))return decoded;
+          }catch{}
+        }
+      }
+      const candidates=[];
+      try{candidates.push(new TextDecoder('iso-2022-jp',{fatal:false}).decode(bytes));}catch{}
+      try{candidates.push(iso2022JpViaShiftJis(bytes));}catch{}
+      candidates.sort((a,b)=>(a.match(/\uFFFD/g)||[]).length-(b.match(/\uFFFD/g)||[]).length);
+      if(candidates.length&&acceptableDecode(candidates[0]))return candidates[0];
+    }
+    throw new Error(`该文件的字符编码（${cs.slice(0,30)}）不支持或数据已损坏，请复制正文粘贴导入`);
+  }
 }
 function rawLatin1(bytes){
   let out='';for(let i=0;i<bytes.length;i+=4096)out+=String.fromCharCode(...bytes.subarray(i,i+4096));
