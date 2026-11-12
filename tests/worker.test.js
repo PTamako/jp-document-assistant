@@ -57,6 +57,51 @@ async function boot(env){
 }
 function auth(p){return {cookie:p.cookie,csrf:p.csrf};}
 
+test('OCR.space scanned PDF import preview is private, consent gated, page-only and quota limited',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.OCR_SPACE_API_KEY='test-key-not-real';
+ env.OCR_SPACE_FREE_ONLY_CONFIRMED='true';
+ env.OCR_APP_UTC_DAILY_LIMIT='1';
+ let external=0,posted;
+ env.OCR_SPACE_FETCH=async(url,options)=>{
+  external++;
+  assert.equal(url,'https://api.ocr.space/parse/image');
+  assert.equal(options.headers.apikey,env.OCR_SPACE_API_KEY);
+  posted=options.body.get('file');
+  assert.equal(posted.type,'image/jpeg');
+  assert.equal(posted.name,'scanned-page.jpg');
+  assert.equal(options.body.get('OCREngine'),'3');
+  return Response.json({OCRExitCode:1,IsErroredOnProcessing:false,
+   ParsedResults:[{FileParseExitCode:1,ParsedText:'区役所のお知らせを確認してください。'}]});
+ };
+ const jpg=new Blob([new Uint8Array([255,216,45,45,45,45,255,217])],{type:'image/jpeg'});
+ const makeForm=(consented=true,file=jpg)=>{
+  const f=new FormData();f.append('file',file,'page.jpg');
+  if(consented){f.append('confirm_ocr_space','true');f.append('confirm_private_upload','true');}
+  return f;
+ };
+ const anonymous=await req(env,'/api/ocr-space/preview',{method:'POST',form:makeForm(true)});
+ assert.equal(anonymous.response.status,401);
+ const missingConsent=await req(env,'/api/ocr-space/preview',{method:'POST',...auth(owner),form:makeForm(false)});
+ assert.equal(missingConsent.response.status,409);
+ assert.equal(external,0);
+ const wrongFormat=await req(env,'/api/ocr-space/preview',{method:'POST',...auth(owner),
+  form:makeForm(true,new Blob(['not a real PDF'],{type:'application/pdf'}))});
+ assert.equal(wrongFormat.response.status,422);
+ assert.equal(external,0);
+ const response=await req(env,'/api/ocr-space/preview',{method:'POST',...auth(owner),form:makeForm(true)});
+ assert.equal(response.response.status,200,JSON.stringify(response.data));
+ assert.equal(response.data.uploaded_pages,1);
+ assert.match(response.data.text,/区役所/);
+ assert.equal(external,1);
+ const again=await req(env,'/api/ocr-space/preview',{method:'POST',...auth(owner),form:makeForm(true)});
+ assert.equal(again.response.status,429);
+ assert.equal(external,1);
+ assert.equal(env.DB.sql.prepare('SELECT calls FROM ocr_app_utc_daily').get().calls,1);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,0);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,0);
+});
+
 test('selected Cloudflare AI analyzes a source once and caches grounded study candidates without cross-app writes',async()=>{
  const env=makeEnv(),u=await boot(env);
  const source='営業時間を確認してください。ご不明な点は窓口へご連絡ください。';
