@@ -37,7 +37,7 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
             // Limit raster memory on iPhone: roughly 1800px width, <= 3 MP.
             const base=page.getViewport({scale:1});
             const scale=Math.min(2.5,1800/base.width,Math.sqrt(3000000/(base.width*base.height)));
-            const viewport=page.getViewport({scale:Math.max(1,scale)});
+            const viewport=page.getViewport({scale:Math.max(0.25,scale)});
             if(typeof window==='undefined'||!window.document)throw Error('仅浏览器支持扫描页渲染');
             const canvas=window.document.createElement('canvas');
             canvas.width=Math.round(viewport.width);canvas.height=Math.round(viewport.height);
