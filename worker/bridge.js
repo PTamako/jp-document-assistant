@@ -95,7 +95,13 @@ function validatedPayload(target,item,approved,body){
     // Prefer the user's verified merchant, falling back to the extracted
     // candidate. The source of truth is server-side, not browser-sent text.
     const merchant=trim(approved.get('merchant')||x.merchant,100);
-    return {operation:'entry',type:x.kind,date:body.date,amount,category:trim(body.category,80),
+    const approvedTimestamp=String(approved.get('transaction_at')||'');
+    // Never invent a purchase clock or use the email's received timestamp.
+    // Only a reviewed source-backed timestamp matching the selected date is sent.
+    const time=approvedTimestamp.slice(0,10)===body.date&&
+      /^\d{4}-\d\d-\d\d (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(approvedTimestamp)
+      ?approvedTimestamp.slice(11,16):'';
+    return {operation:'entry',type:x.kind,date:body.date,time,amount,category:trim(body.category,80),
       paymentSource:trim(body.payment_source,100),merchant,note:trim(body.note,180),
       source_kind:'document_assistant'};
   }
@@ -134,13 +140,14 @@ export async function getBridgeStatus(env,p){
 }
 // Load only live catalogue labels; do not expose account numbers, balances,
 // transaction history, or the identity mapping through this endpoint.
-export async function ledgerPickerOptions(env,userId,kind){
+export async function ledgerPickerOptions(env,userId,kind,merchant='',recognizedPayment=''){
  const dest=config(env,'kakebo'),actor=authorizedMapping(env,userId,'kakebo');
  if(!dest)return {error:'家計簿安全联动尚未配置'};
  if(!actor)return {error:'家計簿账号尚未完成授权映射'};
  if(!['income','expense'].includes(kind))return {error:'不支持的记账类型'};
  const body=JSON.stringify({source:'jp-document-assistant',actor_user_id:actor,
-  payload:{operation:'options',entryType:kind}});
+  payload:{operation:'options',entryType:kind,merchant:String(merchant||'').slice(0,100),
+    recognizedPayment:String(recognizedPayment||'').slice(0,80)}});
  const stamp=String(Date.now());
  let stage='sign';
  try{
@@ -166,7 +173,10 @@ export async function ledgerPickerOptions(env,userId,kind){
   const paymentSources=safeList(parsed.payment_sources,80);
   if(!categories.length||!paymentSources.length)
    return {error:'家計簿接口未返回可用分类或支付方式，请确认正式部署'};
-  return {data:{categories,paymentSources}};
+  const suggested=parsed.suggested&&typeof parsed.suggested==='object'?parsed.suggested:{};
+  const category=categories.some(x=>x.value===suggested.category)?suggested.category:'';
+  const payment_source=paymentSources.some(x=>x.value===suggested.payment_source)?suggested.payment_source:'';
+  return {data:{categories,paymentSources,suggested:{category,payment_source}}};
  }catch(e){
   const reason=String(e?.message||'');
   if(stage==='sign')return {error:'家計簿联动签名失败，请检查服务端配置'};
@@ -184,7 +194,7 @@ export async function candidatePreview(request,env,p,id){
   const fields=await checkedFields(env,item.document_id);
   const link=await first(env.DB,'SELECT state,remote_id,attempt_count,last_error_code FROM integration_links WHERE candidate_id=?',id);
   const payload=JSON.parse(item.payload_json);
-  const picker=target==='kakebo'?await ledgerPickerOptions(env,p.user_id,payload.kind):null;
+  const picker=target==='kakebo'?await ledgerPickerOptions(env,p.user_id,payload.kind,payload.merchant,payload.payment_source_hint):null;
   return json({candidate_id:id,target,kind:item.candidate_kind,payload,ledger_options:picker?.data||null,
     ledger_options_error:picker?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
