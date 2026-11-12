@@ -18,7 +18,9 @@
   "ai": {"binding":"AI"},
   "vars": {
     "R2_BUCKET_NAME":"jp-document-assistant-private",
-    "ENABLE_EXPERIMENTAL_OCR":"true",
+    "ENABLE_EXPERIMENTAL_OCR":"false",
+    "ENABLE_DOCUMENT_AI":"false",
+    "AI_ANALYSIS_DAILY_LIMIT":"2",
     "OCR_CALLS_PER_USER_DAY":"1",
     "OCR_APP_UTC_DAILY_LIMIT":"1"
   },
