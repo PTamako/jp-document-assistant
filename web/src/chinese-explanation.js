@@ -8,7 +8,7 @@ export function chineseExplanation(raw) {
   for(let entry of source.split(/\r?\n/)){
     let s=entry.trim();
     if(!s)continue;
-    if(/^(?:服务线索（日文原文）|扣款内容／相关机构线索（日文原文）|配送时间线索（日文原文）|可核对的日文依据)[：:]/.test(s)){
+    if(['服务线索（日文原文）','扣款内容／相关机构线索（日文原文）','配送时间线索（日文原文）','可核对的日文依据'].some(prefix=>s.startsWith(prefix))){
       // Delivery-time evidence may contain a useful timeslot. Retain only the
       // time in a Chinese sentence, not the source line itself.
       if(s.startsWith('配送时间线索')){
