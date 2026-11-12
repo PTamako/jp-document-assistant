@@ -85,8 +85,7 @@ test('CI uses committed npm lockfile and avoids duplicate main pushes',()=>{
 test('historical financial sync requires a visible reconciliation checkbox before enabling submit',()=>{
  const ui=read('web/src/App.vue');
  assert.match(ui,/ledgerAttempted&&!ledgerMappingChangeConfirmed/);
- assert.match(ui,/确认不重复后再提交/);
- assert.match(ui,/请先勾选上方确认项/);
+ assert.match(ui,/已尝试同步，同意核对旧记录并防止重复记账/);
  assert.match(ui,/confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value/);
  assert.match(ui,/current\?\.category==='card_spend'\?'交易日期'/);
 });
