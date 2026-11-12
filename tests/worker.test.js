@@ -1947,6 +1947,55 @@ test('Olive card purchase creates an expense review candidate that confirms 1520
 });
 
 
+test('previously confirmed split-line card mail backfills one finance candidate safely',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const raw=[
+  '件名：ご利用のお知らせ【三井住友カード】',
+  'お客様のカードご利用内容をお知らせいたします。',
+  'ご利用カード：Ｏｌｉｖｅ／クレジット',
+  '◇利用日：2026/05/28 19:06',
+  '◇利用先：セブン－イレブン',
+  '◇利用取引：買物',
+  '◇利用金額：151円',
+  '※カード利用の承認照会通知であり、ご請求を確定しません。'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+  data:{text:raw,source_type:'text',retention:'summary'}});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const getDoc=async()=>(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const candidates=async()=>(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ const initial=await getDoc();
+ assert.equal(initial.category,'card_spend');
+ assert.equal((await candidates()).filter(x=>x.candidate_kind==='finance').length,1);
+ const amount=initial.fields.find(x=>x.field_key==='amount_jpy');
+ assert.equal(amount?.normalized_value,'151');
+ assert.equal((await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
+  data:{normalized_value:'151',review_state:'confirmed'}})).response.status,200);
+ // Simulate a previous version's bank classification. Keep its reviewed money field.
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='finance'").run(id);
+ env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=? AND field_key IN ('merchant','transaction_at')").run(id);
+ env.DB.sql.prepare("UPDATE documents SET category='bank' WHERE id=?").run(id);
+ assert.equal((await candidates()).filter(x=>x.candidate_kind==='finance').length,0);
+ const reparse=()=>req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ const first=await reparse();
+ assert.equal(first.response.status,200,JSON.stringify(first.data));
+ const updated=await getDoc();
+ assert.equal(updated.category,'card_spend');
+ assert.equal(updated.fields.find(x=>x.field_key==='amount_jpy')?.id,amount.id);
+ assert.equal(updated.fields.find(x=>x.field_key==='amount_jpy')?.review_state,'confirmed');
+ assert.equal(updated.fields.find(x=>x.field_key==='merchant')?.normalized_value,'セブン-イレブン');
+ assert.equal(updated.fields.find(x=>x.field_key==='transaction_at')?.normalized_value,'2026-05-28 19:06');
+ const finance=(await candidates()).filter(x=>x.candidate_kind==='finance');
+ assert.equal(finance.length,1);
+ assert.deepEqual([finance[0].payload.kind,finance[0].payload.amount_jpy,finance[0].payload.transaction_at,finance[0].payload.payment_source_hint],
+  ['expense',151,'2026-05-28 19:06','Olive']);
+ assert.equal((await candidates()).some(x=>x.candidate_kind==='homeflow_task'),false);
+ assert.equal((await reparse()).response.status,200);
+ assert.equal((await candidates()).filter(x=>x.candidate_kind==='finance')[0].id,finance[0].id);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) AS n FROM integration_links').get().n),0);
+});
+
 test('Gmail code-model grants remain encrypted and user-bound; only selected messages are read',async()=>{
  const env=makeEnv(),owner=await boot(env);
  const noConfig=await req(env,'/api/google/gmail/status',auth(owner));
