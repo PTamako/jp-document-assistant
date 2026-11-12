@@ -38,7 +38,7 @@ test('installed iOS PWA can use the native Files provider, with Safari as fallba
  const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
  const css=readFileSync(new URL('../web/src/style.css',import.meta.url),'utf8');
  assert.match(app,/iPhone「文件」（含已启用的 Google Drive）/);
- assert.match(app,/Google Docs 原生格式通过下方在线选择器导出/);
+ assert.match(app,/Google 原生 Docs／表格／幻灯片需在 Safari 网页版通过 Google 在线选择器导出/);
  assert.match(app,/class="choice-picker-file"/);
  assert.match(app,/从 iPhone「文件」选择文书/);
  assert.match(app,/Google Docs／表格／幻灯片等原生格式/);
