@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
-import {webcrypto} from 'node:crypto';
+import {webcrypto,createHmac} from 'node:crypto';
 import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso} from '../worker/homeflow-sso.js';
 import worker from '../worker/index.js';
 import {hashString} from '../worker/security.js';
@@ -425,5 +425,136 @@ test('HomeFlow identity mismatch cannot read private document list',async()=>{
   assert.equal(reply.status,401);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,1);
   assert.equal(f.sql.prepare('SELECT owner_id FROM documents').get().owner_id,'local-owner');
+ }finally{f.sql.close();}
+});
+
+
+test('member document review requests retain an immutable private payload and create only signed HomeFlow pending approval',async()=>{
+ const f=await setup();
+ try{
+  const owner=await f.start({oldSession:true});
+  assert.equal((await f.finish(owner)).status,200);
+  f.state.hfUser=memberId;f.state.hfRole='member';f.state.nickname='家庭成员';
+  const flow=await f.start();
+  const signedIn=await f.finish(flow);
+  assert.equal(signedIn.status,200);
+  const cookie=signedIn.headers.getSetCookie().find(x=>x.startsWith('__Host-da_session=')).split(';')[0];
+  const me=await worker.fetch(new Request(app+'/api/me',{headers:{Cookie:cookie}}),f.env,{});
+  assert.equal(me.status,200);
+  const auth=await me.json();
+  const localMember=auth.user.id,csrf=auth.csrf_token;
+  const doc='member-private-doc',candidate='c'.repeat(32);
+  f.sql.prepare(`INSERT INTO documents
+   (id,owner_id,household_id,visibility,title,created_at,updated_at)
+   VALUES(?,?,?,'private','Private study',?,?)`)
+   .run(doc,localMember,'local-hh',now(),now());
+  f.sql.prepare(`INSERT INTO action_candidates
+   (id,document_id,candidate_kind,payload_json,created_at,updated_at)
+   VALUES(?,?,'vocabulary',?,?,?)`).run(candidate,doc,
+    JSON.stringify({term:'確認',reading:'かくにん',meaning_zh:'确认'}),now(),now());
+  f.env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED='true';
+  f.env.DOCUMENT_APPROVAL_SUBMISSION_SECRET='d'.repeat(64);
+  const original=f.env.HOMEFLOW_BRIDGE_SERVICE;
+  let submissions=0,lastWire=null,bridgeCalls=0;
+  f.env.HOMEFLOW_BRIDGE_SERVICE={fetch:async(request)=>{
+   const url=new URL(request.url);
+   if(url.pathname==='/api/internal/approvals/document-submit'){
+    submissions++;
+    assert.equal(request.headers.get('origin'),null);
+    assert.equal(request.headers.get('cookie'),null);
+    assert.equal(request.headers.get('authorization'),null);
+    assert.equal(request.headers.get('x-approval-client'),'jp-document-assistant');
+    const raw=await request.text();
+    const stamp=request.headers.get('x-approval-timestamp');
+    const signature=createHmac('sha256',Buffer.from('d'.repeat(64),'hex'))
+      .update('jp-document-assistant\\n'+stamp+'\\n'+raw).digest('hex');
+    assert.equal(request.headers.get('x-approval-signature'),signature);
+    const body=JSON.parse(raw);
+    assert.deepEqual(Object.keys(body).sort(),[
+     'household_id','payload_sha256','requester_user_id','resource_id','target_app']);
+    assert.equal(body.requester_user_id,memberId);
+    assert.equal(body.household_id,'primary');
+    assert.equal(body.resource_id,candidate);
+    assert.equal(body.target_app,'it-study-platform');
+    assert.match(body.payload_sha256,/^[a-f0-9]{64}$/);
+    assert.doesNotMatch(raw,/確認|Private study|确认|かくにん/);
+    lastWire=body;
+    return Response.json({ok:true,approval_id:'55555555-5555-4555-8555-555555555555',
+     status:'pending',...body,replayed:submissions>1,
+     applied:false,target_changed:false});
+   }
+   bridgeCalls++;
+   return original.fetch(request);
+  }};
+  const post=async(payload={confirm:'CONFIRM_STUDY',privacy_confirmed:true,
+   redacted_term:'確認'})=>worker.fetch(new Request(
+   app+'/api/candidates/'+candidate+'/request-approval',{
+    method:'POST',headers:{Origin:app,Cookie:cookie,'X-CSRF-Token':csrf,
+     'Content-Type':'application/json'},body:JSON.stringify(payload)
+   }),f.env,{});
+  const first=await post();
+  assert.equal(first.status,200,await first.clone().text());
+  const created=await first.json();
+  assert.equal(created.approval_status,'pending');
+  assert.equal(created.approval_submitted,true);
+  assert.equal(created.applied,false);
+  assert.equal(created.target_changed,false);
+  const row=f.sql.prepare('SELECT * FROM document_member_sync_intents').get();
+  assert.equal(row.local_user_id,localMember);
+  assert.equal(row.homeflow_user_id,memberId);
+  assert.equal(row.homeflow_household_id,'primary');
+  assert.equal(row.target_app,'it-study-platform');
+  assert.equal(row.payload_sha256,lastWire.payload_sha256);
+  assert.ok(row.payload_json.includes('確認'),'private snapshot stored in source D1');
+  assert.equal(row.approval_id,created.approval_id);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,1);
+  const replay=await post();
+  assert.equal(replay.status,200);
+  assert.equal((await replay.json()).approval_id,created.approval_id);
+  assert.equal(submissions,2,'retry reuses same immutable candidate and hash');
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM audit_events WHERE kind='document_sync_approval_submitted'").get().n,1);
+  assert.equal((await post({confirm:'CONFIRM_STUDY',privacy_confirmed:true,
+   redacted_term:'変更'})).status,409);
+  assert.equal(submissions,2,'conflicting payload rejected before any remote request');
+  const status=await worker.fetch(new Request(
+   app+'/api/candidates/'+candidate+'/approval',{headers:{Cookie:cookie}}),f.env,{});
+  assert.equal(status.status,200);
+  assert.equal((await status.json()).approval_id,created.approval_id);
+  assert.equal(bridgeCalls>=2,true,'member identity was live-introspected for each request');
+  assert.throws(()=>f.sql.prepare('UPDATE document_member_sync_intents SET payload_sha256=?').run('f'.repeat(64)),/DOCUMENT_APPROVAL_INTENT_IMMUTABLE/);
+  assert.throws(()=>f.sql.prepare('DELETE FROM document_member_sync_intents').run(),/DOCUMENT_APPROVAL_INTENT_NO_DELETE/);
+ }finally{f.sql.close();}
+});
+
+test('document member approval remains fail-closed for legacy sessions, missing CSRF and unconfigured backend',async()=>{
+ const f=await setup();
+ try{
+  const owner=await f.start({oldSession:true});
+  assert.equal((await f.finish(owner)).status,200);
+  const id='f'.repeat(32);
+  f.sql.prepare(`INSERT INTO action_candidates
+   (id,document_id,candidate_kind,payload_json,created_at,updated_at)
+   VALUES(?,?,'vocabulary',?,?,?)`).run(id,'legacy-doc',
+    JSON.stringify({term:'記録',meaning_zh:'记录'}),now(),now());
+  const legacy=await worker.fetch(new Request(
+   app+'/api/candidates/'+id+'/request-approval',{
+    method:'POST',headers:{Origin:app,Cookie:'__Host-da_session='+oldCookie,
+     'Content-Type':'application/json'},
+    body:JSON.stringify({confirm:'CONFIRM_STUDY',privacy_confirmed:true})
+   }),f.env,{});
+  assert.equal(legacy.status,403,'old password alone cannot request HomeFlow approval');
+  const local=await f.finish(await f.start({oldSession:true}));
+  assert.equal(local.status,200);
+  const cookie=local.headers.getSetCookie().find(x=>x.startsWith('__Host-da_session=')).split(';')[0];
+  const ownerMe=await (await worker.fetch(new Request(app+'/api/me',{
+   headers:{Cookie:cookie}}),f.env,{})).json();
+  const ownerAttempt=await worker.fetch(new Request(
+   app+'/api/candidates/'+id+'/request-approval',{
+    method:'POST',headers:{Origin:app,Cookie:cookie,'X-CSRF-Token':ownerMe.csrf_token,
+     'Content-Type':'application/json'},body:JSON.stringify({confirm:'CONFIRM_STUDY',privacy_confirmed:true})
+   }),f.env,{});
+  assert.equal(ownerAttempt.status,403,'owner never self-files a member approval');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,0);
  }finally{f.sql.close();}
 });
