@@ -384,7 +384,14 @@ async function refreshGoogleOnReturn(){
   try{await googleStatus(service);}catch(e){problem(e)}
 }
 function onGoogleVisibility(){
-  if(document.visibilityState==='visible')void refreshGoogleOnReturn();
+  if(document.visibilityState==='visible'){
+    void refreshGoogleOnReturn();
+    void pollAiStatus(true);
+  }
+}
+function onAppPageShow(){
+  void refreshGoogleOnReturn();
+  void pollAiStatus(true);
 }
 async function startGoogleAuthorization(service){
   if(!user.value)return problem(new Error('请先登录文书助手'));
@@ -673,6 +680,8 @@ async function runAiForCurrent(){
  try{
   const result=await api('/api/documents/'+id+'/ai/analyze',{method:'POST',body:{confirm:true}});
   await openDoc(id,{preserveTab:true,preserveScroll:true});
+  // Do not make the user leave the PWA to observe a quick background completion.
+  void pollAiStatus();
   const labels={queued:'AI 已开始后台解析，可继续使用文书',success:'AI 已生成中文解读和学习建议',cached:'已使用缓存的 AI 分析',disabled:'AI 服务当前未启用（规则讲解仍可使用）',not_configured:'所选 AI 尚未完成安全配置',budget_exhausted:'Cloudflare AI 今日已达上限',budget_disabled:'AI 预算尚未开放',provider_failed:'AI 返回无效或服务暂不可用，原有数据不受影响',...Object.fromEntries(Object.entries(aiFailureLabels).filter(([k])=>k!=='provider_failed')),awaiting_text:'请先完成 OCR 或补充原文',privacy_blocked:'请确认发送至 Gemini',too_long:'原文过长，请拆分后重试',cooldown:'稍后重试',in_progress:'本份文书的 AI 请求正在执行'};
   flash(result.ai_status==='gemini_retry_cooldown'?`Google 服务器繁忙，约 ${result.retry_after_seconds||60} 秒后再试`:(labels[result.ai_status]||'AI 尚未产生新结果'));
  }catch(e){problem(e);}finally{busy.value=false;}
@@ -1212,28 +1221,35 @@ function todayReviewBadge(d){
 const labelFor=(key)=>current.value?.category==='campaign'&&key==='due_date'?'活动截止日期':current.value?.category==='campaign'&&key==='due_date_partial'?'原文活动期限（月日）':key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 let aiStatusInterval=null,aiPolling=false;
-async function pollAiStatus(){
+async function pollAiStatus(force=false){
  if(aiPolling||!user.value||document.visibilityState!=='visible')return;
  const id=current.value?.id,job=current.value?.ai_job;
- if(!id||!['queued','running','retry_wait'].includes(job?.state))return;
+ if(!id||(!force&&!['queued','running','retry_wait'].includes(job?.state)))return;
  aiPolling=true;
  try{
-  const d=await api('/api/documents/'+id);
+  // Avoid one stalled mobile request blocking subsequent refreshes indefinitely.
+  const d=await api('/api/documents/'+id,{signal:AbortSignal.timeout(12000)});
   if(current.value?.id!==id)return;
+  const wasPending=['queued','running','retry_wait'].includes(current.value?.ai_job?.state);
   current.value=d.document;
-  if(['done','failed'].includes(d.document?.ai_job?.state)){
-   const c=await api('/api/documents/'+id+'/candidates');
+  const nextState=d.document?.ai_job?.state;
+  if(wasPending&&(nextState==='done'||nextState==='failed'||!nextState)){
+   const c=await api('/api/documents/'+id+'/candidates',{signal:AbortSignal.timeout(12000)});
    if(current.value?.id===id)detailCandidates.value=c.items||[];
+   if(nextState==='done'&&d.document?.ai_analysis?.status==='success')
+     flash('AI 解读已完成');
   }
- }catch{}finally{aiPolling=false;}
+ }catch{
+  // Transient mobile network failures are retried at the next tick/resume.
+ }finally{aiPolling=false;}
 }
 onMounted(async()=>{
   aiStatusInterval=setInterval(pollAiStatus,9000);
   document.addEventListener('visibilitychange',onGoogleVisibility);
-  window.addEventListener('pageshow',refreshGoogleOnReturn);
+  window.addEventListener('pageshow',onAppPageShow);
   await boot();if(!user.value)await refreshInitStatus();
 });
-onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',refreshGoogleOnReturn);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
+onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',onAppPageShow);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
 
 <template>
