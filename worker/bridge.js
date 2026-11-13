@@ -269,6 +269,15 @@ export async function candidatePreview(request,env,p,id){
   // Until that executor is implemented, never look up private target accounts
   // or expose an enabled "sync" button merely because a bridge is configured.
   const approvalRequired=p.role!=='owner';
+  const approvalActionEnabled=approvalRequired&&p.auth_source==='homeflow'&&
+    !!p.homeflow_user_id&&!!p.homeflow_household_id&&
+    env.HOMEFLOW_SSO_ENABLED==='true'&&
+    env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED==='true'&&
+    typeof env.DOCUMENT_APPROVAL_SUBMISSION_SECRET==='string'&&
+    /^[a-f0-9]{64}$/.test(env.DOCUMENT_APPROVAL_SUBMISSION_SECRET)&&
+    typeof env.HOMEFLOW_BRIDGE_SERVICE?.fetch==='function';
+  const preparedApproval=approvalActionEnabled?
+    await first(env.DB,'SELECT status,approval_id FROM document_member_sync_intents WHERE candidate_id=?',id):null;
   const picker=!approvalRequired&&target==='kakebo'
     ?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
   const members=!approvalRequired&&target==='homeflow'
@@ -278,10 +287,18 @@ export async function candidatePreview(request,env,p,id){
     homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
     integration:link||null,available:!approvalRequired&&!!config(env,target),
-    approval_required:approvalRequired,approval_submitted:false,applied:false,
+    approval_required:approvalRequired,approval_action_enabled:approvalActionEnabled,
+    approval_submitted:preparedApproval?.status==='submitted',
+    approval_id:preparedApproval?.approval_id||null,
+    approval_status:preparedApproval?.status==='submitted'?'submitted_status_unknown':'not_submitted',
+    applied:false,
     account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p.user_id,target),
     note:approvalRequired
-      ?'当前成员需要 HomeFlow 管理员审批。本次尚未创建申请，也未同步到目标 App。'
+      ?preparedApproval?.status==='submitted'
+        ?'已提交 HomeFlow 审批；尚未同步到目标应用，审批结果请到 HomeFlow 查看。'
+        :approvalActionEnabled
+          ?'可以请求管理员审批。提交申请不代表已经批准或同步到目标应用。'
+          :'当前成员需要 HomeFlow 管理员审批。申请入口暂未启用，未同步到目标应用。'
       :'请对照原文及目标 App 的账号完成二次确认。生词和句子必须先脱敏，财务内容不能直接视为已付款。'});
 }
 export async function commitCandidate(request,env,p,id){
