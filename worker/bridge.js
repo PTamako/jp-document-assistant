@@ -289,14 +289,18 @@ export async function candidatePreview(request,env,p,id){
     integration:link||null,available:!approvalRequired&&!!config(env,target),
     approval_required:approvalRequired,approval_action_enabled:approvalActionEnabled,
     approval_submitted:preparedApproval?.status==='submitted',
+    approval_prepared:preparedApproval?.status==='prepared',
     approval_id:preparedApproval?.approval_id||null,
-    approval_status:preparedApproval?.status==='submitted'?'submitted_status_unknown':'not_submitted',
+    approval_status:preparedApproval?.status==='submitted'?'submitted_status_unknown':
+      preparedApproval?.status==='prepared'?'prepared_unconfirmed':'not_submitted',
     applied:false,
     account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p.user_id,target),
     note:approvalRequired
       ?preparedApproval?.status==='submitted'
         ?'已提交 HomeFlow 审批；尚未同步到目标应用，审批结果请到 HomeFlow 查看。'
-        :approvalActionEnabled
+        :preparedApproval?.status==='prepared'
+          ?'上次提交结果未确认；可重试原申请，使用原始快照，不会创建第二份，也未写入目标应用。'
+          :approvalActionEnabled
           ?'可以请求管理员审批。提交申请不代表已经批准或同步到目标应用。'
           :'当前成员需要 HomeFlow 管理员审批。申请入口暂未启用，未同步到目标应用。'
       :'请对照原文及目标 App 的账号完成二次确认。生词和句子必须先脱敏，财务内容不能直接视为已付款。'});
