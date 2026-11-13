@@ -6,6 +6,7 @@ const MODEL_ORIGIN='https://huggingface.co/ruozhi521/shiyin-mt-ja-zh-onnx/resolv
 const ALLOWED_MODEL_FILES=Object.freeze({
   'source.spm':{min:500000,max:3000000},
   'target.spm':{min:500000,max:3000000},
+  'vocab.json':{min:1000000,max:3000000},
   'encoder_model.onnx':{min:50000000,max:160000000},
   'decoder_model.onnx':{min:50000000,max:160000000}
 });
