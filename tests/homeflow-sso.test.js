@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
 import {webcrypto} from 'node:crypto';
 import {startHomeFlowSso,callbackHomeFlowSso} from '../worker/homeflow-sso.js';
+import worker from '../worker/index.js';
 import {hashString} from '../worker/security.js';
 
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
@@ -126,6 +127,29 @@ async function setup(){
  };
  return {db,sql,env,state,start,finish};
 }
+test('actual Worker router exposes only gated start/callback, not an owner fallback',async()=>{
+ const f=await setup();
+ try{
+   const request=()=>new Request(app+'/api/homeflow-sso/start',
+     {method:'POST',headers:{Origin:app}});
+   f.env.HOMEFLOW_SSO_ENABLED='false';
+   const disabled=await worker.fetch(request(),f.env,{});
+   assert.equal(disabled.status,503);
+   assert.equal((await disabled.json()).code,'SSO_DISABLED');
+   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM homeflow_oauth_pending').get().n,0);
+   f.env.HOMEFLOW_SSO_ENABLED='true';
+   const started=await worker.fetch(request(),f.env,{});
+   assert.equal(started.status,200);
+   const payload=await started.json();
+   assert.equal(new URL(payload.authorization_url).pathname,'/authorize');
+   assert.equal(new URL(payload.authorization_url).searchParams.get('client_id'),
+     'jp-document-assistant');
+   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM homeflow_oauth_pending').get().n,1);
+   const unauthenticated=await worker.fetch(new Request(app+'/api/me'),f.env,{});
+   assert.equal(unauthenticated.status,401,'feature flag must not turn on the old owner session');
+ }finally{f.sql.close();}
+});
+
 test('SSO endpoints default closed and bad origins fail before D1 write',async()=>{
  const f=await setup();
  try{
@@ -251,6 +275,27 @@ test('changed audience, HomeFlow household or role cannot take over prior local 
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM users').get().n,1);
  }finally{f.sql.close();}
 });
+test('PKCE verifier and state are sealed/hashed at rest; SSO local cookie expires in 15 minutes',async()=>{
+ const f=await setup();
+ try{
+   const flow=await f.start({oldSession:true});
+   const row=f.sql.prepare('SELECT state_hash,verifier_cipher,verifier_iv,expires_at FROM homeflow_oauth_pending').get();
+   assert.notEqual(row.state_hash,flow.state);
+   assert.equal(row.state_hash,await hashString(flow.state));
+   assert.ok(!row.verifier_cipher.includes('f'.repeat(64)));
+   assert.ok(row.verifier_cipher.length>100);
+   assert.ok(row.verifier_iv.length>=16);
+   assert.ok(new Date(row.expires_at).getTime()>Date.now());
+   const response=await f.finish(flow);
+   assert.equal(response.status,303);
+   const session=f.sql.prepare('SELECT expires_at,created_at FROM sessions ORDER BY created_at DESC LIMIT 1').get();
+   assert.ok(session);
+   const lifetime=f.sql.prepare('SELECT expires_at,created_at FROM sessions WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get('local-owner');
+   assert.ok(lifetime);
+   assert.ok(response.headers.getSetCookie().some(x=>x.includes('Max-Age=900')));
+ }finally{f.sql.close();}
+});
+
 test('owner logs out of legacy app during SSO: cannot use revoked owner proof',async()=>{
  const f=await setup();
  try{
