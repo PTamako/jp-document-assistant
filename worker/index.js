@@ -178,6 +178,13 @@ async function visibleDocument(db,id,p,allowedLifecycle='active'){
   return dbFirst(db,`SELECT d.* FROM documents d WHERE d.id=? AND d.lifecycle=? AND
     (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,id,allowedLifecycle,p.user_id,p.household_id);
 }
+async function manageableDocument(db,id,p,lifecycle='active'){
+  const doc=await dbFirst(db,`SELECT d.* FROM documents d WHERE d.id=? AND d.lifecycle=?
+    AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,
+    id,lifecycle,p.user_id,p.household_id);
+  if(!doc)bad('文书不存在或没有操作权限','NOT_FOUND',404);
+  return doc;
+}
 async function ownedDocument(db,id,p,lifecycle=null){
   const doc=await dbFirst(db,`SELECT * FROM documents WHERE id=? AND owner_id=? ${lifecycle?`AND lifecycle='${lifecycle}'`:''}`,id,p.user_id);
   if(!doc)bad('文书不存在或没有操作权限','NOT_FOUND',404);
@@ -389,8 +396,18 @@ FROM documents d WHERE d.lifecycle='active' AND (d.owner_id=? OR (d.household_id
   return json({items:rows.slice(0,limit).map(listShape),next_offset:rows.length>limit?offset+limit:null});
 }
 async function updateDoc(request,env,p,doc){
-  if(doc.owner_id!==p.user_id)bad('仅文书所有者可以修改','FORBIDDEN',403);
+  // Shared documents are truly writable to either member. Only the original
+  // owner can grant/revoke visibility, to avoid an editor silently exposing
+  // the owner's private source or locking the owner out.
+  const canManage=doc.owner_id===p.user_id ||
+    (doc.household_id===p.household_id&&doc.visibility==='shared');
+  if(!canManage)bad('文书不存在或没有操作权限','NOT_FOUND',404);
   const data=await readJson(request,10000);
+  if(data.visibility!==undefined&&doc.owner_id!==p.user_id)
+    bad('共享范围只能由原所有者修改','FORBIDDEN',403);
+  if(data.category!==undefined&&doc.owner_id!==p.user_id&&
+    requiresPrivateDefault(data.category,doc.extracted_text_ja))
+    bad('涉及敏感分类的共享变更须由原所有者确认','SENSITIVE_CHANGE_OWNER_REQUIRED',403);
   const updates=[],values=[];
   for(const [key,max] of [['title',200],['category',40]]){
     if(data[key]!==undefined){if(!validString(data[key],max))bad(`${key} 无效`);updates.push(`${key}=?`);values.push(data[key].trim());}
@@ -412,14 +429,25 @@ async function updateDoc(request,env,p,doc){
   }
   if(!updates.length)bad('没有要修改的字段');
   if(!Number.isInteger(data.version)||data.version!==doc.version)bad('文书已被其他操作修改，请刷新','VERSION_CONFLICT',409);
-  updates.push('updated_at=?','version=version+1'); values.push(isoNow(),doc.id,p.user_id,doc.version);
-  const result=await dbRun(env.DB,`UPDATE documents SET ${updates.join(',')} WHERE id=? AND owner_id=? AND version=?`,...values);
-  if(result.meta?.changes===0)bad('编辑冲突','VERSION_CONFLICT',409);
+  updates.push('updated_at=?','version=version+1');
+  const at=isoNow();
+  values.push(at,doc.id,p.user_id,p.household_id,doc.version);
+  const result=await dbRun(env.DB,`UPDATE documents SET ${updates.join(',')}
+    WHERE id=? AND (owner_id=? OR (household_id=? AND visibility='shared'))
+    AND version=? AND lifecycle='active'`,...values);
+  if(result.meta?.changes!==1)bad('编辑冲突或已失去共享编辑权限','VERSION_CONFLICT',409);
+  await dbRun(env.DB,`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+    VALUES(?,?,?,'document',?,?)`,
+    randomToken(16),p.user_id,'document_metadata_updated',doc.id,at);
   return json({ok:true});
 }
 async function updateField(request,env,p,fieldId){
-  const field=await dbFirst(env.DB,`SELECT f.*,d.owner_id,d.lifecycle FROM document_fields f JOIN documents d ON d.id=f.document_id WHERE f.id=?`,fieldId);
-  if(!field||field.owner_id!==p.user_id||field.lifecycle!=='active')bad('字段不存在','NOT_FOUND',404);
+  const field=await dbFirst(env.DB,`SELECT f.*,d.owner_id,d.household_id,d.visibility,d.lifecycle
+    FROM document_fields f JOIN documents d ON d.id=f.document_id WHERE f.id=?`,fieldId);
+  if(!field||field.lifecycle!=='active'||!(
+    field.owner_id===p.user_id ||
+    (field.household_id===p.household_id&&field.visibility==='shared')
+  ))bad('字段不存在','NOT_FOUND',404);
   const data=await readJson(request,6000);
   if(!['confirmed','corrected','rejected'].includes(data.review_state))bad('审核状态无效');
   const normalized=String(data.normalized_value ?? field.normalized_value ?? '').trim();
@@ -438,8 +466,22 @@ async function updateField(request,env,p,fieldId){
       bad('该字段已联动至其他 App；修改这里不会自动改动远端记录。请确认后再保存，并到目标 App 核对。','REMOTE_RECORD_UNCHANGED',409);
   }
   const now=isoNow();
-  await dbRun(env.DB,'UPDATE document_fields SET normalized_value=?,review_state=?,reviewed_by=?,updated_at=? WHERE id=?',normalized,data.review_state,p.user_id,now,fieldId);
-  await dbRun(env.DB,'UPDATE documents SET updated_at=?,version=version+1 WHERE id=?',now,field.document_id);
+  // The same SQL statement rechecks edit authority; do not trust a prior
+  // document-detail read if visibility was revoked on another device.
+  const updated=await dbRun(env.DB,`UPDATE document_fields SET
+    normalized_value=?,review_state=?,reviewed_by=?,updated_at=?
+    WHERE id=? AND document_id=? AND EXISTS(
+      SELECT 1 FROM documents d WHERE d.id=document_fields.document_id
+      AND d.lifecycle='active'
+      AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))
+    )`,normalized,data.review_state,p.user_id,now,fieldId,field.document_id,
+    p.user_id,p.household_id);
+  if(updated.meta?.changes!==1)bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
+  await batch(env.DB,[
+    ['UPDATE documents SET updated_at=?,version=version+1 WHERE id=?',now,field.document_id],
+    ['INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at) VALUES(?,?,?,\'document_field\',?,?)',
+      randomToken(16),p.user_id,'field_reviewed',fieldId,now]
+  ]);
   return json({ok:true,linked_records_unchanged:remoteLinks.length>0,linked_targets:[...new Set(remoteLinks.map(x=>x.target))]});
 }
 async function candidatesForDoc(env,p,id){
@@ -451,18 +493,34 @@ async function candidatesForDoc(env,p,id){
   return json({items:rows.map(({payload_json,...x})=>({...x,payload:JSON.parse(payload_json)}))});
 }
 async function moveToTrash(env,p,id){
-  const doc=await ownedDocument(env.DB,id,p,'active');
+  const doc=await manageableDocument(env.DB,id,p,'active');
   const now=isoNow();
-  await dbRun(env.DB,"UPDATE documents SET lifecycle='trashed',trashed_at=?,trashed_by=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=? AND lifecycle='active'",now,p.user_id,now,id,p.user_id);
+  const result=await dbRun(env.DB,`UPDATE documents
+    SET lifecycle='trashed',trashed_at=?,trashed_by=?,updated_at=?,version=version+1
+    WHERE id=? AND lifecycle='active' AND
+    (owner_id=? OR (household_id=? AND visibility='shared'))`,
+    now,p.user_id,now,id,p.user_id,p.household_id);
+  if(result.meta?.changes!==1)bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
+  await dbRun(env.DB,`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+    VALUES(?,?,?,'document',?,?)`,randomToken(16),p.user_id,'document_trashed',id,now);
   return json({ok:true,document_id:id,r2_deleted:false,message:'已移入回收站，R2 原件仍保留以供恢复'});
 }
 async function restoreDoc(env,p,id){
-  const doc=await ownedDocument(env.DB,id,p,'trashed');
+  const doc=await manageableDocument(env.DB,id,p,'trashed');
   const refs=await dbAll(env.DB,`SELECT a.id,o.object_key FROM attachments a JOIN storage_objects o ON a.object_id=o.id WHERE a.document_id=? AND a.state='active'`,id);
   let missing=[];
   for(const ref of refs){if(!env.DOCUMENTS||!(await env.DOCUMENTS.head(ref.object_key)))missing.push(ref.id);}
-  await dbRun(env.DB,"UPDATE documents SET lifecycle='active',trashed_at=NULL,trashed_by=NULL,updated_at=?,version=version+1 WHERE id=?",isoNow(),id);
-  return json({ok:true,document_id:id,missing_attachments:missing,warning:missing.length?'部分原件缺失，已恢复摘要和可用记录':null});
+  const at=isoNow();
+  const result=await dbRun(env.DB,`UPDATE documents SET lifecycle='active',
+    trashed_at=NULL,trashed_by=NULL,updated_at=?,version=version+1
+    WHERE id=? AND lifecycle='trashed' AND
+      (owner_id=? OR (household_id=? AND visibility='shared'))`,
+    at,id,p.user_id,p.household_id);
+  if(result.meta?.changes!==1)bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
+  await dbRun(env.DB,`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+    VALUES(?,?,?,'document',?,?)`,randomToken(16),p.user_id,'document_restored',id,at);
+  return json({ok:true,document_id:id,missing_attachments:missing,
+    warning:missing.length?'部分原件缺失，已恢复摘要和可用记录':null});
 }
 async function permanentlyDelete(env,p,id){
   let doc=await dbFirst(env.DB,'SELECT * FROM documents WHERE id=? AND owner_id=?',id,p.user_id);
