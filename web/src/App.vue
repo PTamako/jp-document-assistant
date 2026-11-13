@@ -1589,7 +1589,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
   </div>
 
   <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeNestedSheet()">
-    <section class="bottom-sheet" :class="{'recycle-sheet':sheet==='recycle','confirmation-sheet':['emptyRecycleConfirm','permanent','permanentAttachment','trashConfirm'].includes(sheet)}" role="dialog" aria-modal="true" :aria-label="sheet">
+    <section class="bottom-sheet" :class="{'recycle-sheet':sheet==='recycle','confirmation-sheet':['emptyRecycleConfirm','permanent','permanentAttachment','trashConfirm'].includes(sheet) ,'google-source-sheet':['drive','gmail'].includes(sheet)}" role="dialog" aria-modal="true" :aria-label="sheet">
       <div class="grabber"></div>
       <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2>
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
@@ -1601,7 +1601,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <p class="fine-print">每份文书单独选择，不保存全局偏好。首次导入在服务已启用时尝试 AI 分析，同版本命中缓存不会重复调用。</p>
         <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>同意将本份文书发送至 Gemini（可能产生费用）</label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
-      <template v-else-if="sheet==='confirmDeadline'"><h2>{{current?.category==='campaign'?'确认活动截止年份':'补全截止日期的年份'}}</h2><p class="fine-print">原文只有月日，系统暂按日本当年补全。请核对原文日期和星期；确认前不会创建 HomeFlow 待办。</p><label class="form-label">完整截止日期<input type="date" v-model="missingYearDateDraft"/></label><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template>
+      <template v-else-if="sheet==='confirmDeadline'"><h2>{{current?.category==='campaign'?'确认活动截止年份':'补全截止日期的年份'}}</h2><p class="fine-print">原文只有月日，系统暂按日本当年补全。请核对原文日期和星期；确认前不会创建 HomeFlow 待办。</p><template v-else-if="sheet==='confirmDeadline'"><h2>{{current?.category==='campaign'?'确认活动截止年份':'补全截止日期的年份'}}</h2><p class="fine-print">原文只有月日，系统暂按日本当年补全。请核对原文日期和星期；确认前不会创建 HomeFlow 待办。</p><div class="form-label"><label for="missing-year-date">完整截止日期</label><div class="date-control"><input id="missing-year-date" type="date" v-model="missingYearDateDraft"/><button v-if="missingYearDateDraft" type="button" class="date-clear" aria-label="清空完整截止日期" @click="missingYearDateDraft=''"><UiIcon name="x" :size="17"/></button></div></div><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template>
       <template v-else-if="sheet==='translateConfirm'">
         <h2>翻译日文全文</h2>
         <p class="fine-print">经由知学已有的 Google Apps Script 免费翻译。仅发送本份文书的日文文字，不上传原件、照片或 PDF；不使用 Gemini 或 Workers AI。</p>
@@ -1622,49 +1622,63 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
   <div class="sheet-actions"><button class="secondary full" @click="sheet='import'">返回</button></div>
 </template>
 <template v-else-if="sheet==='drive'">
-  <h2>Google Drive</h2>
-  <p v-if="driveCloud.connected" class="fine-print">已连接 {{driveCloud.google_email}}</p>
+  <header class="google-source-header">
+    <button type="button" class="google-source-close" aria-label="关闭 Google Drive" @click="closeSheet"><UiIcon name="x" :size="19"/></button>
+    <h2>Google Drive</h2>
+    <button v-if="driveCloud.connected" type="button" class="google-disconnect" :disabled="driveBusy" aria-label="断开 Google Drive 连接" title="断开连接" @click="disconnectGoogle('drive')"><UiIcon name="unlink" :size="20"/></button>
+    <span v-else class="google-source-placeholder" aria-hidden="true"></span>
+  </header>
+  <p v-if="driveCloud.connected" class="google-source-account"><UiIcon name="check-circle" :size="15"/>已连接 <span>{{driveCloud.google_email}}</span></p>
   <template v-if="!driveCloud.connected">
     <button class="primary full" :disabled="driveBusy||!driveCloud.enabled" @click="startGoogleAuthorization('drive')">连接 Google Drive</button>
     <p v-if="!driveCloud.enabled" class="fine-print">Google 授权配置尚未完成</p><p v-else-if="driveCloud.progress_error" class="fine-print">{{driveCloud.progress_error}}</p>
   </template>
   <template v-else>
-    <label class="form-label">搜索文件<input v-model.trim="driveQuery" maxlength="120" placeholder="文件名"/></label>
-    <button class="secondary full" :disabled="driveBusy" @click="loadDriveFiles(false)">搜索</button>
-    <div v-for="f in driveItems" :key="f.id" class="recycle-row">
-      <div class="item-info"><strong>{{f.name}}</strong></div>
-      <button class="secondary small" :disabled="driveBusy" @click="chooseDriveFile(f)">导入</button>
+    <form class="google-search-form" @submit.prevent="loadDriveFiles(false)">
+      <input v-model.trim="driveQuery" type="search" maxlength="120" aria-label="搜索 Google Drive 文件" placeholder="搜索文件名" enterkeyhint="search" autocomplete="off"/>
+      <button type="submit" class="filter-button icon-label" :disabled="driveBusy"><UiIcon name="search" :size="17"/>搜索</button>
+    </form>
+    <div v-if="driveItems.length" class="google-source-list">
+      <div v-for="f in driveItems" :key="f.id" class="google-source-row">
+        <span class="google-source-item-icon"><UiIcon name="file" :size="20"/></span>
+        <span class="google-source-row-info"><strong :title="f.name">{{f.name}}</strong></span>
+        <button type="button" class="google-import-action" :disabled="driveBusy" @click="chooseDriveFile(f)">导入</button>
+      </div>
     </div>
-    <div v-if="!driveItems.length" class="empty">暂无文件</div>
-    <button v-if="driveNext" class="secondary full" :disabled="driveBusy" @click="loadDriveFiles(true)">加载更多</button>
-    <button class="destructive full" :disabled="driveBusy" @click="disconnectGoogle('drive')">断开连接</button>
+    <p v-if="!driveItems.length" class="google-source-empty">{{driveBusy?'加载中…':'暂无文件'}}</p>
+    <button v-if="driveNext" class="google-source-load" :disabled="driveBusy" @click="loadDriveFiles(true)">加载更多</button>
   </template>
-  <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
 </template>
 <template v-else-if="sheet==='gmail'">
-  <h2>Gmail</h2>
-  <p v-if="gmailPersistent.connected" class="fine-print">已连接 {{gmailPersistent.google_email}}</p>
+  <header class="google-source-header">
+    <button type="button" class="google-source-close" aria-label="关闭 Gmail" @click="closeSheet"><UiIcon name="x" :size="19"/></button>
+    <h2>Gmail</h2>
+    <button v-if="gmailAuthorizedUi" type="button" class="google-disconnect" :disabled="gmailBusy" aria-label="断开 Gmail 连接" title="断开连接" @click="disconnectGmail"><UiIcon name="unlink" :size="20"/></button>
+    <span v-else class="google-source-placeholder" aria-hidden="true"></span>
+  </header>
+  <p v-if="gmailPersistent.connected" class="google-source-account"><UiIcon name="check-circle" :size="15"/>已连接 <span>{{gmailPersistent.google_email}}</span></p>
   <template v-if="!gmailAuthorizedUi">
     <button class="primary full" :disabled="gmailBusy||!gmailPersistent.enabled" @click="connectGmail">连接 Gmail</button>
     <p v-if="!gmailPersistent.enabled" class="fine-print">Google 授权配置尚未完成</p><p v-else-if="gmailPersistent.progress_error" class="fine-print">{{gmailPersistent.progress_error}}</p>
   </template>
   <template v-else>
-    <form class="search-row gmail-search-form" @submit.prevent="loadGmailMessages(false)">
+    <form class="google-search-form gmail-search-form" @submit.prevent="loadGmailMessages(false)">
       <input v-model.trim="gmailQuery" type="search" maxlength="180"
         aria-label="搜索 Gmail 邮件" placeholder="发件人、主题或关键词"
         enterkeyhint="search" autocomplete="off"/>
       <button type="submit" class="filter-button icon-label" :disabled="gmailBusy"><UiIcon name="search" :size="17"/>搜索</button>
     </form>
-    <p v-if="gmailSearched" class="fine-print">已显示 {{gmailItems.length}} 封 · 每次 5 封</p>
-    <div v-for="m in gmailItems" :key="m.id" class="recycle-row">
-      <div class="item-info"><strong>{{m.subject}}</strong><small>{{m.from}}</small><small>{{m.date}}</small></div>
-      <button class="secondary small" :disabled="gmailBusy" @click="selectGmailMessage(m.id)">导入</button>
+    <p v-if="gmailSearched" class="google-source-count">已显示 {{gmailItems.length}} 封 · 每次 5 封</p>
+    <div v-if="gmailItems.length" class="google-source-list">
+      <div v-for="m in gmailItems" :key="m.id" class="google-source-row">
+        <span class="google-source-item-icon"><UiIcon name="mail" :size="20"/></span>
+        <span class="google-source-row-info"><strong :title="m.subject">{{m.subject||'无主题'}}</strong><small :title="m.from">{{m.from}}</small><small>{{m.date}}</small></span>
+        <button type="button" class="google-import-action" :disabled="gmailBusy" @click="selectGmailMessage(m.id)">导入</button>
+      </div>
     </div>
-    <div v-if="gmailSearched&&!gmailItems.length" class="empty">没有匹配的邮件</div>
-    <button v-if="gmailNext&&gmailQuery.trim()===gmailLastQuery" class="secondary full" :disabled="gmailBusy" @click="loadGmailMessages(true)">加载更多（5 封）</button>
-    <button class="destructive full" :disabled="gmailBusy" @click="disconnectGmail">断开连接</button>
+    <p v-if="gmailSearched&&!gmailItems.length" class="google-source-empty">没有匹配的邮件</p>
+    <button v-if="gmailNext&&gmailQuery.trim()===gmailLastQuery" class="google-source-load" :disabled="gmailBusy" @click="loadGmailMessages(true)">加载更多（5 封）</button>
   </template>
-  <div class="sheet-actions"><button class="secondary full" @click="closeSheet">关闭</button></div>
 </template>
 <template v-else-if="sheet==='filter'">
   <h2>筛选文书</h2>
@@ -1673,7 +1687,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
   <div class="choice-form-field"><span class="choice-field-label">可见范围</span><button type="button" class="choice-field-control" @click="openChoice('visibility')"><span>{{choiceLabel('visibility')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
   <div class="choice-form-field"><span class="choice-field-label">归档状态</span><button type="button" class="choice-field-control" @click="openChoice('archived')"><span>{{choiceLabel('archived')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
   <div class="choice-form-field"><span class="choice-field-label">收藏</span><button type="button" class="choice-field-control" @click="openChoice('favorite')"><span>{{choiceLabel('favorite')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
-  <label class="form-label compact-month">创建月份（可留空）<input type="month" v-model="monthFilter"/></label>
+  <div class="form-label compact-month"><label for="document-month-filter">创建月份（可留空）</label><div class="date-control"><input id="document-month-filter" type="month" v-model="monthFilter"/><button v-if="monthFilter" type="button" class="date-clear" aria-label="清空创建月份" @click="monthFilter=''"><UiIcon name="x" :size="17"/></button></div></div>
   <div class="sheet-actions"><button class="secondary" type="button" @click="closeSheet">取消</button><button class="primary" type="button" :disabled="loadingPage" @click="searchDocs">{{loadingPage?'筛选中…':'应用筛选'}}</button></div>
 </template>
 <template v-else-if="sheet==='choicePicker'">
@@ -1823,8 +1837,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <template v-else-if="sheet==='restoreBackup'"><h2>确认恢复备份</h2><p>检查恢复内容。仅在点击确认后写入 D1 和私有 R2，不重发三个 App 的历史财务/任务/学习记录。</p><div v-for="(x,i) in restorePreview" :key="i" class="recycle-row"><div class="item-info"><strong>{{x.title}}</strong><small>{{x.action==='skip_duplicate'?'已存在 · 跳过':'恢复资料'}}{{x.has_original_reference?' · 原件按备份内容恢复':''}}</small></div></div><div class="sheet-actions"><button class="secondary" @click="sheet='backup'">取消</button><button class="primary" :disabled="busy" @click="confirmRestore">确认恢复</button></div></template>
       <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2>
         <p v-if="candidateDraft.kind==='finance'&&candidateMerchant" class="muted">交易商户：{{candidateMerchant}}</p>
-        <label v-if="candidateDraft.kind==='finance'" class="form-label">{{candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}<input v-model="candidateDraft.date" type="date" /></label>
-        <label v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label">SBI 资金生效日<input v-model="candidateDraft.transfer_date" type="date" /></label>
+        <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
+        <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
         <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>

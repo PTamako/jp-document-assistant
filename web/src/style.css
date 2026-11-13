@@ -686,3 +686,128 @@ body{
 @media(prefers-reduced-motion:reduce){
   .usage-translation-meter>span{transition:none}
 }
+
+/* Compact Google source pickers: independent of recycle-bin card layout. */
+.google-source-sheet{max-height:min(88dvh,860px);min-width:0}
+.google-source-header{
+  position:sticky;top:0;z-index:3;display:grid;
+  grid-template-columns:44px minmax(0,1fr) 44px;
+  gap:8px;align-items:center;min-width:0;min-height:52px;
+  margin:0 -2px 5px;padding:3px 2px 6px;
+  background:var(--glass-sheet);
+}
+.google-source-header h2{
+  min-width:0;margin:0;text-align:center;font-size:19px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.google-source-close,.google-disconnect,.google-source-placeholder{
+  display:grid;place-items:center;width:44px;height:44px;
+  flex:none;border-radius:14px;
+}
+.google-source-close,.google-disconnect{
+  background:var(--glass-card);border:1px solid var(--glass-outline);
+}
+.google-source-close{color:var(--secondary)}
+.google-disconnect{color:var(--danger)}
+.google-source-close:active,.google-disconnect:active{background:var(--glass-blue)}
+.google-source-account{
+  display:flex;align-items:center;gap:6px;min-width:0;
+  margin:0 1px 14px;color:var(--secondary);
+  font-size:12px;line-height:1.4;
+}
+.google-source-account .ui-icon{flex:none;color:var(--blue)}
+.google-source-account span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.google-search-form{
+  display:flex;align-items:center;gap:8px;min-width:0;width:100%;
+  margin:7px 0 12px;
+}
+.google-search-form input[type="search"]{
+  flex:1 1 0;width:0;min-width:0;max-width:100%;
+  min-height:46px;margin:0;padding-inline:13px;
+}
+.google-search-form .filter-button{
+  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  gap:6px;min-width:82px;min-height:46px;padding:9px 12px;
+  font-size:14px;white-space:nowrap;
+}
+.google-source-list{
+  display:flex;flex-direction:column;min-width:0;
+  border:1px solid var(--glass-outline);border-radius:17px;
+  background:var(--glass-card);overflow:hidden;
+}
+.google-source-list:empty{display:none}
+.google-source-row{
+  display:grid;grid-template-columns:36px minmax(0,1fr) auto;
+  gap:9px;align-items:center;min-width:0;max-width:100%;
+  padding:10px 11px;min-height:66px;
+  border-bottom:1px solid var(--glass-outline);
+}
+.google-source-row:last-child{border-bottom:0}
+.google-source-item-icon{
+  display:grid;place-items:center;width:36px;height:36px;
+  flex:none;border-radius:11px;background:var(--glass-blue);color:var(--blue);
+}
+.google-source-row-info{display:block;min-width:0;overflow:hidden}
+.google-source-row-info strong{
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  line-clamp:2;max-width:100%;overflow:hidden;overflow-wrap:anywhere;
+  font-size:14px;line-height:1.4;font-weight:660;
+}
+.google-source-row-info small{
+  display:block;max-width:100%;overflow:hidden;
+  white-space:nowrap;text-overflow:ellipsis;
+  font-size:12px;line-height:1.5;color:var(--secondary);
+}
+.google-import-action{
+  display:inline-flex;align-items:center;justify-content:center;
+  flex:0 0 auto;min-width:58px;min-height:44px;
+  padding:8px 10px;border-radius:12px;
+  background:var(--glass-blue);color:var(--blue);
+  border:1px solid var(--glass-outline);
+  font-size:13px;font-weight:700;white-space:nowrap;
+}
+.google-import-action:active,.google-source-load:active{background:var(--soft)}
+.google-source-count{margin:0 2px 9px;color:var(--secondary);font-size:12px}
+.google-source-empty{
+  padding:21px 10px;margin:0;text-align:center;
+  font-size:13px;color:var(--secondary);
+}
+.google-source-load{
+  display:block;width:100%;min-height:46px;margin:9px 0 0;
+  color:var(--blue);border:1px solid var(--glass-outline);
+  background:var(--glass-card);border-radius:13px;font-weight:650;
+  font-size:14px;
+}
+/* Safari date/month intrinsic widths can exceed the width of a mobile sheet.
+   Keep the native picker and render a real, separately tappable clear control. */
+input[type="date"],input[type="month"],input[type="datetime-local"]{
+  display:block;min-width:0;max-width:100%;box-sizing:border-box;
+}
+.form-label{min-width:0;max-width:100%}
+.form-label>label{display:block;margin-bottom:6px;font-size:14px;font-weight:600}
+.date-control{
+  display:flex;align-items:center;gap:8px;width:100%;min-width:0;
+  max-width:100%;margin-top:6px;
+}
+.date-control>input[type="date"],.date-control>input[type="month"],
+.date-control>input[type="datetime-local"]{
+  display:block;flex:1 1 0;width:0;min-width:0;max-width:100%;
+  min-height:46px;margin:0;padding:10px 9px;
+  overflow:hidden;-webkit-appearance:auto;appearance:auto;
+}
+.date-control .date-clear{
+  display:grid;place-items:center;flex:0 0 44px;
+  width:44px;height:44px;min-height:44px;
+  border:1px solid var(--glass-outline);border-radius:12px;
+  background:var(--glass-card);color:var(--secondary);
+}
+.date-control .date-clear:active{background:var(--glass-blue)}
+@media(max-width:390px){
+  .google-source-row{gap:7px;padding-inline:9px;grid-template-columns:32px minmax(0,1fr) auto}
+  .google-source-item-icon{width:32px;height:32px}
+  .google-import-action{min-width:54px;padding-inline:8px}
+  .google-search-form .filter-button{min-width:76px;padding-inline:9px}
+}
+@media(prefers-reduced-transparency:reduce){
+  .google-source-header,.google-source-list{background:var(--panel)}
+}

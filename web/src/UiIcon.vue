@@ -22,6 +22,11 @@ defineProps({
       <path d="M10.1 13.9a4.5 4.5 0 0 0 6.4 0l2.1-2.1a4.5 4.5 0 1 0-6.4-6.4l-1.2 1.2"/>
       <path d="M13.9 10.1a4.5 4.5 0 0 0-6.4 0l-2.1 2.1a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/>
     </template>
+    <template v-else-if="name==='unlink'">
+      <path d="M10 14a4.5 4.5 0 0 0 6.4 0l2-2a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1"/>
+      <path d="M14 10a4.5 4.5 0 0 0-6.4 0l-2 2a4.5 4.5 0 1 0 6.4 6.4l1.1-1.1"/>
+      <path d="M3 3l18 18"/>
+    </template>
     <template v-else-if="name==='mine'||name==='users'">
       <circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/>
     </template>
