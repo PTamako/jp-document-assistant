@@ -1045,7 +1045,7 @@ ELSE 'unreviewed' END review_status,
       return permanentlyDelete(env,p,id);
     }
     if(method==='PATCH'&&rest==='attachments/order'){
-      const d=await ownedDocument(env.DB,id,p,'active');
+      const d=await manageableDocument(env.DB,id,p,'active');
       const body=await readJson(request,4000),ids=body.attachment_ids;
       if(!Number.isSafeInteger(body.version)||body.version!==d.version)
         bad('文书已由其他操作修改，请刷新后重新排序','VERSION_CONFLICT',409);
@@ -1060,15 +1060,21 @@ ELSE 'unreviewed' END review_status,
       // makes the entire reorder all-or-nothing; changes() chains the write
       // gate so a lost CAS cannot reorder any of the attachments.
       const statements=[[
-        `UPDATE documents SET version=version+1,updated_at=? WHERE id=? AND owner_id=? AND version=? AND lifecycle='active'
+        `UPDATE documents SET version=version+1,updated_at=? WHERE id=? AND (owner_id=? OR (household_id=? AND visibility='shared'))
+          AND version=? AND lifecycle='active'
           AND (SELECT COUNT(*) FROM attachments WHERE document_id=? AND state='active')=?
           AND NOT EXISTS(SELECT 1 FROM attachments WHERE document_id=? AND state='active' AND id NOT IN (${params}))`,
-        now,id,p.user_id,d.version,id,ids.length,id,...ids
+        now,id,p.user_id,p.household_id,d.version,id,ids.length,id,...ids
       ]];
       ids.forEach((aid,index)=>statements.push([
         `UPDATE attachments SET sort_order=?,updated_at=? WHERE id=? AND document_id=? AND state='active' AND changes()=1`,
         index,now,aid,id
       ]));
+      statements.push([
+        `INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+         SELECT ?,?,?,'document',?,? WHERE changes()=1`,
+        randomToken(16),p.user_id,'attachment_order_updated',id,now
+      ]);
       const output=await batch(env.DB,statements);
       if(output.some(v=>v.meta?.changes!==1))bad('附件列表已被其他设备修改，请刷新','ATTACHMENT_CONFLICT',409);
       return json({ok:true,version:d.version+1,attachment_ids:ids});
