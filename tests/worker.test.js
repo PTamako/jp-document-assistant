@@ -14,7 +14,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
