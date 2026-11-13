@@ -282,6 +282,7 @@ const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
+const candidateApprovalRequired=ref(false);
 const needsOtherAssigneeBonus=computed(()=>
   candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
   !!candidateDraft.assignee&&!homeflowMemberChoices.value.some(x=>x.value===candidateDraft.assignee&&x.self===true));
@@ -1262,6 +1263,7 @@ async function selectBackup(event){
 async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(accountApi(accountEpoch.snapshot()),restoreArchive.value,true);sheet.value='';backupFile.value=null;restoreArchive.value=null;restorePreview.value=[];for(const page of Object.values(pages))page.loaded=false;flash(`已恢复 ${r.metadata_restored} 份资料、${r.originals_restored} 个原件；失败 ${r.failures.length} 件`);}catch(e){problem(e);}finally{busy.value=false;}}
 async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
 async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
+ candidateApprovalRequired.value=d.approval_required===true;
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
  candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';
  const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
@@ -1286,7 +1288,7 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  // A failed network attempt must reopen with precisely its previously
  // authorized scope and fields, or immutable idempotency rejects the retry.
  if(pendingCandidateRetry.value?.id===item.id)Object.assign(candidateDraft,pendingCandidateRetry.value.body);
- sheet.value='candidate';integrationConfigured.value=d.available&&
+ sheet.value='candidate';integrationConfigured.value=!candidateApprovalRequired.value&&d.available&&
    (item.candidate_kind!=='finance'||(ledgerOptions.value.categories.length>0&&ledgerOptions.value.paymentSources.length>0))&&
    (item.candidate_kind!=='homeflow_task'||homeflowMemberChoices.value.some(x=>x.self===true));
  }catch(e){problem(e);}}
@@ -1972,7 +1974,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
-        <p v-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
+        <p v-if="candidateApprovalRequired" class="info-note" role="status">需要 HomeFlow 管理员审批。当前尚未提交申请，也没有同步到目标应用；审批联动功能开放后才能继续。</p>
+        <p v-else-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
         <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||(candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date)||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))||(candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)||(needsOtherAssigneeBonus&&(!Number.isSafeInteger(candidateDraft.bonus_points)||candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
