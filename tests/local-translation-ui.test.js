@@ -16,7 +16,7 @@ test('translation is an explicit opt-in and cache check does not upload text',()
  assert.match(ui,/v-model="translationConsent"/);
  assert.match(ui,/@click="confirmTranslateOriginal"/);
  assert.match(ui,/confirm_google_translation:true/);
- assert.match(ui,/api\('\/api\/documents\/\'+id\+'\/translation'\)/);
+ assert.match(ui,/api\('\/api\/documents\/\'\+id\+'\/translation'\)/);
  assert.match(ui,/translationVisible&&localTranslation/);
  assert.match(ui,/Google 免费机翻/);
 });
