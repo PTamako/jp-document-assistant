@@ -283,13 +283,14 @@ const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recyc
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 const candidateApprovalRequired=ref(false);
-const candidateApprovalReady=ref(false),candidateApprovalSubmitted=ref(false),candidateApprovalId=ref('');
+const candidateApprovalReady=ref(false),candidateApprovalSubmitted=ref(false),candidateApprovalPrepared=ref(false),candidateApprovalId=ref('');
 const needsOtherAssigneeBonus=computed(()=>
   candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
   !!candidateDraft.assignee&&!homeflowMemberChoices.value.some(x=>x.value===candidateDraft.assignee&&x.self===true));
 const candidateActionDisabled=computed(()=>{
  if(busy.value)return true;
  if(candidateApprovalRequired.value?!candidateApprovalReady.value:!integrationConfigured.value)return true;
+ if(candidateApprovalRequired.value&&candidateApprovalPrepared.value)return false;
  if(candidateDraft.kind==='finance'){
   if(!candidateDraft.date||
    (candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date))return true;
@@ -489,7 +490,7 @@ function clearPrivateWorkspace(){
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usageLoadSerial++;usageRefreshing.value=false;
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
-  candidateApprovalRequired.value=false;candidateApprovalReady.value=false;candidateApprovalSubmitted.value=false;candidateApprovalId.value='';
+  candidateApprovalRequired.value=false;candidateApprovalReady.value=false;candidateApprovalSubmitted.value=false;candidateApprovalPrepared.value=false;candidateApprovalId.value='';
   ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;candidateMerchant.value='';pendingCandidateRetry.value=null;
   homeflowMemberChoices.value=[{value:'',label:'未指定'}];homeflowMembersError.value='';
   for(const key of Object.keys(financeTargetStatus))delete financeTargetStatus[key];
@@ -1291,6 +1292,7 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  candidateApprovalRequired.value=d.approval_required===true;
  candidateApprovalReady.value=d.approval_action_enabled===true;
  candidateApprovalSubmitted.value=d.approval_submitted===true;
+ candidateApprovalPrepared.value=d.approval_prepared===true;
  candidateApprovalId.value=d.approval_id||'';
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
  candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';
@@ -1340,21 +1342,23 @@ async function commitApprovedCandidate(){
  const account=accountEpoch.snapshot();
  const stillCurrent=()=>{try{accountEpoch.assertCurrent(account);return true;}catch{return false;}};
  const id=candidateDraft.id,docId=current.value.id;
- const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',
-  confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value};
- if(body.kind==='finance'&&!memberApproval&&ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value){
+ const resumeApproval=memberApproval&&candidateApprovalPrepared.value;
+ const body=resumeApproval?{confirm:candidateDraft.confirm,resume_existing:true}:
+  {...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',
+   confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value};
+ if(!resumeApproval&&body.kind==='finance'&&!memberApproval&&ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value){
   problem(new Error('这笔消费有历史失败记录，请先勾选核对原记录后再提交'));
   busy.value=false;return;
  }
- if(body.kind==='finance'&&body.entry_type==='transfer'&&!body.transfer_date){
+ if(!resumeApproval&&body.kind==='finance'&&body.entry_type==='transfer'&&!body.transfer_date){
   problem(new Error('请选择 SBI 资金实际生效日'));busy.value=false;return;
  }
- if(body.kind==='finance'&&memberApproval&&
+ if(!resumeApproval&&body.kind==='finance'&&memberApproval&&
     (!String(body.category||'').trim()||!String(body.payment_source||'').trim())){
   problem(new Error('请填写申请使用的分类和支付账户；获批后仍需目标应用核验'));
   busy.value=false;return;
  }
- if(body.kind==='finance'&&!memberApproval&&
+ if(!resumeApproval&&body.kind==='finance'&&!memberApproval&&
    (!ledgerOptions.value.categories.some(x=>x.value===body.category)||
     !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){
   problem(new Error('请从家計簿同步的分类和支付方式中选择'));
@@ -1370,6 +1374,7 @@ async function commitApprovedCandidate(){
    if(d.approval_submitted!==true||d.applied!==false||d.target_changed!==false)
     throw new Error('审批回执状态异常，没有确认目标应用写入');
    candidateApprovalSubmitted.value=true;
+   candidateApprovalPrepared.value=false;
    candidateApprovalId.value=d.approval_id||'';
    feedback=d.approval_status==='pending'
     ?'已提交 HomeFlow 待审批，尚未同步到目标应用'
@@ -2042,10 +2047,11 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
         <p v-if="candidateApprovalRequired&&candidateApprovalSubmitted" class="info-note" role="status">已提交 HomeFlow 审批，尚未同步目标应用。审批结果请到 HomeFlow 查看。</p>
+        <p v-else-if="candidateApprovalRequired&&candidateApprovalPrepared" class="info-note" role="status">上次提交结果不确定。重试时使用首次保存的申请内容，忽略此处后续改动；不会重复创建申请或写入目标应用。</p>
         <p v-else-if="candidateApprovalRequired&&candidateApprovalReady" class="info-note" role="status">将请求家庭管理员审批。这里只提交申请，不直接记账、建任务或保存生词。</p>
         <p v-else-if="candidateApprovalRequired" class="info-note" role="status">HomeFlow 管理员审批入口暂未启用，没有提交申请或写入目标应用。</p>
         <p v-else-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':'提交 HomeFlow 审批'):ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':candidateApprovalPrepared?'重试原申请':'提交 HomeFlow 审批'):ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
   </div>
