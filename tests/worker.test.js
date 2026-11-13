@@ -3204,7 +3204,8 @@ test('Stage E shared document does not expose the owner private integration cand
   const id=imported.data.document_id;
   const ownerCandidates=await req(env,'/api/documents/'+id+'/candidates',auth(owner));
   assert.ok(ownerCandidates.data.items.length>0);
-  const candidate=ownerCandidates.data.items[0];
+  const candidate=ownerCandidates.data.items.find(x=>x.candidate_kind==='finance');
+  assert.ok(candidate,'the owner finance candidate must be present');
   const now=new Date().toISOString();
   env.DB.sql.prepare(
     'INSERT INTO integration_links(id,candidate_id,target,idempotency_key,state,remote_id,updated_at) '+
@@ -3256,7 +3257,8 @@ test('Stage D/E real member session cannot bypass missing HomeFlow approval to d
   const id=imported.data.document_id;
   const items=(await req(env,'/api/documents/'+id+'/candidates',auth(member))).data.items;
   assert.ok(items.length>0);
-  const candidate=items[0];
+  const candidate=items.find(x=>x.candidate_kind==='finance');
+  assert.ok(candidate,'member finance candidate must be present');
   let calls=0;
   env.BRIDGE_USER_MAP=JSON.stringify({[userId]:{
     kakebo:'member-kakebo-mapping',homeflow:'member-homeflow-mapping',zhixue:'member-study-mapping'
