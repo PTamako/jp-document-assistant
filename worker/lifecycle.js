@@ -8,7 +8,7 @@ const batch=(db,rows)=>db.batch(rows.map(([sql,...params])=>db.prepare(sql).bind
 
 async function ownedAttachment(env,p,documentId,attachmentId){
   const row=await first(env.DB,`SELECT a.*,d.owner_id,d.household_id,d.visibility,d.lifecycle,
-      o.object_key,o.state object_state,o.bytes
+      o.object_key,o.owner_id AS storage_owner_id,o.state object_state,o.bytes
     FROM attachments a JOIN documents d ON d.id=a.document_id
     LEFT JOIN storage_objects o ON o.id=a.object_id
     WHERE a.id=? AND a.document_id=?
@@ -66,12 +66,19 @@ export async function attachmentRestore(env,p,documentId,attachmentId){
 }
 export async function attachmentDelete(env,p,documentId,attachmentId){
   const a=await ownedAttachment(env,p,documentId,attachmentId);
-  // Original object cleanup still assumes the R2 owner; don't allow a
-  // collaborator to run it until cross-owner object cleanup is transactional.
-  if(a.owner_id!==p.user_id)bad('永久删除附件需要原所有者确认','ORIGINAL_OWNER_REQUIRED',403);
+  // Shared editors may request the same operation as the owner. Physical R2
+  // ownership remains the original document owner, never the acting editor.
+  // This invariant is also enforced at INSERT/UPDATE of attachment references.
+  if(a.object_id&&a.storage_owner_id!==a.owner_id)
+    bad('附件原件归属异常，已停止删除','OBJECT_OWNER_MISMATCH',409);
   if(a.state==='active')bad('请先将附件移入回收站','TRASH_FIRST',409);
   if(a.state!=='deletion_pending'){
-    await run(env.DB,"UPDATE attachments SET state='deletion_pending',updated_at=? WHERE id=? AND state='trashed'",isoNow(),a.id);
+    const marked=await run(env.DB,`UPDATE attachments SET state='deletion_pending',updated_at=?
+      WHERE id=? AND document_id=? AND state='trashed' AND EXISTS(
+        SELECT 1 FROM documents d WHERE d.id=attachments.document_id AND
+        (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+      isoNow(),a.id,documentId,p.user_id,p.household_id);
+    if(marked.meta?.changes!==1)bad('附件权限或状态已变化，请刷新','VERSION_CONFLICT',409);
   }
   const now=isoNow();
   let shouldDelete=false;
@@ -82,13 +89,18 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
   }
   if(shouldDelete&&a.object_key){
     if(!env.DOCUMENTS)bad('R2 尚未绑定','NOT_CONFIGURED',503);
-    // A concurrent attachment/document delete may have changed the reference set.
-    // Claim only if D1 still confirms we own the last remaining attachment.
+    // Claim the exact original owner's object, but only while this editor
+    // still has access to the shared document. No cross-user R2 list/delete.
     const claim=await run(env.DB,`UPDATE storage_objects SET state='deletion_pending',updated_at=?
       WHERE id=? AND owner_id=? AND state IN ('ready','delete_failed','deletion_pending')
-        AND NOT EXISTS(SELECT 1 FROM attachments WHERE object_id=? AND id!=?)`,
-        now,a.object_id,p.user_id,a.object_id,a.id);
-    if(claim.meta?.changes!==1)shouldDelete=false;
+        AND NOT EXISTS(SELECT 1 FROM attachments WHERE object_id=? AND id!=?)
+        AND EXISTS (SELECT 1 FROM attachments a JOIN documents d ON d.id=a.document_id
+          WHERE a.id=? AND a.document_id=? AND a.object_id=storage_objects.id
+            AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+        now,a.object_id,a.owner_id,a.object_id,a.id,
+        a.id,documentId,p.user_id,p.household_id);
+    if(claim.meta?.changes!==1)
+      return failure('DELETE_RETRY_NEEDED','附件权限或原件状态已变化，请刷新后重试',409);
     else{
       await run(env.DB,`INSERT INTO deletion_jobs(id,object_id,requested_by,state,created_at,updated_at)
         VALUES(?,?,?,'pending',?,?) ON CONFLICT(object_id) DO UPDATE SET state='pending',updated_at=excluded.updated_at`,
@@ -104,17 +116,33 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
     }
   }
 
-  const cleanup=[['DELETE FROM attachments WHERE id=? AND document_id=?',a.id,documentId]];
-  if(shouldDelete&&a.object_id) cleanup.push(['DELETE FROM deletion_jobs WHERE object_id=?',a.object_id],['DELETE FROM storage_objects WHERE id=?',a.object_id]);
-  cleanup.push(['INSERT OR IGNORE INTO deletion_tombstones(id,owner_id,request_key,target_type,target_id,deleted_at) VALUES(?,?,?,?,?,?)',randomToken(16),p.user_id,`att:${a.id}`,'attachment',a.id,now]);
-  try{await batch(env.DB,cleanup);}
-  catch{return failure('METADATA_CLEANUP_FAILED','R2 删除可能已完成，D1 清理失败，可重试',503);}
+  const cleanup=[[`DELETE FROM attachments WHERE id=? AND document_id=?
+    AND state='deletion_pending' AND EXISTS(SELECT 1 FROM documents d
+      WHERE d.id=attachments.document_id AND
+        (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+    a.id,documentId,p.user_id,p.household_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,'attachment_permanently_deleted','attachment',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,a.id,now]];
+  if(shouldDelete&&a.object_id) cleanup.push(
+    ['DELETE FROM deletion_jobs WHERE object_id=?',a.object_id],
+    ['DELETE FROM storage_objects WHERE id=? AND owner_id=? AND NOT EXISTS(SELECT 1 FROM attachments WHERE object_id=storage_objects.id)',a.object_id,a.owner_id]);
+  cleanup.push(['INSERT OR IGNORE INTO deletion_tombstones(id,owner_id,request_key,target_type,target_id,deleted_at) VALUES(?,?,?,?,?,?)',
+    randomToken(16),a.owner_id,`att:${a.id}`,'attachment',a.id,now]);
+  try{
+    const result=await batch(env.DB,cleanup);
+    if(result[0]?.meta?.changes!==1||result[1]?.meta?.changes!==1)
+      return failure('METADATA_CLEANUP_FAILED','附件状态已改变，请刷新后检查清理结果',409);
+  }catch{return failure('METADATA_CLEANUP_FAILED','R2 删除可能已完成，D1 清理失败，可重试',503);}
   // If two references were deleted concurrently, the last one to commit
   // claims the orphaned object and deletes the actual R2 key.
   let compensated=0,pending=false;
   if(!shouldDelete&&a.object_id){
     try{
-      const outcome=await (await cleanupOrphans(env,p,{onlyIds:[a.object_id]})).json();
+      // Only the exact newly orphaned object belonging to the original
+      // owner is eligible; audit attribution stays with p.user_id above.
+      const outcome=await (await cleanupOrphans(env,{user_id:a.owner_id},
+        {onlyIds:[a.object_id]})).json();
       compensated=Number(outcome.removed||0);
       pending=!!outcome.pending;
     }catch{pending=true;}
