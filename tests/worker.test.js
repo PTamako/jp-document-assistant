@@ -2965,3 +2965,74 @@ test('SBI investment card notice is always a transfer, including pre-existing ex
  assert.equal(repeated.data.already_synced,true);
  assert.equal(sent.length,1);
 });
+
+
+test('shared attachment editor can trash, restore and reorder but not purge R2 owned by another member',async()=>{
+ const env=makeEnv(),a=await boot(env);
+ const inv=await req(env,'/api/household/invites',{method:'POST',...auth(a),
+   data:{invitee_email:'collaborator@example.invalid'}});
+ const joined=await req(env,'/api/household/join',{method:'POST',data:{
+   invite_token:inv.data.invite_token,email:'collaborator@example.invalid',
+   password:'member-long-secret123',display_name:'家庭成员'}});
+ assert.equal(joined.response.status,201);
+ const b={cookie:joined.response.headers.get('set-cookie').split(';')[0],
+   csrf:joined.data.csrf_token};
+ const form=new FormData();
+ form.append('file',new File([new Uint8Array([255,216,255,224,1,2,3,4])],
+   'shared-page.jpg',{type:'image/jpeg'}));
+ form.append('retention','original');
+ const upload=await req(env,'/api/documents/import/file',{method:'POST',...auth(a),form});
+ assert.equal(upload.response.status,201,JSON.stringify(upload.data));
+ const id=upload.data.document_id;
+ const before=(await req(env,'/api/documents/'+id,auth(a))).data.document;
+ assert.equal(before.visibility,'private');
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments/'+before.attachments[0].id+
+   '/trash',{method:'POST',...auth(b),data:{}})).response.status,404);
+ const shared=await req(env,'/api/documents/'+id,{
+   method:'PATCH',...auth(a),data:{visibility:'shared',version:before.version,
+    confirm_sensitive_share:true}
+ });
+ assert.equal(shared.response.status,200);
+ const aid=before.attachments[0].id;
+ const saved=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/trash',{
+   method:'POST',...auth(b),data:{}
+ });
+ assert.equal(saved.response.status,200,JSON.stringify(saved.data));
+ assert.equal(env._blobs.size,1,'a collaborator trash must retain original R2');
+ const recycle=await req(env,'/api/documents/'+id+'/attachments/recycle',auth(b));
+ assert.equal(recycle.response.status,200);
+ assert.equal(recycle.data.items.length,1);
+ const restored=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/restore',{
+   method:'POST',...auth(b),data:{}
+ });
+ assert.equal(restored.response.status,200,JSON.stringify(restored.data));
+ const purge=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/permanent-delete',{
+   method:'POST',...auth(b),data:{confirm:'DELETE_FOREVER'}
+ });
+ assert.equal(purge.response.status,403);
+ assert.equal(env._blobs.size,1);
+ const one=env.DB.sql.prepare('SELECT * FROM attachments WHERE id=?').get(aid);
+ const second='f'.repeat(32);
+ env.DB.sql.prepare('INSERT INTO attachments (id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
+  .run(second,id,one.object_id,'second-page.jpg',1,one.sha256,new Date().toISOString(),new Date().toISOString());
+ const details=(await req(env,'/api/documents/'+id,auth(b))).data.document;
+ const changed=await req(env,'/api/documents/'+id+'/attachments/order',{
+   method:'PATCH',...auth(b),data:{version:details.version,
+    attachment_ids:[second,aid]}
+ });
+ assert.equal(changed.response.status,200,JSON.stringify(changed.data));
+ const ordered=env.DB.sql.prepare('SELECT id FROM attachments WHERE document_id=? ORDER BY sort_order')
+  .all(id).map(v=>v.id);
+ assert.deepEqual(ordered,[second,aid]);
+ const audit=env.DB.sql.prepare('SELECT kind,actor_user_id FROM audit_events WHERE actor_user_id=? AND kind IN (\'attachment_trashed\',\'attachment_restored\',\'attachment_order_updated\')').all(joined.data.user.id);
+ assert.deepEqual(audit.map(x=>x.kind).sort(),
+   ['attachment_order_updated','attachment_restored','attachment_trashed']);
+ assert.ok(audit.every(x=>x.actor_user_id===joined.data.user.id));
+ // Once the owner revokes sharing, even a known attachment ID is opaque.
+ const current=(await req(env,'/api/documents/'+id,auth(a))).data.document;
+ assert.equal((await req(env,'/api/documents/'+id,{method:'PATCH',...auth(a),
+   data:{version:current.version,visibility:'private'}})).response.status,200);
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments/'+aid+'/trash',{
+   method:'POST',...auth(b),data:{}})).response.status,404);
+ assert.equal(env._blobs.size,1);
+});
