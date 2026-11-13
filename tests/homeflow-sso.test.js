@@ -467,7 +467,7 @@ test('member document review requests retain an immutable private payload and cr
     const raw=await request.text();
     const stamp=request.headers.get('x-approval-timestamp');
     const signature=createHmac('sha256',Buffer.from('d'.repeat(64),'hex'))
-      .update('jp-document-assistant\\n'+stamp+'\\n'+raw).digest('hex');
+      .update('jp-document-assistant\n'+stamp+'\n'+raw).digest('hex');
     assert.equal(request.headers.get('x-approval-signature'),signature);
     const body=JSON.parse(raw);
     assert.deepEqual(Object.keys(body).sort(),[
