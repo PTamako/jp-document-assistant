@@ -77,5 +77,8 @@ test('recycle sheet keeps titles full width and buttons in a compact second row'
  assert.match(css,/\.recycle-row\{[^}]*flex-direction:column/);
  assert.match(css,/\.recycle-title\{[^}]*-webkit-line-clamp:2/);
  assert.match(css,/\.recycle-row-actions\{[^}]*flex:0 0 auto/);
- assert.match(css,/\.recycle-footer\{margin:10px 0 0/);
+ assert.match(recycle,/class="recycle-header-actions"/);
+ assert.match(recycle,/class="recycle-done-button"/);
+ assert.doesNotMatch(recycle,/class="sheet-actions recycle-footer"/);
+ assert.match(css,/\.recycle-header-actions\{[^}]*justify-content:flex-end/);
 });
