@@ -265,20 +265,36 @@ export async function candidatePreview(request,env,p,id){
   const payload=JSON.parse(item.payload_json);
   const verifiedMerchant=fields.get('merchant')||payload.merchant;
   const entryType=target==='kakebo'?ledgerEntryType(payload,verifiedMerchant):null;
-  const picker=target==='kakebo'?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
-  const members=target==='homeflow'?await homeflowMemberOptions(env,p.user_id,id):null;
+  // Member-initiated writes require a separately verified HomeFlow approval.
+  // Until that executor is implemented, never look up private target accounts
+  // or expose an enabled "sync" button merely because a bridge is configured.
+  const approvalRequired=p.role!=='owner';
+  const picker=!approvalRequired&&target==='kakebo'
+    ?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
+  const members=!approvalRequired&&target==='homeflow'
+    ?await homeflowMemberOptions(env,p.user_id,id):null;
   return json({candidate_id:id,target,kind:item.candidate_kind,payload,entry_type:entryType,ledger_options:picker?.data||null,
     ledger_options_error:picker?.error||null,
     homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
-    integration:link||null,available:!!config(env,target),
-    account_mapping_ready:!!authorizedMapping(env,p.user_id,target),
-    note:'请对照原文及目标 App 的账号完成二次确认。生词和句子必须先脱敏，财务内容不能直接视为已付款。'});
+    integration:link||null,available:!approvalRequired&&!!config(env,target),
+    approval_required:approvalRequired,approval_submitted:false,applied:false,
+    account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p.user_id,target),
+    note:approvalRequired
+      ?'当前成员需要 HomeFlow 管理员审批。本次尚未创建申请，也未同步到目标 App。'
+      :'请对照原文及目标 App 的账号完成二次确认。生词和句子必须先脱敏，财务内容不能直接视为已付款。'});
 }
 export async function commitCandidate(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
   const target=TARGETS[item.candidate_kind];
+  // Hard server-side gate: neither a legacy member session nor a new SSO
+  // member may write household finance, tasks, or private study targets
+  // without a VERIFIED HomeFlow approval and scoped target executor.
+  // Do not create an integration_link (or claim a remote write) here.
+  if(p.role!=='owner')
+    return failure('APPROVAL_REQUIRED',
+      '普通成员跨应用同步需要 HomeFlow 审批；当前未提交申请，也未写入目标 App。',409);
   const data=await readJson(request,9000);
   if(data.confirm!==CONFIRMATIONS[item.candidate_kind])bad('需要明确二次确认','CONFIRM_REQUIRED',409);
   const supplied=request.headers.get('Idempotency-Key');
