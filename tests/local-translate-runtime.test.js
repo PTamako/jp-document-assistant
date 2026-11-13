@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const source=readFileSync(new URL('../web/src/local-translate.worker.js',import.meta.url),'utf8');
-const instrumented=source.replace("import * as ort from 'onnxruntime-web';",'');
+const instrumented=source.replace("import * as ort from 'onnxruntime-web';",'').replace(/import \{readSentencePiece[^\n]+from '\.\/marian-tokenizer\.js';/,'');
 function runModel(fetchImplementation){
  const messages=[];
  const self={
@@ -13,7 +13,11 @@ function runModel(fetchImplementation){
  };
  const context={self,TextDecoder,URL,AbortSignal,fetch:fetchImplementation,
   ort:{env:{wasm:{}},InferenceSession:{create:async()=>{throw Error('not expected')}},Tensor:class{}},
-  caches:undefined
+  caches:undefined,
+  readSentencePiece:()=>{throw Error('SPM_PIECES_MISSING');},
+  readMarianVocabulary:()=>{throw Error('VOCAB_INVALID_JSON');},
+  createMarianTokenizer:()=>({}),encodeMarian:()=>[0],decodeMarian:()=>'',
+
  };
  vm.runInNewContext(instrumented,context);
  return {messages,translate:()=>self.onmessage({data:{type:'translate',text:'ご利用ありがとうございます'}})};
@@ -37,11 +41,11 @@ test('Safari without CacheStorage can still attempt translation download',async(
  let calls=0;
  const model=runModel(async()=>{
   calls++;
-  return {ok:true,status:200,arrayBuffer:async()=>new ArrayBuffer(600000)};
+  return {ok:true,status:200,arrayBuffer:async()=>new ArrayBuffer(1200000)};
  });
  await model.translate();
  assert.equal(calls,2);
- assert.equal(model.messages.at(-1).code,'tokenizer');
+ assert.equal(model.messages.at(-1).code,'tokenizer_source');
  assert.match(model.messages.at(-1).message,/分词器/);
 });
 test('dedicated translator loads ONNX sessions sequentially and caps decoding',()=>{
@@ -60,13 +64,13 @@ test('iOS CORS or CSP failure automatically retries through same-origin fixed re
  const model=runModel(async url=>{
   attempted.push(String(url));
   if(String(url).startsWith('https://huggingface.co/'))throw TypeError('Failed to fetch');
-  return {ok:true,status:200,headers:{get:()=>null},arrayBuffer:async()=>new ArrayBuffer(600000)};
+  return {ok:true,status:200,headers:{get:()=>null},arrayBuffer:async()=>new ArrayBuffer(1200000)};
  });
  await model.translate();
  assert.deepEqual(attempted.map(url=>url.includes('/api/local-translation/models/')), [false,true,false,true]);
  assert.match(attempted[1],/^\/api\/local-translation\/models\/source\.spm$/);
  assert.match(attempted[3],/^\/api\/local-translation\/models\/target\.spm$/);
- assert.equal(model.messages.at(-1).code,'tokenizer');
+ assert.equal(model.messages.at(-1).code,'tokenizer_source');
  assert.ok(!attempted.some(url=>url.includes('ご利用ありがとうございます')));
 });
 test('relay 502 is surfaced as a source network failure with no raw model body',async()=>{
