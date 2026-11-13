@@ -25,6 +25,8 @@ jobs:
         run: npm run check:syntax
       - name: Unit and in-memory D1 tests
         run: npm test
+      - name: Validate real pinned Marian tokenizer (public model files only)
+        run: node scripts/verify-marian-model.mjs
       - name: Build Vue UI (no deploy)
         run: npm run build
       - name: Check built PWA icon assets (no network API)
