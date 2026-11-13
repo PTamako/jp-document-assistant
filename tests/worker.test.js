@@ -541,8 +541,11 @@ test('private documents are not exposed to invited user and shared only when con
   const events=env.DB.sql.prepare(`SELECT kind,actor_user_id FROM audit_events
     WHERE entity_id=? AND kind IN ('document_metadata_updated','document_trashed','document_restored')
     ORDER BY created_at,kind`).all(id);
-  assert.equal(events.length,5-2,'one metadata, trash and restore each audited');
-  assert.ok(events.every(x=>x.actor_user_id===joined.data.user.id));
+  assert.equal(events.length,4,'owner sharing and three member edits are audited');
+  const memberEvents=events.filter(x=>x.actor_user_id===joined.data.user.id);
+  assert.deepEqual(memberEvents.map(x=>x.kind).sort(),
+    ['document_metadata_updated','document_restored','document_trashed'],
+    'each member change records the real actor instead of the document owner');
 });
 
 test('trash restores without deleting R2; permanent deletion removes R2 and private rows',async()=>{
