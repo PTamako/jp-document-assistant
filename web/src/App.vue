@@ -284,6 +284,21 @@ const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=r
 const integrationConfigured=ref(false);
 const candidateApprovalRequired=ref(false);
 const candidateApprovalReady=ref(false),candidateApprovalSubmitted=ref(false),candidateApprovalPrepared=ref(false),candidateApprovalId=ref('');
+const candidateApprovalStatus=ref('not_submitted'),candidateApprovalChecked=ref(false);
+const candidateApprovalMessage=computed(()=>{
+ if(!candidateApprovalSubmitted.value)return '';
+ if(!candidateApprovalChecked.value)return '申请已提交，尚未查询到最新审批状态；目标应用没有同步。';
+ const labels={
+  pending:'HomeFlow 管理员尚未审批，目标应用没有同步。',
+  approved:'管理员已批准，但目前尚无此操作的安全执行器，目标应用没有同步。',
+  rejected:'管理员已拒绝该申请，目标应用没有同步。',
+  cancelled:'审批申请已取消，目标应用没有同步。',
+  expired:'审批申请已过期，目标应用没有同步。',
+  failed_final:'审批已终止，目标应用没有同步。',
+  conflict:'审批发生冲突，目标应用没有同步。'
+ };
+ return labels[candidateApprovalStatus.value]||'审批状态尚未确认，目标应用没有同步。';
+});
 const needsOtherAssigneeBonus=computed(()=>
   candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
   !!candidateDraft.assignee&&!homeflowMemberChoices.value.some(x=>x.value===candidateDraft.assignee&&x.self===true));
@@ -490,7 +505,7 @@ function clearPrivateWorkspace(){
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usageLoadSerial++;usageRefreshing.value=false;
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
-  candidateApprovalRequired.value=false;candidateApprovalReady.value=false;candidateApprovalSubmitted.value=false;candidateApprovalPrepared.value=false;candidateApprovalId.value='';
+  candidateApprovalRequired.value=false;candidateApprovalReady.value=false;candidateApprovalSubmitted.value=false;candidateApprovalPrepared.value=false;candidateApprovalId.value='';candidateApprovalStatus.value='not_submitted';candidateApprovalChecked.value=false;
   ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;candidateMerchant.value='';pendingCandidateRetry.value=null;
   homeflowMemberChoices.value=[{value:'',label:'未指定'}];homeflowMembersError.value='';
   for(const key of Object.keys(financeTargetStatus))delete financeTargetStatus[key];
@@ -1294,6 +1309,8 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  candidateApprovalSubmitted.value=d.approval_submitted===true;
  candidateApprovalPrepared.value=d.approval_prepared===true;
  candidateApprovalId.value=d.approval_id||'';
+ candidateApprovalStatus.value=d.approval_status||'not_submitted';
+ candidateApprovalChecked.value=false;
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
  candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';
  const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
@@ -1323,6 +1340,36 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
    (item.candidate_kind!=='finance'||(ledgerOptions.value.categories.length>0&&ledgerOptions.value.paymentSources.length>0))&&
    (item.candidate_kind!=='homeflow_task'||homeflowMemberChoices.value.some(x=>x.self===true));
  }catch(e){problem(e);}}
+async function checkCandidateApprovalStatus(){
+ if(busy.value||!candidateApprovalRequired.value||
+    (!candidateApprovalSubmitted.value&&!candidateApprovalPrepared.value)||
+    !current.value||!candidateDraft.id)return;
+ const account=accountEpoch.snapshot(),candidateId=candidateDraft.id,docId=current.value.id;
+ busy.value=true;
+ const stillCurrent=()=>{
+  try{accountEpoch.assertCurrent(account);
+   return candidateDraft.id===candidateId&&current.value?.id===docId&&sheet.value==='candidate';
+  }catch{return false;}
+ };
+ try{
+  const result=await api(`/api/candidates/${candidateId}/approval`);
+  if(!stillCurrent())return;
+  if(result?.applied!==false||result.target_changed!==false||
+     typeof result.approval_status!=='string')
+   throw new Error('审批状态校验失败，不能判断目标应用是否生效');
+  candidateApprovalStatus.value=result.approval_status;
+  candidateApprovalSubmitted.value=result.approval_submitted===true;
+  candidateApprovalPrepared.value=result.approval_prepared===true;
+  candidateApprovalId.value=result.approval_id||'';
+  candidateApprovalChecked.value=result.approval_checked===true;
+ }catch(e){
+  if(stillCurrent()){
+   candidateApprovalChecked.value=false;
+   problem(e);
+  }
+ }finally{if(stillCurrent())busy.value=false;}
+}
+
 async function verifyLedgerStatus(item){
  if(busy.value)return;
  busy.value=true;
@@ -1376,6 +1423,8 @@ async function commitApprovedCandidate(){
    candidateApprovalSubmitted.value=true;
    candidateApprovalPrepared.value=false;
    candidateApprovalId.value=d.approval_id||'';
+   candidateApprovalStatus.value=d.approval_status||'submitted_status_unknown';
+   candidateApprovalChecked.value=false;
    feedback=d.approval_status==='pending'
     ?'已提交 HomeFlow 待审批，尚未同步到目标应用'
     :'原审批申请已存在，请在 HomeFlow 查看状态；目标应用尚未写入';
@@ -2046,7 +2095,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
-        <p v-if="candidateApprovalRequired&&candidateApprovalSubmitted" class="info-note" role="status">已提交 HomeFlow 审批，尚未同步目标应用。审批结果请到 HomeFlow 查看。</p>
+        <p v-if="candidateApprovalRequired&&candidateApprovalSubmitted" class="info-note" role="status">{{candidateApprovalMessage}}</p>
+        <button v-if="candidateApprovalRequired&&(candidateApprovalSubmitted||candidateApprovalPrepared)" type="button" class="secondary" :disabled="busy||!candidateApprovalReady" @click="checkCandidateApprovalStatus">查询 HomeFlow 审批状态</button>
         <p v-else-if="candidateApprovalRequired&&candidateApprovalPrepared" class="info-note" role="status">上次提交结果不确定。重试时使用首次保存的申请内容，忽略此处后续改动；不会重复创建申请或写入目标应用。</p>
         <p v-else-if="candidateApprovalRequired&&candidateApprovalReady" class="info-note" role="status">将请求家庭管理员审批。这里只提交申请，不直接记账、建任务或保存生词。</p>
         <p v-else-if="candidateApprovalRequired" class="info-note" role="status">HomeFlow 管理员审批入口暂未启用，没有提交申请或写入目标应用。</p>
