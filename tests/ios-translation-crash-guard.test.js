@@ -25,13 +25,10 @@ test('only public translation model caches are removed, never user document data
  await assert.doesNotReject(deleteOldLocalTranslationWeights({async delete(){throw Error('Safari disabled CacheStorage')}}));
  await assert.doesNotReject(deleteOldLocalTranslationWeights(null));
 });
-test('on-device crash guard executes before Worker creation',()=>{
+test('iOS no longer creates any local large ONNX model; only old caches are cleaned',()=>{
  const ui=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
- const start=ui.indexOf('function translateOriginal(){');
- const worker=ui.indexOf("new Worker(new URL('./local-translate.worker.js'",start);
- const guard=ui.indexOf('if(localTranslationBlocked){',start);
- assert.ok(start>=0&&guard>start&&worker>guard,'guard must run before creating Worker');
- assert.match(ui,/:disabled="translationBusy \|\| localTranslationBlocked"/);
- assert.match(ui,/onMounted\(async\(\)=>\{\s*if\(localTranslationBlocked\)void deleteOldLocalTranslationWeights\(\)/);
- assert.match(ui,/中文解释正常使用/);
+ assert.doesNotMatch(ui,/new Worker\(new URL\('\.\/local-translate\.worker\.js'/);
+ assert.doesNotMatch(ui,/localTranslationBlocked/);
+ assert.match(ui,/void deleteOldLocalTranslationWeights\(\)/);
+ assert.match(ui,/confirm_google_translation:true/);
 });

@@ -20,6 +20,7 @@ import {enqueueDocumentAi,processDocumentAiJob,getDocumentAiJob,runDueDocumentAi
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
 import { validateOfficeBytes } from '../web/src/document-text.js';
+import {handleDocumentTranslation} from './document-translation.js';
 
 // One production Worker. No R2 LIST, no browser-owned R2 credentials.
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -783,6 +784,11 @@ ELSE 'unreviewed' END review_status,
         candidateId,id,'homeflow_task',JSON.stringify({title:(doc.category==='campaign'?'活动截止提醒：':'确认：')+doc.title.slice(0,40),due_on:body.due_date,visibility:doc.visibility,requires_confirmation:true,date_field_key:'due_date'}),now,now,id,'homeflow_task']
       ]);
       return json({ok:true,deadline_year_user_confirmed:true,remote_sync:false});
+    }
+    if((method==='GET'||method==='POST')&&rest==='translation'){
+      const doc=await visibleDocument(env.DB,id,p);
+      if(!doc)bad('文书不存在或没有查看权限','NOT_FOUND',404);
+      return handleDocumentTranslation(request,env,doc);
     }
     if(method==='POST'&&rest==='ai/analyze'){
       const doc=await ownedDocument(env.DB,id,p,'active');
