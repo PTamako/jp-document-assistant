@@ -105,9 +105,17 @@ export async function handleDocumentTranslation(request,env,doc){
  // Run at most two Google Script calls simultaneously. Long documents never
  // download ONNX/WASM to the iPhone and the Worker never buffers model weights.
  const translated=new Array(chunks.length);
- for(let i=0;i<chunks.length;i+=2){
-  const segment=await Promise.all(chunks.slice(i,i+2).map(c=>fromZhixue(c,env)));
-  for(let j=0;j<segment.length;j++)translated[i+j]=segment[j];
+ try{
+  for(let i=0;i<chunks.length;i+=2){
+   const segment=await Promise.all(chunks.slice(i,i+2).map(c=>fromZhixue(c,env)));
+   for(let j=0;j<segment.length;j++)translated[i+j]=segment[j];
+  }
+ }catch(e){
+  // Provider outages cannot commit partial translations to D1.
+  // Never return raw provider exceptions, text, or secret-bearing URLs.
+  return status(e?.code||'PROVIDER_UNAVAILABLE',
+    ['NOT_CONFIGURED','PROVIDER_NETWORK','PROVIDER_UNAVAILABLE'].includes(e?.code)?
+      e.message:'Google 免费翻译暂不可用',e?.status||503);
  }
  const result=translated.join('\n');
  // Do not resurrect deleted documents or commit stale text after manual edits.
