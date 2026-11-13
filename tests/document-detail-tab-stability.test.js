@@ -20,6 +20,7 @@ function harness(fetcher=async path=>path.endsWith('/candidates')?{items:[{id:'c
   attachmentActionsTarget:cell({id:'attachment'}),
   swipeOpenId:cell(''), translationStopped:0,
   document:{querySelector:selector=>selector==='.detail-body'?scroll:null},
+  invalidateStaleTranslation:()=>{},
   api:fetcher,nextTick:async()=>{},stopTranslation:()=>{state.translationStopped++;},
   revokeOriginal:()=>{},problem:error=>problems.push(error)
  };
