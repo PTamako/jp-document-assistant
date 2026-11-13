@@ -64,10 +64,10 @@ export function classifyBridgeRejection(target,status,body){
 
 // Only a signed read-only lookup may release an old failed fingerprint.
 // Never assume a timeout means the target ledger did not commit.
-async function lookupKakeboIdempotency(dest,{key,actor,documentId,candidateId}){
+async function lookupKakeboIdempotency(dest,{key,actor,documentId,candidateId,operation='lookup'}){
  const payload={source:'jp-document-assistant',source_document_id:documentId,
   source_candidate_id:candidateId,actor_user_id:actor,idempotency_key:key,
-  payload:{operation:'lookup'}};
+  payload:{operation}};
  const raw=JSON.stringify(payload),timestamp=String(Date.now());
  try{
   const signature=await hmacHex(dest.secret,timestamp+'\n'+raw);
@@ -77,7 +77,8 @@ async function lookupKakeboIdempotency(dest,{key,actor,documentId,candidateId}){
   const data=await response.json().catch(()=>null);
   if(!response.ok||data?.ok!==true||typeof data.exists!=='boolean')return null;
   if(data.exists&&(!data.remote_id||typeof data.remote_id!=='string'))return null;
-  return {exists:data.exists,remoteId:data.remote_id||null};
+  return {exists:data.exists,remoteId:data.remote_id||null,
+    recordState:['active','trashed','missing'].includes(data.record_state)?data.record_state:null};
  }catch{return null;}
 }
 
@@ -192,6 +193,56 @@ export async function ledgerPickerOptions(env,userId,kind,merchant='',recognized
  }
 }
 
+
+/**
+ * On-demand signed read-only reconciliation. A previously synced ledger entry
+ * may later be moved to Kakebo's trash. Never recreate or restore it here.
+ */
+export async function integrationStatus(env,p,id){
+  const item=await first(env.DB,`SELECT c.id,d.id document_id,d.owner_id,d.lifecycle,c.candidate_kind
+    FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
+  if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')
+    bad('候选不存在','NOT_FOUND',404);
+  const target=TARGETS[item.candidate_kind];
+  const link=await first(env.DB,'SELECT state,remote_id,idempotency_key FROM integration_links WHERE candidate_id=? AND target=?',id,target);
+  if(!link||!['synced','linked_existing'].includes(link.state))
+    return json({ok:true,target,stored_state:link?.state||'not_synced',record_state:'not_synced'});
+  if(target!=='kakebo')
+    return json({ok:true,target,stored_state:link.state,record_state:'not_checked'});
+  const dest=config(env,'kakebo'),actor=authorizedMapping(env,p.user_id,'kakebo');
+  if(!dest||!actor)return failure('STATUS_UNAVAILABLE','家計簿状态暂不可核对，保留原同步记录',503);
+  const found=await lookupKakeboIdempotency(dest,{
+    key:link.idempotency_key,actor,documentId:item.document_id,candidateId:id,operation:'status'});
+  if(!found?.recordState)return failure('STATUS_UNAVAILABLE','目标接口暂未返回可验证的状态，未改动账目',503);
+  return json({ok:true,target,stored_state:link.state,record_state:found.recordState,
+    needs_attention:found.recordState!=='active',remote_id:found.remoteId});
+}
+
+/** Read a signed, household-scoped assignee list; never expose other households. */
+export async function homeflowMemberOptions(env,userId,candidateId){
+  const dest=config(env,'homeflow'),actor=authorizedMapping(env,userId,'homeflow');
+  if(!dest||!actor)return {error:'HomeFlow 账号尚未完成联动授权'};
+  const key=`jda:homeflow:${candidateId}`;
+  const raw=JSON.stringify({source:'jp-document-assistant',actor_user_id:actor,
+    idempotency_key:key,payload:{operation:'members'}});
+  const stamp=String(Date.now());
+  try{
+    const signature=await hmacHex(dest.secret,stamp+'\n'+raw);
+    const response=await dest.fetcher(new Request(dest.url,{method:'POST',headers:{
+      'Content-Type':'application/json','X-DA-Timestamp':stamp,
+      'X-DA-Signature':signature,'Idempotency-Key':key},body:raw}));
+    const data=await response.json().catch(()=>null);
+    if(!response.ok||data?.ok!==true||!Array.isArray(data.members))
+      return {error:'HomeFlow 负责人暂时无法读取'};
+    const members=data.members.slice(0,2).filter(x=>
+      typeof x?.id==='string'&&/^[a-zA-Z0-9_-]{8,80}$/.test(x.id)&&
+      typeof x?.label==='string'&&x.label.length>0&&x.label.length<=60&&
+      typeof x?.self==='boolean');
+    if(!members.some(x=>x.self))return {error:'HomeFlow 当前成员无法核验'};
+    return {members};
+  }catch{return {error:'HomeFlow 成员列表读取失败'};}
+}
+
 export async function candidatePreview(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
@@ -200,8 +251,10 @@ export async function candidatePreview(request,env,p,id){
   const link=await first(env.DB,'SELECT state,remote_id,attempt_count,last_error_code FROM integration_links WHERE candidate_id=?',id);
   const payload=JSON.parse(item.payload_json);
   const picker=target==='kakebo'?await ledgerPickerOptions(env,p.user_id,payload.kind,payload.merchant,payload.payment_source_hint):null;
+  const members=target==='homeflow'?await homeflowMemberOptions(env,p.user_id,id):null;
   return json({candidate_id:id,target,kind:item.candidate_kind,payload,ledger_options:picker?.data||null,
     ledger_options_error:picker?.error||null,
+    homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
     integration:link||null,available:!!config(env,target),
     account_mapping_ready:!!authorizedMapping(env,p.user_id,target),

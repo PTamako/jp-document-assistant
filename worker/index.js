@@ -6,7 +6,7 @@ import { json, failure, readJson, bad, validString } from './http.js';
 import { attachmentTrash, attachmentRestore, attachmentDelete, attachmentList } from './lifecycle.js';
 import { planBackup, exportBackup, previewImport, confirmImport } from './backup.js';
 import { restoreUpload, backupOriginal } from './restore.js';
-import { commitCandidate,candidatePreview,getBridgeStatus } from './bridge.js';
+import { commitCandidate,candidatePreview,getBridgeStatus,integrationStatus } from './bridge.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
@@ -848,7 +848,7 @@ ELSE 'unreviewed' END review_status,
       const doc=await ownedDocument(env.DB,id,p,'active');
       if(!doc.extracted_text_ja)bad('这份文书尚无可解读的文字，请先导入文字','SOURCE_TEXT_REQUIRED',422);
       const parsed=parseJapaneseText(doc.extracted_text_ja);
-      const existing=await dbAll(env.DB,'SELECT field_key,normalized_value,review_state FROM document_fields WHERE document_id=?',id);
+      const existing=await dbAll(env.DB,'SELECT field_key,normalized_value,review_state,source_quote FROM document_fields WHERE document_id=?',id);
       const keys=new Set(existing.map(x=>x.field_key)),now=isoNow();
       // Add only previously missing fields: never overwrite approved/corrected/
       // rejected values, destroy candidates, or regenerate remote idempotency keys.
@@ -969,10 +969,11 @@ ELSE 'unreviewed' END review_status,
   }
   const field=path.match(/^\/api\/fields\/([a-z0-9]+)$/i);
   if(method==='PATCH'&&field)return updateField(request,env,p,field[1]);
-  const candidate=path.match(/^\/api\/candidates\/([a-z0-9]+)\/(commit|preview)$/i);
+  const candidate=path.match(/^\/api\/candidates\/([a-z0-9]+)\/(commit|preview|status)$/i);
   if(candidate){
     if(method==='POST'&&candidate[2]==='commit')return commitCandidate(request,env,p,candidate[1]);
     if(method==='GET'&&candidate[2]==='preview')return candidatePreview(request,env,p,candidate[1]);
+    if(method==='GET'&&candidate[2]==='status')return integrationStatus(env,p,candidate[1]);
   }
   if(method==='POST'&&['/api/auth/start','/api/auth/complete'].includes(path))return failure('AUTH_MODE_NOT_ENABLED','邮件挑战登录暂未启用，请使用密码登录',501);
   return failure('NOT_IMPLEMENTED','当前阶段尚未实现此接口',501);
