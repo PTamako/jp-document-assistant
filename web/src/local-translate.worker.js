@@ -143,35 +143,93 @@ function nextId(tensor){
  }
  return bestId;
 }
+// Diagnostics are deliberately phase-only: user document text never goes to an error logger.
+const MIN_BYTES={'source.spm':500000,'target.spm':500000,'encoder_model.onnx':50000000,'decoder_model.onnx':50000000};
+let phase='download',phaseFile='';
+const progress=(value,message)=>self.postMessage({type:'progress',progress:value,message});
+const setPhase=(value,file='')=>{phase=value;phaseFile=file;};
 async function fetchModel(path){
- // Cache only public weights, never user text, and let Safari evict the cache.
+ setPhase('download',path);
  const url=MODEL_BASE+path+'?download=true';
- const cache=await caches.open('jda-ja-zh-mt-v1');
- let response=await cache.match(url);
- if(!response){
-  response=await fetch(url,{mode:'cors',credentials:'omit',redirect:'follow'});
-  if(!response.ok)fail('本机翻译模型下载失败');
-  try{await cache.put(url,response.clone());}catch{/* Safari may decline large cache entries. */}
+ let cache=null,response=null;
+ // CacheStorage may be disabled by iOS storage policy: fetch directly in that case.
+ try{
+  if(typeof caches!=='undefined'){
+   cache=await caches.open('jda-ja-zh-mt-v2');
+   response=await cache.match(url);
+  }
+ }catch{cache=null;response=null;}
+ if(response&&Number(response.headers.get('content-length'))>0&&
+    Number(response.headers.get('content-length'))<MIN_BYTES[path]){
+  try{await cache?.delete(url);}catch{}
+  response=null;
  }
- return response.arrayBuffer();
+ if(!response){
+  try{
+   response=await fetch(url,{
+    mode:'cors',credentials:'omit',redirect:'follow',
+    signal:typeof AbortSignal.timeout==='function'?AbortSignal.timeout(240000):undefined
+   });
+  }catch(error){
+   const code=error?.name==='TimeoutError'?'download_timeout':'download_network';
+   throw new Error(code);
+  }
+  if(!response.ok)throw new Error('download_http_'+response.status);
+  // Cache only public weights; user-provided text never goes into this cache.
+  // Keep each download sequential to avoid an over-400MB temporary memory spike.
+  if(cache){
+   try{
+    const cloned=response.clone();
+    const write=cache.put(url,cloned).catch(()=>{});
+    const buffer=await response.arrayBuffer();
+    await write;
+    if(buffer.byteLength<MIN_BYTES[path])throw new Error('download_incomplete');
+    return buffer;
+   }catch(e){
+    if(e?.message==='download_incomplete')throw e;
+    // If Safari refuses storage, still allow ordinary one-off translation.
+    if(!response.bodyUsed)return await response.arrayBuffer();
+    throw new Error('download_storage_or_memory');
+   }
+  }
+ }
+ const buffer=await response.arrayBuffer();
+ if(buffer.byteLength<MIN_BYTES[path]){
+  try{await cache?.delete(url);}catch{}
+  throw new Error('download_incomplete');
+ }
+ return buffer;
 }
 async function main(text){
  const segments=splitText(text);
  if(!segments.length)fail('没有可翻译的日文内容');
- const send=(progress,message)=>self.postMessage({type:'progress',progress,message});
- send(0,'正在加载本地翻译模型');
- const [sourceBytes,targetBytes,encBytes,decBytes]=await Promise.all([
-  fetchModel('source.spm'),fetchModel('target.spm'),fetchModel('encoder_model.onnx'),fetchModel('decoder_model.onnx')
- ]);
- const sourcePieces=readSentencePiece(sourceBytes),targetPieces=readSentencePiece(targetBytes);
- const trie=makeTrie(sourcePieces);
- send(8,'翻译模型已下载，正在初始化');
- const options={executionProviders:['wasm'],graphOptimizationLevel:'all'};
- const encoder=await ort.InferenceSession.create(encBytes,options);
- const decoderSession=await ort.InferenceSession.create(decBytes,options);
  const results=[];
+ let encoder=null,decoderSession=null;
+ // The old implementation loaded both 100+MB ONNX buffers in parallel and
+ // retained them while starting two WASM sessions; this is unsafe on iPhone.
  try{
+  progress(0,'正在读取本地翻译模型（首次约 220 MB）');
+  const src=await fetchModel('source.spm');
+  const tgt=await fetchModel('target.spm');
+  setPhase('tokenizer');
+  const sourcePieces=readSentencePiece(src),targetPieces=readSentencePiece(tgt);
+  const trie=makeTrie(sourcePieces);
+  progress(10,'本地分词器已就绪');
+  let encoderBytes=await fetchModel('encoder_model.onnx');
+  setPhase('encoder_init');
+  progress(40,'正在初始化日文模型');
+  const options={executionProviders:['wasm'],graphOptimizationLevel:'all'};
+  encoder=await ort.InferenceSession.create(encoderBytes,options);
+  encoderBytes=null;
+  progress(55,'日文模型已就绪，正在准备中文模型');
+  let decoderBytes=await fetchModel('decoder_model.onnx');
+  setPhase('decoder_init');
+  progress(73,'正在初始化中文模型');
+  decoderSession=await ort.InferenceSession.create(decoderBytes,options);
+  decoderBytes=null;
+  progress(78,'开始逐段本地翻译');
   for(let index=0;index<segments.length;index++){
+   setPhase('inference');
    const ids=tokenize(segments[index],trie);
    const input=new ort.Tensor('int64',BigInt64Array.from(ids,BigInt),[1,ids.length]);
    const mask=new ort.Tensor('int64',BigInt64Array.from(ids,()=>1n),[1,ids.length]);
@@ -190,13 +248,29 @@ async function main(text){
     generated.push(chosen);
    }
    results.push(detokenize(generated,targetPieces));
-   send(Math.round((index+1)/segments.length*100),`已翻译 ${index+1}/${segments.length} 段`);
+   progress(78+Math.round((index+1)/segments.length*22),`正在翻译 ${index+1}/${segments.length} 段`);
   }
+  return results.join('\n');
  }finally{
-  await Promise.allSettled([encoder.release(),decoderSession.release()]);
+  await Promise.allSettled([encoder,decoderSession].filter(Boolean).map(session=>session.release()));
  }
- return results.join('\n');
 }
+const failureMessage=(phase,error)=>{
+ const names={
+  download:'模型文件下载',tokenizer:'日中分词器解析',
+  encoder_init:'日文模型初始化',decoder_init:'中文模型初始化',inference:'本机逐段翻译'
+ };
+ const detail=String(error?.message||'').toLowerCase();
+ if(phase==='download'){
+  if(detail.includes('incomplete'))return '模型文件不完整，请重新点击翻译';
+  if(detail.includes('timeout'))return '下载模型超时，请在 Wi-Fi 下重试';
+  if(detail.includes('storage_or_memory'))return '本机存储或内存不足，无法读取模型';
+  return '模型下载失败，请检查网络后重试';
+ }
+ const suffix=/memory|alloc|out of bounds|out of memory/.test(detail)?
+  '设备可用内存不足':'模型与此设备的运行环境可能不兼容';
+ return (names[phase]||'本机翻译')+'失败：'+(phase==='tokenizer'?'模型分词器格式不匹配':suffix);
+};
 self.onmessage=async event=>{
  if(event.data?.type!=='translate')return;
  const {text}=event.data;
@@ -207,6 +281,6 @@ self.onmessage=async event=>{
   const translation=await main(text);
   self.postMessage({type:'complete',translation});
  }catch(e){
-  self.postMessage({type:'error',message:'本机翻译暂不可用，请检查网络或设备内存'});
+  self.postMessage({type:'error',code:phase,modelFile:phaseFile,message:failureMessage(phase,e)});
  }
 };
