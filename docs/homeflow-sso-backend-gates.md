@@ -21,11 +21,18 @@
 - HomeFlow 的 `OAUTH_CLIENT_REDIRECTS` 后端 JSON allowlist 必须包含 client `jp-document-assistant` 对应的 **完全精确** callback URI；HomeFlow `OAUTH_ENABLED` 也必须经过独立备份/迁移门槛后才能开启。
 - 保留已存在的文书助手 `SESSION_HMAC_KEY` 和 `HOMEFLOW_BRIDGE_SERVICE` Service Binding；绝不可用浏览器提交 HomeFlow 密码、直接跨 D1 SQL 连接或用 admin 共享 Token 冒充用户。
 
+## 2026-11-13 增量：iOS PWA ↔ Safari 一次性授权回传（仍为 Draft）
+
+- 已实现 `GET /api/homeflow-sso/status`（只有服务器全部配置就绪才会显示登录按钮）、原 App `POST /start`、Safari `GET /callback` 暂存 **AES-GCM 加密授权码**、原 App `POST /complete` 使用不会出现在 OAuth URL 中的 `resume_secret`（仅服务器 SHA-256 存储）完成后端 code+PKCE/userinfo、双重 owner 证明与独立 HttpOnly 登录会话。Safari callback **绝不颁发应用 session**，避免不同 iOS 容器的 Cookie 混用。
+- 原 PWA 仅在当前 `sessionStorage` 暂存 5 分钟验证凭证；返回原 PWA 后由用户按“完成 HomeFlow 登录”提交，成功后清理旧私有工作区缓存再读自己的数据。当前 PWA 跳转/恢复的 iOS 实机行为**未实测**，因此仍不是验收成功。
+- 回调只能暂存一次密文；二次消费和错误状态不允许直接落本地登录。管理员初次绑定必须当前 PWA 的旧 owner 会话仍有效；成员没有 owner 历史账号继承权。没有数据库/R2 正式改写、未执行 `0020/0021`，也没有开启生产功能标志。
+- **生产安全结论保持不变**：四份可恢复加密备份与恢复演练、跨应用停用/退出撤销、iPhone 双人实测、HomeFlow OAuth 部署及 callback allowlist 均未完成；不能合并或上线。`0021` 仍是尚未执行的新增迁移，其字段已增加 PWA `resume_secret_hash`/加密回调列；旧线上 schema 未受影响。
+
 ## 当前尚不能放行的功能和安全问题
 
-1. **iOS 独立 PWA 与 Safari Cookie 隔离**：目前回调要求与启动时相同的 `__Host-da_homeflow_state` Cookie 才能建立本地会话，这对同一浏览器有效、能防登录 CSRF，但不同 iOS PWA/Safari 存储域不一定共享，**实际首次 PWA 登录仍可能失败**。下一阶段需要不依赖跨浏览器 Cookie 的二次、用户确认的一次性 PWA 回传凭证，配套重放/替换设备/混账号测试；在此之前不可启用或向最终用户显示成功提示。
+1. **iOS 独立 PWA 与 Safari Cookie 隔离**：一次性原 PWA 回传协议与 UI 已编码、单测覆盖基本凭证窃取/跨容器/错误 Origin/重放，**尚未做真实 iPhone 独立 PWA 与 Safari 双账号测试**，仍不允许启用或称已可用。后续还需检查浏览器切换、后台冻结、设备更换时 `sessionStorage` 的保留与过期行为，不能把 Safari 中的 Cookie 当 PWA 会话。
 2. **撤销/停用传播**：HomeFlow 已可在 3 分钟的短期 userinfo 上拒绝停用账号，但文书助手一旦创建 15 分钟自有 Session，仍需服务端撤销通知/按需身份复核机制、账号冻结与昵称变更传播设计；现在不能称跨四应用立即注销。
-3. 目前 `web/src/App.vue` 未加入“使用 HomeFlow 登录”正式 UI。必须先解决上述 PWA Cookie/续接问题与独立会话复核，再启用入口；旧登录/邀请入口仅按 F 阶段验证后清退。
+3. `web/src/App.vue` 已加入**受服务器能力控制、默认不显示**的“使用 HomeFlow 登录”和“完成 HomeFlow 登录”按钮；owner 在账户与安全页可启动旧身份绑定。需要正式部署前完成 UI/服务端完整联调与独立会话复核；旧登录/邀请入口只在 F 阶段验收后清退。
 4. HomeFlow Draft #305 的 OAuth 只是一阶段接口，不是完整 OIDC IdP：无 ID Token / JWKS。该应用只通过单次 PKCE+后端 `userinfo` 作为受信身份，且严格使用 Service Binding 和固定 client 配置；不得把此称为标准兼容的 OIDC。
 5. 正式 0020/0021 均**未执行**，四生产 D1/R2 的完整加密备份尚未能上传 Drive、未完成恢复测试；GitHub CI success 不等于已经上线。
 
