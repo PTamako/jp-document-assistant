@@ -201,6 +201,11 @@ const gmailPersistent=ref({enabled:false,connected:false,google_email:null,clien
 let gmailGeneration=0;
 const salaryAmountDraft=ref(''),salaryAmountConfirmed=ref(false);
 const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),inviteEmail=ref(''),inviteToken=ref('');
+const translationUsagePercent=computed(()=>{
+ const used=Math.max(0,Number(usage.value?.translation_jst_day?.calls||0));
+ const limit=Math.max(1,Number(usage.value?.translation_jst_day?.limit||80));
+ return Math.min(100,Math.round(100*used/limit));
+});
 const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
 const accountEpoch=createAccountEpoch();
 let accountController=new AbortController();
@@ -699,7 +704,7 @@ async function selectTab(tab){
   swipeOpenId.value='';
   activeTab.value=tab;
   if(pages[tab]&&!pages[tab].loaded)await loadTab(tab);
-  if(tab==='mine'&&!usage.value)loadUsage();
+  if(tab==='mine')void loadUsage(); // Refresh quota when returning from document translation.
 }
 async function searchDocs(){pages.docs.loaded=false;await loadTab('docs');closeSheet();}
 async function loadUsage(){try{usage.value=await api('/api/usage');}catch(e){problem(e);}}
@@ -1393,7 +1398,50 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="loadUsage">刷新服务用量 <UiIcon name="refresh-cw" :size="17"/></button>
         <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
-        <div class="info-note" v-if="usage">Gemini 3.6 {{usage.gemini_daily?.calls??0}}/{{usage.gemini_daily?.limit??20}}（两人共用·美西日） · Workers AI 解读 {{usage.document_ai_utc_day?.calls??0}}/{{usage.document_ai_utc_day?.limit??0}} · Workers AI OCR {{usage.app_utc_day?.calls??0}}/{{usage.app_utc_day?.limit??0}} · OCR.space {{usage.ocr_space_utc_day?.calls??0}}/{{usage.ocr_space_utc_day?.limit??0}}</div>
+        <section class="usage-dashboard" v-if="usage" aria-label="服务用量">
+          <div class="usage-dashboard-header">
+            <h3>服务用量</h3>
+            <span class="usage-dashboard-period">今日 · 日本时间</span>
+          </div>
+          <div class="usage-translation">
+            <div class="usage-translation-head">
+              <div class="usage-translation-title">
+                <strong>Google 全文翻译</strong>
+                <small>知学 Apps Script</small>
+              </div>
+              <span class="usage-translation-remaining">剩余 <strong>{{usage.translation_jst_day?.remaining??80}}</strong> 次</span>
+            </div>
+            <div class="usage-translation-count"><strong>{{usage.translation_jst_day?.calls??0}}</strong><span> / {{usage.translation_jst_day?.limit??80}} 次分段预算</span></div>
+            <div class="usage-translation-meter" role="progressbar" aria-label="今日已占用的翻译分段额度"
+              :aria-valuemin="0" :aria-valuemax="usage.translation_jst_day?.limit??80"
+              :aria-valuenow="usage.translation_jst_day?.calls??0">
+              <span :style="{width:translationUsagePercent+'%'}"></span>
+            </div>
+          </div>
+          <div class="usage-metrics">
+            <div class="usage-metric">
+              <span>Gemini 3.6</span>
+              <strong>{{usage.gemini_daily?.calls??0}}<small> / {{usage.gemini_daily?.limit??20}}</small></strong>
+              <small>两人共用 · 美西日</small>
+            </div>
+            <div class="usage-metric">
+              <span>Workers AI 解读</span>
+              <strong>{{usage.document_ai_utc_day?.calls??0}}<small> / {{usage.document_ai_utc_day?.limit??0}}</small></strong>
+              <small>UTC 日额度</small>
+            </div>
+            <div class="usage-metric">
+              <span>Workers AI OCR</span>
+              <strong>{{usage.app_utc_day?.calls??0}}<small> / {{usage.app_utc_day?.limit??0}}</small></strong>
+              <small>UTC 日额度</small>
+            </div>
+            <div class="usage-metric">
+              <span>OCR.space</span>
+              <strong>{{usage.ocr_space_utc_day?.calls??0}}<small> / {{usage.ocr_space_utc_day?.limit??0}}</small></strong>
+              <small>UTC 日额度</small>
+            </div>
+          </div>
+          <p class="usage-dashboard-note">翻译计数含已预留调用，缓存命中不扣次；与知学共用 Google 免费额度。</p>
+        </section>
         <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
         <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
