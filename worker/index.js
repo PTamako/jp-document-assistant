@@ -15,11 +15,12 @@ import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {workersAiImportPreview} from './ocr-import-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 import {geminiQuotaUsage} from './gemini-budget.js';
+import {enqueueDocumentAi,processDocumentAiJob,getDocumentAiJob,runDueDocumentAiJobs} from './ai-jobs.js';
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
 import { validateOfficeBytes } from '../web/src/document-text.js';
 
-// One production Worker. No R2 LIST, no polling cron, no browser-owned R2 credentials.
+// One production Worker. No R2 LIST, no browser-owned R2 credentials.
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_LIST = 10;
 const fieldsOf = ['due_date','event_date','amount_jpy','net_salary'];
@@ -194,9 +195,12 @@ async function analyzeStored(env,doc,force=false){
   await batch(env.DB,stmts);
   return {cached:false,result};
 }
-async function analyzeIfEnabled(env,doc){
-  try{return await analyzeDocumentAi(env,doc,{sensitive:requiresPrivateDefault(doc.category,doc.extracted_text_ja||'')});}
-  catch{return {ai_status:'failed_safe'};}
+async function analyzeIfEnabled(env,doc,ctx){
+  try{
+    const result=await enqueueDocumentAi(env,doc);
+    if(result.ai_status==='queued'&&ctx?.waitUntil)ctx.waitUntil(processDocumentAiJob(env,doc.id));
+    return result;
+  }catch{return {ai_status:'failed_safe'};}
 }
 function verifyDocumentAiChoice(provider,geminiConsent){
   // Backwards-compatible API: legacy clients without AI field remain rules-only.
@@ -205,7 +209,7 @@ function verifyDocumentAiChoice(provider,geminiConsent){
   if(selected==='gemini'&&geminiConsent!==true)bad('请确认本份文书允许发送至 Gemini','AI_PRIVACY_CONFIRM_REQUIRED',400);
   return selected;
 }
-async function handleImportText(request,env,p){
+async function handleImportText(request,env,p,ctx){
   const data=await readJson(request);
   const provider=verifyDocumentAiChoice(data.ai_provider,data.gemini_consent);
   if(!validString(data?.text,100000)||!['text','mail_forward','gmail','google_drive','local_file'].includes(data.source_type)||!['analyze_only','summary'].includes(data.retention))bad('文字、来源或保存方式无效');
@@ -226,7 +230,7 @@ async function handleImportText(request,env,p){
   ]);
   const doc=await ownedDocument(env.DB,id,p);
   await analyzeStored(env,doc);
-  const ai=await analyzeIfEnabled(env,await ownedDocument(env.DB,id,p,'active'));
+  const ai=await analyzeIfEnabled(env,await ownedDocument(env.DB,id,p,'active'),ctx);
   return json({ok:true,saved:true,reused:false,document_id:id,ai_status:ai.ai_status},201);
 }
 function fileSignature(mime,bytes){
@@ -240,7 +244,7 @@ function fileSignature(mime,bytes){
   }
   return false;
 }
-async function handleFileImport(request,env,p){
+async function handleFileImport(request,env,p,ctx){
   requireBinding(env,'DOCUMENTS');
   const len=Number(request.headers.get('Content-Length')||0);
   if(len>MAX_FILE_BYTES+10000)bad('文件超出 8MB 限制','FILE_TOO_LARGE',413);
@@ -310,7 +314,7 @@ async function handleFileImport(request,env,p){
     bad('已上传但保存索引失败，请联系管理员检查存储清理','METADATA_FAILED',503);
   }
   if(extracted)await analyzeStored(env,await ownedDocument(env.DB,id,p));
-  const ai=extracted?await analyzeIfEnabled(env,await ownedDocument(env.DB,id,p,'active')):{ai_status:'awaiting_text'};
+  const ai=extracted?await analyzeIfEnabled(env,await ownedDocument(env.DB,id,p,'active'),ctx):{ai_status:'awaiting_text'};
   return json({ok:true,saved:true,document_id:id,ai_status:ai.ai_status,text_layer_used:!!extracted,ocr_status:extracted?'text_extracted':'awaiting_text',
     message:extracted?'已使用文件文字层生成待核对字段':'没有可复制文字，需人工输入或手动 OCR'},201);
 }
@@ -318,7 +322,7 @@ async function hashStringBytes(bytes){const digest=await crypto.subtle.digest('S
 async function getDocDetail(db,doc){
   const fields=await dbAll(db,`SELECT id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,review_state,source_page FROM document_fields WHERE document_id=? ORDER BY field_key`,doc.id);
   const attachments=await dbAll(db,`SELECT a.id,a.file_label,a.page_no,a.state,o.mime FROM attachments a JOIN storage_objects o ON o.id=a.object_id WHERE a.document_id=? AND a.state='active' ORDER BY a.sort_order`,doc.id);
-  return {...listShape(doc),ai_provider:doc.ai_provider||'none',ai_analysis:await getDocumentAiCache(db,doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
+  return {...listShape(doc),ai_provider:doc.ai_provider||'none',ai_analysis:await getDocumentAiCache(db,doc),ai_job:await getDocumentAiJob(db,doc.id),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
      campaign_hints:doc.category==='campaign'?extractCampaignActionHints(doc.extracted_text_ja):[],
     source_document_date:doc.source_document_date||null,source_date_quote:doc.source_date_quote||null,
     official_current_verified_at:doc.official_current_verified_at||null,
@@ -507,7 +511,7 @@ async function contentForAttachment(env,p,id,aid){
   if(!result)bad('R2 原件已缺失','ORIGINAL_MISSING',404);
   return new Response(result.body,{headers:{'Content-Type':a.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox",'Content-Disposition':'inline'}});
 }
-async function route(request,env){
+async function route(request,env,ctx){
   const url=new URL(request.url),path=url.pathname,method=request.method;
   if(!path.startsWith('/api/'))return env.ASSETS?.fetch(request) || new Response('Not found',{status:404});
   const calendarToken=method==='GET'?path.match(/^\/api\/calendar\/([a-f0-9]{64})\.ics$/):null;
@@ -607,8 +611,8 @@ async function route(request,env){
     const supported=['text/plain','image/jpeg','image/png','image/webp','application/pdf'].includes(mime);
     return json({accepted:supported&&fileSize<=MAX_FILE_BYTES,needs_ocr:mime.startsWith('image/')||mime==='application/pdf',estimated_upload_bytes:d.retention==='original'?fileSize:0,warnings:[...(supported?[]:['格式尚不支持']),...(fileSize>MAX_FILE_BYTES?['超过 8 MB']:[]),...(mime.startsWith('image/')||mime==='application/pdf'?['OCR 尚未通过实测，请使用可复制文字或人工输入']:[])]});
   }
-  if(method==='POST'&&path==='/api/documents/import/text')return handleImportText(request,env,p);
-  if(method==='POST'&&path==='/api/documents/import/file')return handleFileImport(request,env,p);
+  if(method==='POST'&&path==='/api/documents/import/text')return handleImportText(request,env,p,ctx);
+  if(method==='POST'&&path==='/api/documents/import/file')return handleFileImport(request,env,p,ctx);
   if(method==='POST'&&path==='/api/ocr-space/preview')return ocrSpaceImportPreview(request,env,p);
   if(method==='POST'&&path==='/api/workers-ai-ocr/preview')return workersAiImportPreview(request,env,p);
   // OCR is opt-in, quota-limited and NEVER silently approves extracted values.
@@ -780,7 +784,7 @@ ELSE 'unreviewed' END review_status,
       const doc=await ownedDocument(env.DB,id,p,'active');
       const body=await readJson(request,900);
       if(body.confirm!==true)bad('请确认对当前文书执行所选 AI 分析','AI_CONFIRM_REQUIRED',409);
-      const result=await analyzeIfEnabled(env,doc);
+      const result=await analyzeIfEnabled(env,doc,ctx);
       return json({ok:true,...result});
     }
     if(method==='PATCH'&&rest==='ai-provider'){
@@ -979,12 +983,15 @@ ELSE 'unreviewed' END review_status,
   return failure('NOT_IMPLEMENTED','当前阶段尚未实现此接口',501);
 }
 export default {
-  async fetch(request,env){
-    try{return protectedResponse(await route(request,env),request);}
+  async fetch(request,env,ctx){
+    try{return protectedResponse(await route(request,env,ctx),request);}
     catch(err){
       if(err?.status)return failure(err.code||'ERROR',err.message,err.status);
       // Intentionally no PII/details in logs.
       return failure('INTERNAL_ERROR','服务暂时不可用',500);
     }
+  },
+  async scheduled(controller,env,ctx){
+    ctx.waitUntil(runDueDocumentAiJobs(env));
   }
 };
