@@ -27,6 +27,15 @@ test('enqueue is nonblocking and deduplicates repeat taps',async()=>{
  assert.equal(sql.prepare("SELECT COUNT(*) c FROM document_ai_jobs").get().c,1);
  sql.close();
 });
+test('detail status ignores jobs from a different AI provider or edited source',async()=>{
+ const {env,sql}=setup();
+ await enqueueDocumentAi(env,doc('これは請求書です。','gemini'));
+ const matching=await getDocumentAiJob(env.DB,'doc1',doc('これは請求書です。','gemini'));
+ assert.equal(matching?.state,'queued');
+ assert.equal(await getDocumentAiJob(env.DB,'doc1',doc('これは請求書です。','cloudflare')),null);
+ assert.equal(await getDocumentAiJob(env.DB,'doc1',doc('本文が更新されました。','gemini')),null);
+ sql.close();
+});
 test('edited source replaces stale queued work without losing document',async()=>{
  const {env,sql}=setup();
  await enqueueDocumentAi(env,doc());

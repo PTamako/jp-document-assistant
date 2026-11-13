@@ -34,9 +34,13 @@ export async function enqueueDocumentAi(env,doc){
   return {ai_status:changed.meta?.changes===1?'queued':'in_progress'};
 }
 
-export async function getDocumentAiJob(db,id){
-  const job=await get(db,'SELECT state,attempts,next_attempt_at,last_error FROM document_ai_jobs WHERE document_id=?',id);
-  return job||null;
+export async function getDocumentAiJob(db,id,doc=null){
+  const job=await get(db,'SELECT state,attempts,next_attempt_at,last_error,provider,source_sha FROM document_ai_jobs WHERE document_id=?',id);
+  if(!job)return null;
+  // A previous provider/source must never masquerade as the currently selected AI job.
+  if(doc&&(job.provider!==(doc.ai_provider||'none')||!doc.extracted_text_ja||
+      job.source_sha!==await hashString(doc.extracted_text_ja)))return null;
+  return {state:job.state,attempts:job.attempts,next_attempt_at:job.next_attempt_at,last_error:job.last_error};
 }
 
 async function finish(db,id,attempts,sourceSha,state,error=null,at=isoNow()){
