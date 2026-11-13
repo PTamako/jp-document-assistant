@@ -2,6 +2,7 @@
 // No private documents, AI requests, user secrets, or ONNX weights involved.
 // Run in GitHub CI with internet access to catch provider format drift.
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import {readSentencePiece,readMarianVocabulary,createMarianTokenizer,encodeMarian} from '../web/src/marian-tokenizer.js';
 
 const base='https://huggingface.co/ruozhi521/shiyin-mt-ja-zh-onnx/resolve/82c2cb0/';
@@ -20,6 +21,11 @@ async function get(path){
 }
 const src=await get('source.spm');
 const v=await get('vocab.json');
+// Compare against upstream's official SentencePiece implementation.
+const official=JSON.parse(execFileSync('python',['-c',
+ "import sys,json,sentencepiece as spm;from sentencepiece import sentencepiece_model_pb2 as pb;m=pb.ModelProto();m.ParseFromString(sys.stdin.buffer.read());p=spm.SentencePieceProcessor(model_proto=m.SerializeToString());print(json.dumps(dict(model_type=int(m.trainer_spec.model_type),count=len(m.pieces),sample=p.encode('ありがとう',out_type=int))))"
+],{input:Buffer.from(src.bytes),encoding:'utf8'}));
+console.log('Official SentencePiece:',JSON.stringify(official));
 const model=readSentencePiece(src.bytes);
 const vocab=readMarianVocabulary(v.bytes);
 const tokenizer=createMarianTokenizer(model,vocab);
