@@ -7,10 +7,13 @@ const all=async(db,sql,...params)=>(await db.prepare(sql).bind(...params).all())
 const batch=(db,rows)=>db.batch(rows.map(([sql,...params])=>db.prepare(sql).bind(...params)));
 
 async function ownedAttachment(env,p,documentId,attachmentId){
-  const row=await first(env.DB,`SELECT a.*,d.owner_id,d.lifecycle,o.object_key,o.state object_state,o.bytes
+  const row=await first(env.DB,`SELECT a.*,d.owner_id,d.household_id,d.visibility,d.lifecycle,
+      o.object_key,o.state object_state,o.bytes
     FROM attachments a JOIN documents d ON d.id=a.document_id
     LEFT JOIN storage_objects o ON o.id=a.object_id
-    WHERE a.id=? AND a.document_id=? AND d.owner_id=?`,attachmentId,documentId,p.user_id);
+    WHERE a.id=? AND a.document_id=?
+      AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,
+    attachmentId,documentId,p.user_id,p.household_id);
   if(!row)bad('附件不存在或无权操作','NOT_FOUND',404);
   return row;
 }
@@ -19,7 +22,20 @@ export async function attachmentTrash(env,p,documentId,attachmentId){
   if(a.lifecycle!=='active')bad('仅可操作未删除文书中的附件','INVALID_STATE',409);
   if(a.state==='trashed')return json({ok:true,already_trashed:true});
   if(a.state!=='active')bad('附件正在删除，请勿恢复','DELETE_PENDING',409);
-  await run(env.DB,`UPDATE attachments SET state='trashed',trashed_at=?,updated_at=? WHERE id=? AND state='active'`,isoNow(),isoNow(),a.id);
+  const stamp=isoNow();
+  const result=await batch(env.DB,[
+    [`UPDATE attachments SET state='trashed',trashed_at=?,updated_at=?
+      WHERE id=? AND state='active' AND EXISTS (
+        SELECT 1 FROM documents d WHERE d.id=attachments.document_id
+        AND d.lifecycle='active'
+        AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+      stamp,stamp,a.id,p.user_id,p.household_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'attachment',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'attachment_trashed',a.id,stamp]
+  ]);
+  if(result.some(x=>x.meta?.changes!==1))
+    bad('附件共享权限已变化，请刷新','VERSION_CONFLICT',409);
   return json({ok:true,r2_deleted:false,message:'附件已移入回收站；原件仍在私有 R2，可恢复'});
 }
 export async function attachmentRestore(env,p,documentId,attachmentId){
@@ -32,11 +48,27 @@ export async function attachmentRestore(env,p,documentId,attachmentId){
     if(!env.DOCUMENTS)bad('R2 尚未绑定','NOT_CONFIGURED',503);
     if(!(await env.DOCUMENTS.head(a.object_key)))return failure('ORIGINAL_MISSING','原件已经缺失，请使用备份重新导入',409);
   }
-  await run(env.DB,"UPDATE attachments SET state='active',trashed_at=NULL,updated_at=? WHERE id=? AND state='trashed'",isoNow(),a.id);
+  const stamp=isoNow();
+  const result=await batch(env.DB,[
+    [`UPDATE attachments SET state='active',trashed_at=NULL,updated_at=?
+      WHERE id=? AND state='trashed' AND EXISTS(
+        SELECT 1 FROM documents d WHERE d.id=attachments.document_id
+        AND d.lifecycle='active' AND
+        (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+      stamp,a.id,p.user_id,p.household_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'attachment',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'attachment_restored',a.id,stamp]
+  ]);
+  if(result.some(x=>x.meta?.changes!==1))
+    bad('附件共享权限已变化，请刷新','VERSION_CONFLICT',409);
   return json({ok:true});
 }
 export async function attachmentDelete(env,p,documentId,attachmentId){
   const a=await ownedAttachment(env,p,documentId,attachmentId);
+  // Original object cleanup still assumes the R2 owner; don't allow a
+  // collaborator to run it until cross-owner object cleanup is transactional.
+  if(a.owner_id!==p.user_id)bad('永久删除附件需要原所有者确认','ORIGINAL_OWNER_REQUIRED',403);
   if(a.state==='active')bad('请先将附件移入回收站','TRASH_FIRST',409);
   if(a.state!=='deletion_pending'){
     await run(env.DB,"UPDATE attachments SET state='deletion_pending',updated_at=? WHERE id=? AND state='trashed'",isoNow(),a.id);
@@ -91,7 +123,9 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
     r2_cleanup_pending:pending,warning:pending?'原件清理仍有待补偿项，请在设置中重试文件清理':null});
 }
 export async function attachmentList(env,p,documentId){
-  const d=await first(env.DB,`SELECT id FROM documents WHERE id=? AND owner_id=? AND lifecycle='active'`,documentId,p.user_id);
+  const d=await first(env.DB,`SELECT id FROM documents WHERE id=? AND lifecycle='active'
+    AND (owner_id=? OR (household_id=? AND visibility='shared'))`,
+    documentId,p.user_id,p.household_id);
   if(!d)bad('无权查看附件回收站','NOT_FOUND',404);
   const items=await all(env.DB,`SELECT a.id,a.file_label,a.state,a.trashed_at,o.bytes,o.mime
     FROM attachments a LEFT JOIN storage_objects o ON o.id=a.object_id
