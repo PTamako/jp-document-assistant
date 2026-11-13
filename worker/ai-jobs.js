@@ -8,7 +8,9 @@ const active=new Set();
 const get=(db,sql,...args)=>db.prepare(sql).bind(...args).first();
 const run=(db,sql,...args)=>db.prepare(sql).bind(...args).run();
 const validProvider=p=>p==='gemini'||p==='cloudflare';
-const retryable=new Set(['gemini_service_overloaded','gemini_service_unavailable','gemini_network_error','gemini_retry_cooldown']);
+// Never automatically spend another scarce free request on an ambiguous
+// network/timeout failure. A user may retry explicitly after checking status.
+const retryable=new Set(['gemini_service_overloaded','gemini_service_unavailable','gemini_retry_cooldown']);
 const finalStates=new Set(['success','cached']);
 
 export async function enqueueDocumentAi(env,doc){

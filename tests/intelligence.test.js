@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeAiAnalysis,geminiGenerationConfig,classifyGeminiHttpError,extractGeminiResponseText,geminiRetryCooldown,cloudflareGenerationConfig,extractCloudflareResponseText,classifyCloudflareError} from '../worker/intelligence.js';
+import {normalizeAiAnalysis,geminiGenerationConfig,GEMINI_REQUEST_TIMEOUT_MS,classifyGeminiTransportError,classifyGeminiHttpError,extractGeminiResponseText,geminiRetryCooldown,cloudflareGenerationConfig,extractCloudflareResponseText,classifyCloudflareError} from '../worker/intelligence.js';
 test('AI output only generates source-grounded Chinese explanations, words and sentences',()=>{
  const source='営業時間を確認してください。納付期限は明日ではありません。';
  const raw=JSON.stringify({summary_zh:'营业时间说明，需要人工确认',
@@ -49,10 +49,22 @@ test('Gemini uses explicit MEDIUM with enough total thinking/output tokens, with
  assert.equal('temperature' in cfg,false);
  assert.equal('thinkingBudget' in cfg.thinkingConfig,false);
 });
+test('Gemini transport errors distinguish abort deadline from true network failures',()=>{
+ assert.equal(GEMINI_REQUEST_TIMEOUT_MS,26000);
+ assert.equal(classifyGeminiTransportError({name:'TimeoutError'}),'gemini_timeout');
+ assert.equal(classifyGeminiTransportError({name:'AbortError'}),'gemini_timeout');
+ assert.equal(classifyGeminiTransportError({name:'TypeError',message:'private network details'}),'gemini_network_error');
+});
 test('Gemini status codes are categorized safely without exposing provider response bodies',()=>{
  assert.equal(classifyGeminiHttpError(429),'gemini_quota_or_rate_limited');
  assert.equal(classifyGeminiHttpError(403),'gemini_access_denied');
  assert.equal(classifyGeminiHttpError(400),'gemini_invalid_request');
+ assert.equal(classifyGeminiHttpError(400,{error:{status:'FAILED_PRECONDITION'}}),'gemini_precondition_failed');
+ assert.equal(classifyGeminiHttpError(400,{error:{status:'INVALID_ARGUMENT',message:"Invalid value at 'generation_config.thinking_config.thinking_level'"}}),'gemini_thinking_invalid');
+ assert.equal(classifyGeminiHttpError(400,{error:{message:'Invalid responseMimeType parameter'}}),'gemini_response_format_invalid');
+ assert.equal(classifyGeminiHttpError(400,{error:{message:'Input token count exceeds model limit'}}),'gemini_input_limit');
+ assert.equal(classifyGeminiHttpError(400,{error:{details:[{reason:'API_KEY_INVALID'}],message:'private user request'}}),'gemini_access_denied');
+ assert.equal(classifyGeminiHttpError(400,{error:{message:'Text of a sensitive private document'}}),'gemini_invalid_request');
  assert.equal(classifyGeminiHttpError(404),'gemini_model_unavailable');
  assert.equal(classifyGeminiHttpError(503),'gemini_service_overloaded');
 });
