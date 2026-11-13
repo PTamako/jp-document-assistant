@@ -455,7 +455,7 @@ test('member document review requests retain an immutable private payload and cr
   f.env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED='true';
   f.env.DOCUMENT_APPROVAL_SUBMISSION_SECRET='d'.repeat(64);
   const original=f.env.HOMEFLOW_BRIDGE_SERVICE;
-  let submissions=0,lastWire=null,bridgeCalls=0,loseOnceFor=null;
+  let submissions=0,lastWire=null,bridgeCalls=0,loseOnceFor=null,liveStatus='pending',statusCalls=0,statusOffline=false,statusTamper=false;
   f.env.HOMEFLOW_BRIDGE_SERVICE={fetch:async(request)=>{
    const url=new URL(request.url);
    if(url.pathname==='/api/internal/approvals/document-submit'){
@@ -484,6 +484,30 @@ test('member document review requests retain an immutable private payload and cr
      '55555555-5555-4555-8555-555555555555':'66666666-6666-4666-8666-666666666666',
      status:'pending',...body,replayed:submissions>1,
      applied:false,target_changed:false});
+   }
+   if(url.pathname==='/api/internal/approvals/document-status'){
+    statusCalls++;
+    assert.equal(request.headers.get('cookie'),null);
+    assert.equal(request.headers.get('origin'),null);
+    assert.equal(request.headers.get('authorization'),null);
+    const raw=await request.text(),stamp=request.headers.get('x-approval-timestamp');
+    const expected=createHmac('sha256',Buffer.from('d'.repeat(64),'hex'))
+      .update('jp-document-assistant:status\n'+stamp+'\n'+raw).digest('hex');
+    assert.equal(request.headers.get('x-approval-signature'),expected);
+    const body=JSON.parse(raw);
+    assert.deepEqual(Object.keys(body).sort(),[
+     'approval_id','household_id','payload_sha256','requester_user_id','resource_id','target_app']);
+    assert.equal(body.household_id,'primary');
+    assert.equal(body.requester_user_id,memberId);
+    assert.equal(body.target_app,'it-study-platform');
+    assert.equal(body.resource_id,candidate);
+    assert.equal(body.payload_sha256,lastWire.payload_sha256);
+    assert.doesNotMatch(raw,/確認|Private study|确认|かくにん/);
+    if(statusOffline)throw Error('HomeFlow unavailable');
+    return Response.json({ok:true,...body,status:liveStatus,version:2,
+      reviewed_at:liveStatus==='pending'?null:Date.now(),
+      applied:false,target_changed:false,
+      ...(statusTamper?{payload_sha256:'f'.repeat(64)}:{})});
    }
    bridgeCalls++;
    return original.fetch(request);
@@ -521,8 +545,38 @@ test('member document review requests retain an immutable private payload and cr
   assert.equal(submissions,2,'conflicting payload rejected before any remote request');
   const status=await worker.fetch(new Request(
    app+'/api/candidates/'+candidate+'/approval',{headers:{Cookie:cookie}}),f.env,{});
-  assert.equal(status.status,200);
-  assert.equal((await status.json()).approval_id,created.approval_id);
+  assert.equal(status.status,200,await status.clone().text());
+  const pendingResult=await status.json();
+  assert.equal(pendingResult.approval_id,created.approval_id);
+  assert.equal(pendingResult.approval_status,'pending');
+  assert.equal(pendingResult.approval_checked,true);
+  assert.equal(pendingResult.applied,false);
+  assert.equal(pendingResult.target_changed,false);
+  liveStatus='approved';
+  const getStatus=()=>worker.fetch(new Request(
+   app+'/api/candidates/'+candidate+'/approval',{headers:{Cookie:cookie}}),f.env,{});
+  const approved=await getStatus();
+  assert.equal(approved.status,200);
+  const approvedResult=await approved.json();
+  assert.equal(approvedResult.approval_status,'approved');
+  assert.equal(approvedResult.applied,false,'review approval is not a target write');
+  assert.equal(approvedResult.target_changed,false);
+  liveStatus='rejected';
+  const rejected=await getStatus();
+  assert.equal(rejected.status,200);
+  assert.equal((await rejected.json()).approval_status,'rejected');
+  statusTamper=true;
+  const invalid=await getStatus();
+  assert.equal(invalid.status,503);
+  assert.equal((await invalid.json()).code,'APPROVAL_STATUS_UNCONFIRMED');
+  statusTamper=false;
+  statusOffline=true;
+  const offline=await getStatus();
+  assert.equal(offline.status,503);
+  assert.equal((await offline.json()).code,'APPROVAL_STATUS_UNAVAILABLE');
+  statusOffline=false;liveStatus='pending';
+  assert.equal(statusCalls,5);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
   // Network reply loss creates a private 'prepared' record, not a second
   // approval. A deliberate resume uses exactly the original frozen snapshot.
   const second='e'.repeat(32);
