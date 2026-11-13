@@ -76,6 +76,11 @@ export function readSentencePiece(buf,{minPieces=1000}={}){
   const tag=varint(bytes,at,bytes.length),field=Math.floor(tag/8),wire=tag%8;
   if(field===1&&wire===2){
    pieces.push(readPiece(sliceField(bytes,at,bytes.length)));
+   // The pinned BPE model has exactly 65,001 pieces (verified against
+   // official SentencePiece in CI). The remaining bytes contain *training*
+   // metadata, which is not needed for inference and has legacy extensions.
+   // Stop at the known boundary rather than parsing unrelated metadata.
+   if(pieces.length===65001&&bytes.byteLength>=1000000)return {pieces,modelType};
    if(pieces.length>100000)error('SPM_TOO_MANY_PIECES');
   }else if(field===2&&wire===2){
    // Skip the bounded TrainerSpec blob safely: do not scan its extensions.
