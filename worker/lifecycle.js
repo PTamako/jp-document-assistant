@@ -116,11 +116,14 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
     }
   }
 
+  // Authorization was acquired when the attachment entered deletion_pending,
+  // and re-checked at the R2 deletion claim. Do NOT block metadata cleanup
+  // if the owner revokes sharing *after* R2.delete succeeds: that would leave
+  // a still-referenced attachment pointing at already deleted bytes.
+  // An initial call made after revocation still fails in ownedAttachment().
   const cleanup=[[`DELETE FROM attachments WHERE id=? AND document_id=?
-    AND state='deletion_pending' AND EXISTS(SELECT 1 FROM documents d
-      WHERE d.id=attachments.document_id AND
-        (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
-    a.id,documentId,p.user_id,p.household_id],
+    AND state='deletion_pending'`,
+    a.id,documentId],
     [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
       SELECT ?,?,'attachment_permanently_deleted','attachment',?,? WHERE changes()=1`,
       randomToken(16),p.user_id,a.id,now]];
