@@ -27,7 +27,7 @@ function makeEnv({remoteState='trashed',enabled=true}={}){
     assert.equal(payload.idempotency_key,key);
     assert.equal(payload.actor_user_id,'ledgerActor');
     assert.equal(req.headers.get('Idempotency-Key'),key);
-    const expected=await hmacHex(secret,req.headers.get('X-DA-Timestamp')+'\\n'+JSON.stringify(payload));
+    const expected=await hmacHex(secret,req.headers.get('X-DA-Timestamp')+'\n'+JSON.stringify(payload));
     assert.equal(req.headers.get('X-DA-Signature'),expected);
     calls.push(payload.payload.operation);
     return Response.json({ok:true,exists:remoteState!=='missing',
@@ -63,7 +63,7 @@ test('HomeFlow member picker only accepts signed, scoped, validated choices',asy
     assert.equal(body.actor_user_id,'family_actor_123');
     assert.equal(req.headers.get('Idempotency-Key'),'jda:homeflow:'+candidateId);
     assert.equal(req.headers.get('X-DA-Signature'),
-      await hmacHex(secret,req.headers.get('X-DA-Timestamp')+'\\n'+JSON.stringify(body)));
+      await hmacHex(secret,req.headers.get('X-DA-Timestamp')+'\n'+JSON.stringify(body)));
     return Response.json({ok:true,members:[
       {id:'family_actor_123',label:'自己',self:true},
       {id:'family_other_12',label:'家人',self:false},
@@ -77,16 +77,16 @@ test('HomeFlow member picker only accepts signed, scoped, validated choices',asy
     {id:'family_other_12',label:'家人',self:false}
   ]);
 });
-test('deadline re-analysis keeps source provenance so inferred years never yield automatic task proposals',()=>{
+test('deadline re-analysis retains original provenance and rejects inferred dates',()=>{
   const source=readFileSync(new URL('../worker/index.js',import.meta.url),'utf8');
-  assert.match(source,/SELECT field_key,normalized_value,review_state,source_quote FROM document_fields WHERE document_id=\\?/);
-  assert.match(source,/!String\\(due.source_quote\\|\\|''\\).startsWith\\('年份自动补全'\\)/);
-  assert.match(source,/validCivilDate\\(String\\(due.normalized_value\\|\\|''\\)\\)/);
+  assert.ok(source.includes("SELECT field_key,normalized_value,review_state,source_quote FROM document_fields WHERE document_id=?"));
+  assert.ok(source.includes("!String(due.source_quote||'').startsWith('年份自动补全')"));
+  assert.ok(source.includes("validCivilDate(String(due.normalized_value||''))"));
 });
-test('HomeFlow assignee selection never requires users to type an internal ID',()=>{
+test('HomeFlow assignee selection uses picker instead of internal IDs',()=>{
   const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
-  assert.match(app,/openChoice\\('taskAssignee'\\)/);
-  assert.match(app,/homeflowMemberChoices/);
-  assert.doesNotMatch(app,/负责人 HomeFlow 用户 ID/);
-  assert.match(app,/核对家計簿状态/);
+  assert.ok(app.includes("openChoice('taskAssignee')"));
+  assert.ok(app.includes('homeflowMemberChoices'));
+  assert.ok(!app.includes('负责人 HomeFlow 用户 ID'));
+  assert.ok(app.includes('核对家計簿状态'));
 });

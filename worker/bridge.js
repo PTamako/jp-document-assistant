@@ -227,7 +227,7 @@ export async function homeflowMemberOptions(env,userId,candidateId){
     idempotency_key:key,payload:{operation:'members'}});
   const stamp=String(Date.now());
   try{
-    const signature=await hmacHex(dest.secret,stamp+'\\n'+raw);
+    const signature=await hmacHex(dest.secret,stamp+'\n'+raw);
     const response=await dest.fetcher(new Request(dest.url,{method:'POST',headers:{
       'Content-Type':'application/json','X-DA-Timestamp':stamp,
       'X-DA-Signature':signature,'Idempotency-Key':key},body:raw}));
