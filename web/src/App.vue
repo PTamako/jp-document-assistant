@@ -29,6 +29,55 @@ const categoryIcon=kind=>({salary:'wallet',card_spend:'wallet',bank:'wallet',top
 const candidateIcon=kind=>({finance:'wallet',homeflow_task:'today',vocabulary:'book',sentence:'book'}[kind]||'links');
 const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',failed:'同步失败',pending:'待确认'}[state]||'待确认');
 const current=ref(null),detailTab=ref('original'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
+const localTranslation=ref(''),translationSource=ref(''),translationVisible=ref(false),
+ translationBusy=ref(false),translationProgress=ref(''),translationError=ref('');
+let translationWorker=null;
+function stopTranslation({clear=false}={}){
+ if(translationWorker){translationWorker.terminate();translationWorker=null;}
+ translationBusy.value=false;
+ translationProgress.value='';
+ if(clear){
+  localTranslation.value='';translationSource.value='';translationVisible.value=false;
+  translationError.value='';
+ }
+}
+function translateOriginal(){
+ const text=String(current.value?.extracted_text_ja||'').trim();
+ if(!text||translationBusy.value)return;
+ if(localTranslation.value&&translationSource.value===text){
+  translationVisible.value=!translationVisible.value;return;
+ }
+ if(text.length>8000){translationError.value='原文较长，请先分段后再翻译（最多 8000 字）';return;}
+ stopTranslation({clear:true});
+ const id=current.value?.id;
+ translationBusy.value=true;
+ translationProgress.value='正在准备本机翻译模型';
+ try{
+  const worker=new Worker(new URL('./local-translate.worker.js',import.meta.url),{type:'module'});
+  translationWorker=worker;
+  worker.onmessage=event=>{
+   if(translationWorker!==worker||current.value?.id!==id)return;
+   const message=event.data||{};
+   if(message.type==='progress'){
+    translationProgress.value=message.message||'正在翻译';return;
+   }
+   if(message.type==='complete'){
+    localTranslation.value=String(message.translation||'');
+    translationSource.value=text;
+    translationVisible.value=true;
+    stopTranslation();
+   }
+   if(message.type==='error'){
+    translationError.value=String(message.message||'本机翻译失败');
+    stopTranslation();
+   }
+  };
+  worker.onerror=()=>{if(translationWorker!==worker)return;translationError.value='本机翻译无法启动';stopTranslation();};
+  worker.postMessage({type:'translate',text});
+ }catch{
+  translationError.value='当前设备不支持本地翻译';stopTranslation();
+ }
+}
 // Preserve exact retry fields in memory while the app stays open.
 const pendingCandidateRetry=ref(null);
 const ledgerOptions=ref({categories:[],paymentSources:[]}),ledgerOptionsError=ref(''),ledgerAttempted=ref(false),ledgerMappingChangeConfirmed=ref(false),candidateMerchant=ref('');
@@ -280,6 +329,7 @@ function accountApi(snapshot){
   };
 }
 function clearPrivateWorkspace(){
+  stopTranslation({clear:true});
   accountEpoch.invalidate(); // Reject responses from the previous account.
   accountController.abort();accountController=new AbortController();
   loadSerial++;loadingPage.value=false;busy.value=false;detailLoading.value=false;
@@ -601,7 +651,7 @@ async function openDoc(id,{preserveTab=false,preserveScroll=false}={}){
   const scrollBefore=preserveScroll&&sameDocument
     ?document.querySelector('.detail-body')?.scrollTop:null;
   detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];
-  if(!sameDocument){detailTab.value='original';explanationExpanded.value=false;ocrTextExpanded.value=false;}
+  if(!sameDocument){stopTranslation({clear:true});detailTab.value='original';explanationExpanded.value=false;ocrTextExpanded.value=false;}
   try{
     const d=await api(`/api/documents/${id}`);current.value=d.document;
     const c=await api(`/api/documents/${id}/candidates`);detailCandidates.value=c.items||[];
@@ -613,7 +663,7 @@ async function openDoc(id,{preserveTab=false,preserveScroll=false}={}){
     }
   }catch(e){problem(e);}finally{detailLoading.value=false;}
 }
-function closeDetail(){revokeOriginal();current.value=null;amountVisible.value=false;explanationExpanded.value=false;ocrTextExpanded.value=false;attachmentActionsTarget.value=null;}
+function closeDetail(){stopTranslation({clear:true});revokeOriginal();current.value=null;amountVisible.value=false;explanationExpanded.value=false;ocrTextExpanded.value=false;attachmentActionsTarget.value=null;}
 async function runAiForCurrent(){
  if(!current.value||busy.value||current.value.ai_provider==='none')return;
  const id=current.value.id;busy.value=true;
@@ -1363,10 +1413,21 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             </div>
           </div>
           <div class="original-copy-section">
-            <div class="original-section-heading"><h3>OCR 文字</h3><button class="text-button icon-label" type="button" @click="editText"><UiIcon name="edit" :size="16"/>编辑</button></div>
-            <p v-if="current.extracted_text_ja" class="multiline ocr-text-preview" :class="{expanded:ocrTextExpanded}">{{current.extracted_text_ja}}</p>
+            <div class="original-section-heading">
+              <h3>OCR 文字</h3>
+              <div class="original-translate-actions">
+                <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="translationBusy" @click="translateOriginal" :aria-pressed="translationVisible" aria-label="切换日文原文与本地中文机翻">
+                  <UiIcon name="languages" :size="17"/>{{translationBusy?'翻译中':translationVisible?'看原文':localTranslation&&translationSource===current.extracted_text_ja.trim()?'看译文':'翻译'}}
+                </button>
+                <button class="text-button icon-label" type="button" @click="editText"><UiIcon name="edit" :size="16"/>编辑</button>
+              </div>
+            </div>
+            <p v-if="translationBusy" class="detail-note" role="status">{{translationProgress}} <button class="text-button" type="button" @click="stopTranslation()">取消</button></p>
+            <p v-if="translationError" class="detail-note" role="alert">{{translationError}}</p>
+            <p v-if="translationVisible" class="detail-note">本地机翻 · 仅供对照，日期金额请核对日文原文</p>
+            <p v-if="current.extracted_text_ja" class="multiline ocr-text-preview" :class="{expanded:ocrTextExpanded}">{{translationVisible&&localTranslation&&translationSource===current.extracted_text_ja.trim()?localTranslation:current.extracted_text_ja}}</p>
             <p v-else class="muted">暂无文字。</p>
-            <button v-if="current.extracted_text_ja?.length>130" class="text-button expand-copy" type="button" :aria-expanded="ocrTextExpanded" @click="ocrTextExpanded=!ocrTextExpanded">{{ocrTextExpanded?'收起原文':'展开全部文字'}}</button>
+            <button v-if="current.extracted_text_ja?.length>130" class="text-button expand-copy" type="button" :aria-expanded="ocrTextExpanded" @click="ocrTextExpanded=!ocrTextExpanded">{{ocrTextExpanded?'收起文字':'展开全部文字'}}</button>
           </div>
         </div>
       </section>
