@@ -32,6 +32,8 @@ const categoryIcon=kind=>({salary:'wallet',card_spend:'wallet',bank:'wallet',top
 const candidateIcon=kind=>({finance:'wallet',homeflow_task:'today',vocabulary:'book',sentence:'book'}[kind]||'links');
 const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',failed:'同步失败',pending:'待确认'}[state]||'待确认');
 const current=ref(null),detailTab=ref('original'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
+// Ignore stale document responses after another document opens, the detail closes or the account changes.
+let detailOpenSerial=0;
 const localTranslation=ref(''),translationSource=ref(''),translationVisible=ref(false),
  translationBusy=ref(false),translationProgress=ref(''),translationError=ref('');
 const localTranslationBlocked=isMemoryConstrainedIosWebKit();
@@ -349,6 +351,8 @@ function accountApi(snapshot){
   };
 }
 function clearPrivateWorkspace(){
+  detailOpenSerial++;
+  detailTab.value='original';
   stopTranslation({clear:true});
   accountEpoch.invalidate(); // Reject responses from the previous account.
   accountController.abort();accountController=new AbortController();
@@ -671,32 +675,58 @@ async function selectTab(tab){
 async function searchDocs(){pages.docs.loaded=false;await loadTab('docs');closeSheet();}
 async function loadUsage(){try{usage.value=await api('/api/usage');}catch(e){problem(e);}}
 async function cleanupStorage(){busy.value=true;try{const result=await api('/api/storage/cleanup-orphans',{method:'POST',body:{}});flash(result.pending?'部分 R2 文件清理失败，请稍后手动重试':`已清理 ${result.removed} 个无引用原件；不扫描 R2 全桶`);}catch(e){problem(e);}finally{busy.value=false;}}
-async function openDoc(id,{preserveTab=false,preserveScroll=false}={}){
+async function openDoc(id,{preserveScroll=true}={}){
   swipeOpenId.value='';
-  const sameDocument=preserveTab&&current.value?.id===id;
-  const tabBefore=detailTab.value;
-  const scrollBefore=preserveScroll&&sameDocument
+  const serial=++detailOpenSerial;
+  // Any save/reanalysis/attachment update for the SAME document must keep
+  // the live tab selection. Never restore a previously captured tab after
+  // awaiting an API response: the user may switch tabs while it loads.
+  const sameDocument=current.value?.id===id;
+  const tabAtStart=detailTab.value;
+  const scrollBefore=sameDocument&&preserveScroll
     ?document.querySelector('.detail-body')?.scrollTop:null;
-  detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];
-  if(!sameDocument){stopTranslation({clear:true});detailTab.value='original';explanationExpanded.value=false;ocrTextExpanded.value=false;}
+  detailLoading.value=true;
+  if(!sameDocument){
+    detailCandidates.value=[];
+    amountVisible.value=false;
+    stopTranslation({clear:true});
+    detailTab.value='original';
+    explanationExpanded.value=false;
+    ocrTextExpanded.value=false;
+  }
   try{
-    const d=await api(`/api/documents/${id}`);current.value=d.document;
-    const c=await api(`/api/documents/${id}/candidates`);detailCandidates.value=c.items||[];
-    if(sameDocument)detailTab.value=tabBefore;
-    if(scrollBefore!==null&&scrollBefore!==undefined){
+    const d=await api(`/api/documents/${id}`);
+    if(serial!==detailOpenSerial)return;
+    current.value=d.document;
+    const c=await api(`/api/documents/${id}/candidates`);
+    if(serial!==detailOpenSerial)return;
+    detailCandidates.value=c.items||[];
+    if(sameDocument&&scrollBefore!==null&&scrollBefore!==undefined&&detailTab.value===tabAtStart){
       await nextTick();
+      if(serial!==detailOpenSerial||current.value?.id!==id||detailTab.value!==tabAtStart)return;
       const container=document.querySelector('.detail-body');
       if(container)container.scrollTop=scrollBefore;
     }
-  }catch(e){problem(e);}finally{detailLoading.value=false;}
+  }catch(e){
+    if(serial===detailOpenSerial)problem(e);
+  }finally{
+    if(serial===detailOpenSerial)detailLoading.value=false;
+  }
 }
-function closeDetail(){stopTranslation({clear:true});revokeOriginal();current.value=null;amountVisible.value=false;explanationExpanded.value=false;ocrTextExpanded.value=false;attachmentActionsTarget.value=null;}
+function closeDetail(){
+  detailOpenSerial++; // An in-flight refresh must never reopen a closed detail.
+  detailLoading.value=false;
+  stopTranslation({clear:true});revokeOriginal();current.value=null;
+  detailTab.value='original';
+  amountVisible.value=false;explanationExpanded.value=false;ocrTextExpanded.value=false;
+  attachmentActionsTarget.value=null;
+}
 async function runAiForCurrent(){
  if(!current.value||busy.value||current.value.ai_provider==='none')return;
  const id=current.value.id;busy.value=true;
  try{
   const result=await api('/api/documents/'+id+'/ai/analyze',{method:'POST',body:{confirm:true}});
-  await openDoc(id,{preserveTab:true,preserveScroll:true});
+  await openDoc(id);
   // Do not make the user leave the PWA to observe a quick background completion.
   void pollAiStatus();
   const labels={queued:'AI 已开始后台解析，可继续使用文书',success:'AI 已生成中文解读和学习建议',cached:'已使用缓存的 AI 分析',disabled:'AI 服务当前未启用（规则讲解仍可使用）',not_configured:'所选 AI 尚未完成安全配置',budget_exhausted:'Cloudflare AI 今日已达上限',budget_disabled:'AI 预算尚未开放',provider_failed:'AI 返回无效或服务暂不可用，原有数据不受影响',...Object.fromEntries(Object.entries(aiFailureLabels).filter(([k])=>k!=='provider_failed')),awaiting_text:'请先完成 OCR 或补充原文',privacy_blocked:'请确认发送至 Gemini',too_long:'原文过长，请拆分后重试',cooldown:'稍后重试',in_progress:'本份文书的 AI 请求正在执行'};
@@ -904,7 +934,7 @@ async function saveManualSalary(){
 function startField(field){if(field.field_key==='due_date'&&field.review_state==='unreviewed'&&field.source_quote?.startsWith('年份自动补全')){openCompleteDeadline();return;}fieldDraft.id=field.id;fieldDraft.value=field.normalized_value||'';fieldDraft.state=field.review_state==='unreviewed'?'confirmed':field.review_state;fieldDraft.confirmRemote=false;sheet.value='field';}
 async function saveField(){busy.value=true;try{
   const result=await api(`/api/fields/${fieldDraft.id}`,{method:'PATCH',body:{normalized_value:fieldDraft.value,review_state:fieldDraft.state,confirm_remote_unchanged:fieldDraft.confirmRemote}});
-  const id=current.value.id;sheet.value='';await openDoc(id,{preserveTab:true,preserveScroll:true});
+  const id=current.value.id;sheet.value='';await openDoc(id);
   refreshDocumentViews();
   if(pages[activeTab.value])await loadTab(activeTab.value);
   flash(result.linked_records_unchanged?'本地字段已修改；已同步的目标 App 记录不会自动改变，请前往目标 App 核对':'字段已保存');
@@ -989,7 +1019,7 @@ async function loadMoreTrash(){if(recycleNext.value===null)return;recycleOffset.
 async function restoreAttachment(d,a){busy.value=true;try{await api(`/api/documents/${d}/attachments/${a}/restore`,{method:'POST',body:{}});await refreshTrash();flash('附件已恢复，没有重复上传 R2');}catch(e){problem(e);}finally{busy.value=false;}}
 async function trashAttachment(a){if(!current.value)return;busy.value=true;try{
   await api(`/api/documents/${current.value.id}/attachments/${a.id}/trash`,{method:'POST',body:{}});
-  const id=current.value.id;await openDoc(id,{preserveTab:true,preserveScroll:true});flash('附件已移入回收站，文字结果保留');
+  const id=current.value.id;await openDoc(id);flash('附件已移入回收站，文字结果保留');
 }catch(e){problem(e);}finally{busy.value=false;}}
 
 function openAttachmentActions(a){
@@ -1043,7 +1073,7 @@ async function confirmCompleteDeadline(){
  try{
   await api('/api/documents/'+id+'/complete-deadline',{method:'POST',body:{due_date:missingYearDateDraft.value,confirm_year:true}});
   sheet.value='';missingYearDateDraft.value='';missingYearConfirmed.value=false;
-  await openDoc(id,{preserveTab:true,preserveScroll:true});flash('已按你确认的年份保存截止日；HomeFlow 待办仍需再次确认后同步');
+  await openDoc(id);flash('已按你确认的年份保存截止日；HomeFlow 待办仍需再次确认后同步');
  }catch(e){problem(e);}finally{busy.value=false;}
 }
 async function refreshInterpretation(){
@@ -1053,7 +1083,7 @@ async function refreshInterpretation(){
  try{
    const result=await api(`/api/documents/${id}/reinterpret`,{method:'POST',body:{}});
    refreshDocumentViews();
-   await openDoc(id,{preserveTab:true,preserveScroll:true});
+   await openDoc(id);
    flash(`规则解析已更新；补充 ${result.added_fields} 个待核验字段，原有核验及跨应用联动保持不变`+
      (result.privacy_auto_private?'；敏感文书已自动设为仅自己':''));
  }catch(e){problem(e);}finally{busy.value=false;}
@@ -1181,7 +1211,7 @@ async function commitApprovedCandidate(){
  }
  sheet.value='';
  refreshDocumentViews();
- try{await openDoc(docId,{preserveTab:true,preserveScroll:true});}catch{}
+ try{await openDoc(docId);}catch{}
  if(confirmed)flash(feedback);else problem(new Error(feedback));
  busy.value=false;
 }
