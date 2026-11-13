@@ -12,6 +12,7 @@ import TabIcon from './TabIcon.vue';
 import UiIcon from './UiIcon.vue';
 import { invalidateDocumentLists } from './document-list-cache.js';
 import { chineseExplanation } from './chinese-explanation.js';
+import { aiResultReady, isAiJobPending, aiResultBecameAvailable } from './ai-state.js';
 import { studySyncState } from './study-sync-status.js';
 import { inferSbiInvestmentKind } from '../../shared/sbi-investment.js';
 import DocumentSwipeRow from './DocumentSwipeRow.vue';
@@ -129,6 +130,8 @@ const aiFailureLabels={
  provider_failed:'AI 分析失败'
 };
 const aiFailureMessage=computed(()=>{
+ // The analysis is already usable even if the background job has not updated its final flag.
+ if(aiResultReady(current.value))return '';
  const job=current.value?.ai_job;
  if(job?.state==='queued'||job?.state==='running')return 'AI 正在后台解析，可继续使用文书';
  if(job?.state==='retry_wait')return 'Google 暂时繁忙，已安排自动重试';
@@ -1224,19 +1227,18 @@ let aiStatusInterval=null,aiPolling=false;
 async function pollAiStatus(force=false){
  if(aiPolling||!user.value||document.visibilityState!=='visible')return;
  const id=current.value?.id,job=current.value?.ai_job;
- if(!id||(!force&&!['queued','running','retry_wait'].includes(job?.state)))return;
+ if(!id||(!force&&!isAiJobPending(job)))return;
  aiPolling=true;
  try{
   // Avoid one stalled mobile request blocking subsequent refreshes indefinitely.
   const d=await api('/api/documents/'+id,{signal:AbortSignal.timeout(12000)});
   if(current.value?.id!==id)return;
-  const wasPending=['queued','running','retry_wait'].includes(current.value?.ai_job?.state);
-  current.value=d.document;
-  const nextState=d.document?.ai_job?.state;
-  if(wasPending&&(nextState==='done'||nextState==='failed'||!nextState)){
+  const previous=current.value;
+  current.value=d.document; // Recomputes Chinese explanation and status without closing the detail.
+  if(aiResultBecameAvailable(previous,d.document)||isAiJobPending(previous?.ai_job)&&!isAiJobPending(d.document?.ai_job)){
    const c=await api('/api/documents/'+id+'/candidates',{signal:AbortSignal.timeout(12000)});
    if(current.value?.id===id)detailCandidates.value=c.items||[];
-   if(nextState==='done'&&d.document?.ai_analysis?.status==='success')
+   if(aiResultBecameAvailable(previous,d.document))
      flash('AI 解读已完成');
   }
  }catch{
@@ -1244,12 +1246,14 @@ async function pollAiStatus(force=false){
  }finally{aiPolling=false;}
 }
 onMounted(async()=>{
-  aiStatusInterval=setInterval(pollAiStatus,9000);
+  // Only pending documents are polled. Four seconds keeps PWA feedback responsive.
+  aiStatusInterval=setInterval(pollAiStatus,4000);
   document.addEventListener('visibilitychange',onGoogleVisibility);
   window.addEventListener('pageshow',onAppPageShow);
+  window.addEventListener('focus',onAppPageShow);
   await boot();if(!user.value)await refreshInitStatus();
 });
-onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',onAppPageShow);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
+onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',onAppPageShow);window.removeEventListener('focus',onAppPageShow);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
 
 <template>
