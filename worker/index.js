@@ -67,7 +67,7 @@ async function requireSession(request,env){
       s.auth_source,u.household_id,u.role,u.display_name,u.email_norm,u.status,
       hp.state_hash,hp.proof_cipher,hp.proof_iv,hp.expires_at AS proof_expires_at,
       hp.homeflow_user_id,l.homeflow_household_id,l.state AS homeflow_link_state,
-      l.role AS homeflow_link_role,l.local_user_id AS link_local_user_id
+      u.role AS homeflow_link_role,l.local_user_id AS link_local_user_id
     FROM sessions s JOIN users u ON u.id=s.user_id
     LEFT JOIN homeflow_session_proofs hp ON hp.session_id=s.id
     LEFT JOIN homeflow_identity_links l ON l.homeflow_user_id=hp.homeflow_user_id
