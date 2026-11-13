@@ -49,6 +49,12 @@ test('Gemini uses explicit MEDIUM with enough total thinking/output tokens, with
  assert.equal('temperature' in cfg,false);
  assert.equal('thinkingBudget' in cfg.thinkingConfig,false);
 });
+test('Gemini transport errors distinguish abort deadline from true network failures',()=>{
+ assert.equal(GEMINI_REQUEST_TIMEOUT_MS,26000);
+ assert.equal(classifyGeminiTransportError({name:'TimeoutError'}),'gemini_timeout');
+ assert.equal(classifyGeminiTransportError({name:'AbortError'}),'gemini_timeout');
+ assert.equal(classifyGeminiTransportError({name:'TypeError',message:'private network details'}),'gemini_network_error');
+});
 test('Gemini status codes are categorized safely without exposing provider response bodies',()=>{
  assert.equal(classifyGeminiHttpError(429),'gemini_quota_or_rate_limited');
  assert.equal(classifyGeminiHttpError(403),'gemini_access_denied');
