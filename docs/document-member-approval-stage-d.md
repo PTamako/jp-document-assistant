@@ -24,3 +24,15 @@
 用户已经完成 A 阶段四 D1 加密备份、Mac 隔离 SQLite 恢复和六个 R2 对象校验，**不需要重新备份 A**。但用户**尚未授权**生产 SQL 迁移、新开关、合并会部署的功能 PR、新建 Preview 或 Cloudflare 正式部署。本模块仅在 GitHub Draft 内以本地 SQLite 和 mock Service Binding 测试。
 
 本项目所有新旗标默认 **OFF**。文书助手端需要 `HOMEFLOW_SSO_ENABLED`、`DOCUMENT_APPROVAL_SUBMISSION_ENABLED`、私密 `DOCUMENT_APPROVAL_SUBMISSION_SECRET`、已有的 HomeFlow binding；HomeFlow 端需相同的专用密钥和 `APPROVALS_ENABLED` 等后台必要开关。**只在实际获得上线许可并完成迁移/隔离恢复、版本校验和人工跨 App 验收后才允许同时启用**。Secret 永远不写进 GitHub、Google Drive 备份目录或聊天记录。
+
+## 增量：审批状态单次核验（只读；需与 HomeFlow #306 配套）
+
+文书助手端新增真正按需查询的 `GET /api/candidates/:id/approval`，与原本单纯读取本地 `submitted` 不同。请求必须经过原 Worker 的 HttpOnly HomeFlow SSO session 实时 introspection，`p.role=member`，本人拥有当前 active 文书候选，且本地 `document_member_sync_intents` 的本地/远端 actor、household、candidate/target 都匹配。未提交的候选不会请求 HomeFlow，`prepared` 只回报“未确认”；仅 `submitted` 且已有本地 `approval_id` 才访问 HomeFlow。
+
+服务端经现有 HomeFlow Service Binding 发送 **POST `/api/internal/approvals/document-status`**，用原本的 32 raw-byte Secret 计算**独立操作域** `jp-document-assistant:status\\n{stamp}\\n{raw_json}` HMAC-SHA256；原提交签名不允许充作查询。发送严格六字段 `approval_id/household_id/requester_user_id/resource_id/payload_sha256/target_app`，绝不发送原文、银行卡/金额、远端令牌或原始快照。
+
+收到 200 时对 HomeFlow 返回的这六字段、`version>=1`、状态白名单以及 `applied=false/target_changed=false` **逐项核验**。仅通过后才将真实 `pending/approved/rejected/cancelled/expired/failed_final/conflict` 返回给当前成员；任何 401/404、错误签名、跨账号混用、目标改写或网络错误均返回 503，没有状态“乐观成功”或目标写入。**approved 仍然只代表管理员批准，不代表家計簿/HomeFlow/知学真正执行。**
+
+PWA 文书候选底部确认页为成员提供明确“查询 HomeFlow 审批状态”按钮，**只有用户点击才发起**，无常驻轮询，成本可控。状态标签区分“待审批”“已批准但尚无执行器”“已拒绝”“已取消/过期/冲突”，一律不称已同步。使用已有 `accountEpoch` 和 candidate/document ID 检查，确保切号或关闭文书后迟到的旧请求不会污染当前用户界面。后台未启用时保持原禁用提示。
+
+测试包括 HomeFlow 原 D1 真实审批状态与用途隔离 HMAC 测试、文书助手真实两人 SSO/mock Service Binding 的 pending→approved→rejected、伪造摘要拒绝、模拟断网回报不确定、target `integration_links` 始终为 0，以及 PWA 显式单次查询守卫。仍在两原 Draft PR；生产 SQL/Secret/flag/部署保持未变。独立目标执行器、不同应用的真正提交回执及真实 iPhone 验收仍未完成。
