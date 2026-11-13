@@ -582,3 +582,101 @@ body{
  .original-translate-actions{gap:4px}
  .original-translate-actions .text-button{padding-inline:3px}
 }
+
+
+/* My → Services: compact iOS glass dashboard, with real counters and no wrapped prose. */
+.usage-dashboard{
+  display:flex;flex-direction:column;gap:10px;min-width:0;
+  margin:10px 0 15px;padding:15px 13px 13px;
+  border-radius:22px;background:var(--glass-card);
+  border:1px solid var(--glass-outline);box-shadow:var(--glass-shadow);
+  -webkit-backdrop-filter:var(--glass-blur);backdrop-filter:var(--glass-blur);
+  overflow:hidden;
+}
+.usage-dashboard-header{
+  display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+  padding:0 3px 2px;min-width:0;
+}
+.usage-dashboard-header h3{
+  margin:0;font-size:15px;font-weight:750;letter-spacing:-.015em;
+}
+.usage-dashboard-period{
+  color:var(--secondary);font-size:11px;white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+.usage-translation{
+  padding:13px;border-radius:17px;
+  background:linear-gradient(115deg,color-mix(in srgb,var(--glass-blue) 78%,var(--glass-card)),var(--glass-card));
+  border:1px solid color-mix(in srgb,var(--blue) 16%,var(--glass-outline));
+  box-shadow:inset 0 1px 0 var(--glass-rim);
+}
+.usage-translation-head{
+  display:flex;justify-content:space-between;align-items:flex-start;
+  gap:10px;min-width:0;
+}
+.usage-translation-title{display:flex;flex-direction:column;gap:2px;min-width:0}
+.usage-translation-title strong{
+  font-size:14px;font-weight:750;line-height:1.32;white-space:nowrap;
+}
+.usage-translation-title small{color:var(--secondary);font-size:11px;line-height:1.3}
+.usage-translation-remaining{
+  flex:none;font-size:12px;color:var(--blue);white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+.usage-translation-remaining strong{font-size:17px;font-weight:800}
+.usage-translation-count{
+  display:flex;align-items:baseline;gap:4px;margin:9px 0 10px;
+  font-variant-numeric:tabular-nums;
+}
+.usage-translation-count strong{
+  font-size:25px;line-height:1;font-weight:800;letter-spacing:-.04em;color:var(--ink);
+}
+.usage-translation-count span{font-size:12px;color:var(--secondary)}
+.usage-translation-meter{
+  height:6px;width:100%;border-radius:100px;
+  background:color-mix(in srgb,var(--blue) 13%,var(--glass-card));
+  overflow:hidden;
+}
+.usage-translation-meter>span{
+  display:block;height:100%;min-width:0;border-radius:inherit;
+  background:var(--blue);transition:width .2s ease;
+}
+.usage-metrics{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:9px;min-width:0;
+}
+.usage-metric{
+  display:flex;flex-direction:column;gap:4px;min-width:0;
+  min-height:87px;padding:12px 11px 10px;
+  background:color-mix(in srgb,var(--glass-card) 80%,var(--soft));
+  border:1px solid var(--glass-outline);border-radius:15px;
+  box-shadow:inset 0 1px 0 var(--glass-rim);
+}
+.usage-metric>span{
+  font-size:12px;line-height:1.25;font-weight:650;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.usage-metric>strong{
+  font-size:21px;line-height:1.15;font-weight:780;
+  font-variant-numeric:tabular-nums;letter-spacing:-.025em;
+}
+.usage-metric>strong small{font-size:13px;color:var(--secondary);font-weight:550}
+.usage-metric>small{font-size:10px;color:var(--secondary);line-height:1.35}
+.usage-dashboard-note{
+  margin:0 3px;color:var(--secondary);font-size:11px;
+  line-height:1.5;overflow-wrap:anywhere;
+}
+@media(max-width:360px){
+  .usage-dashboard{padding:12px 10px}
+  .usage-metrics{gap:7px}
+  .usage-metric{padding:10px 9px}
+  .usage-translation{padding:11px}
+  .usage-translation-title strong{font-size:13px}
+  .usage-translation-remaining{font-size:11px}
+}
+@media(prefers-reduced-transparency:reduce){
+  .usage-dashboard{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--panel)}
+}
+@media(prefers-reduced-motion:reduce){
+  .usage-translation-meter>span{transition:none}
+}
