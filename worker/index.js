@@ -12,7 +12,7 @@ import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
 import { oauthCallback,handleBrowserGoogle } from './google-browser-oauth.js';
-import {startHomeFlowSso,callbackHomeFlowSso} from './homeflow-sso.js';
+import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso} from './homeflow-sso.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {workersAiImportPreview} from './ocr-import-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
@@ -528,6 +528,7 @@ async function route(request,env,ctx){
   if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
   if(path==='/api/homeflow-sso/start')return startHomeFlowSso(request,env,url);
   if(path==='/api/homeflow-sso/callback')return callbackHomeFlowSso(request,env,url);
+  if(path==='/api/homeflow-sso/complete')return completeHomeFlowSso(request,env,url);
   // The callback deliberately needs no browser cookie: one-time state binds it to the PWA user.
   if(method==='GET'&&path==='/api/google/oauth/callback')return oauthCallback(request,env,url);
   const p=await requireSession(request,env);
