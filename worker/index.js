@@ -12,7 +12,7 @@ import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
 import { oauthCallback,handleBrowserGoogle } from './google-browser-oauth.js';
-import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso,homeflowSsoEnabled} from './homeflow-sso.js';
+import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso,homeflowSsoEnabled,verifyHomeFlowSession} from './homeflow-sso.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {workersAiImportPreview} from './ocr-import-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
@@ -63,10 +63,39 @@ async function requireSession(request,env){
   const cookie=parseCookie(request,'__Host-da_session');
   if(!cookie || !/^[a-f0-9]{64}$/.test(cookie)) bad('请先登录','UNAUTHENTICATED',401);
   const hash=await hashString(cookie);
-  const session=await dbFirst(env.DB,`SELECT s.id session_id,s.user_id,s.expires_at,u.household_id,u.role,u.display_name,u.email_norm,u.status
+  const session=await dbFirst(env.DB,`SELECT s.id session_id,s.user_id,s.expires_at,
+      s.auth_source,u.household_id,u.role,u.display_name,u.email_norm,u.status,
+      hp.state_hash,hp.proof_cipher,hp.proof_iv,hp.expires_at AS proof_expires_at,
+      hp.homeflow_user_id,l.homeflow_household_id,l.state AS homeflow_link_state,
+      l.role AS homeflow_link_role,l.local_user_id AS link_local_user_id
     FROM sessions s JOIN users u ON u.id=s.user_id
+    LEFT JOIN homeflow_session_proofs hp ON hp.session_id=s.id
+    LEFT JOIN homeflow_identity_links l ON l.homeflow_user_id=hp.homeflow_user_id
     WHERE s.secret_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND u.status='active'`,hash,isoNow());
   if(!session)bad('登录已失效，请重新登录','UNAUTHENTICATED',401);
+  if(session.auth_source==='homeflow'){
+    // Neither an absent proof nor a failed HomeFlow call can fall back to
+    // legacy login. Every private GET/write checks live HomeFlow authority.
+    if(!session.homeflow_user_id||!session.proof_cipher||
+      session.homeflow_link_state!=='active'||
+      session.link_local_user_id!==session.user_id||
+      session.homeflow_link_role!==session.role)
+      bad('HomeFlow 登录已失效，请重新登录','UNAUTHENTICATED',401);
+    const current=await verifyHomeFlowSession(env,{
+      state_hash:session.state_hash,proof_cipher:session.proof_cipher,
+      proof_iv:session.proof_iv,expires_at:session.proof_expires_at,
+      homeflow_user_id:session.homeflow_user_id,
+      homeflow_household_id:session.homeflow_household_id,
+      role:session.role
+    });
+    if(!current || current.userId!==session.homeflow_user_id ||
+      current.householdId!==session.homeflow_household_id ||
+      current.role!==session.role)
+      bad('HomeFlow 登录已失效，请重新登录','UNAUTHENTICATED',401);
+    session.display_name=current.nickname;
+  }else if(session.auth_source!=='legacy'){
+    bad('无效的登录方式','UNAUTHENTICATED',401);
+  }
   const csrf=await hmacHex(env.SESSION_HMAC_KEY,`csrf:${cookie}`);
   return {...session,csrf};
 }
