@@ -1445,10 +1445,13 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
       <template v-else-if="sheet==='recycle'">
         <div class="recycle-header">
           <h2>回收站</h2>
-          <button v-if="trashItems.length||attachmentTrashItems.length"
-            class="recycle-clear-button" type="button" :disabled="busy" @click="askEmptyRecycle">
-            <UiIcon name="trash" :size="16"/>全部清空
-          </button>
+          <div class="recycle-header-actions">
+            <button v-if="trashItems.length||attachmentTrashItems.length"
+              class="recycle-clear-button" type="button" :disabled="busy" @click="askEmptyRecycle">
+              <UiIcon name="trash" :size="16"/>全部清空
+            </button>
+            <button class="recycle-done-button" type="button" @click="closeSheet">完成</button>
+          </div>
         </div>
         <p class="recycle-explain">删除可恢复，永久删除不可撤销。</p>
         <div v-if="!trashItems.length&&!attachmentTrashItems.length" class="recycle-empty">
@@ -1482,9 +1485,6 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
               </div>
             </div>
           </div>
-        </div>
-        <div class="sheet-actions recycle-footer">
-          <button class="secondary full" type="button" @click="closeSheet">完成</button>
         </div>
       </template>
       <template v-else-if="sheet==='emptyRecycleConfirm'">

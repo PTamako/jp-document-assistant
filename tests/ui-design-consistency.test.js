@@ -57,3 +57,19 @@ test('all main iPhone surfaces use shared glass tokens with dark and reduced tra
  assert.match(css,/\.recycle-sheet\{max-height:min\(82dvh,780px\)/);
  assert.match(css,/\.recycle-clear-button\{[^}]*min-height:42px/);
 });
+
+test('one consistent floating iPhone action bar serves short and long sheets without a white subpanel',()=>{
+ const markup=app.slice(app.indexOf('<div v-if="sheet"'),app.indexOf('</section>',app.indexOf('<div v-if="sheet"')));
+ const footers=[...markup.matchAll(/class="sheet-actions(?: [^"]*)?"/g)];
+ assert.ok(footers.length>=25,'expected shared action footer across sheets');
+ assert.match(css,/\.sheet-actions\{[^}]*background:transparent/);
+ assert.doesNotMatch(css,/\.sheet-actions\{[^}]*background:linear-gradient/);
+ assert.match(css,/\.sheet-actions>button:only-child\{[^}]*width:auto/);
+ assert.match(css,/\.sheet-actions:has\(>button:nth-child\(3\)\)\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+ assert.match(css,/\.sheet-actions>button\{[^}]*min-height:48px/);
+ assert.match(css,/\.sheet-actions>button\.secondary\{[^}]*background:color-mix/);
+ assert.match(css,/\.sheet-actions>button\.primary\{[^}]*background:linear-gradient/);
+ assert.match(css,/\.sheet-actions>button\.destructive\{[^}]*background:var\(--glass-red\)/);
+ assert.match(css,/@media\(prefers-color-scheme:dark\)/);
+ assert.match(css,/@media\(prefers-reduced-transparency:reduce\)/);
+});
