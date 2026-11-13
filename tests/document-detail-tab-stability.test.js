@@ -105,7 +105,7 @@ test('all save and linked-action refreshes route through the same-document prese
  assert.match(source,/async function saveDocAiProvider\(\)[\s\S]*?await openDoc\(id\)/);
  assert.match(source,/async function saveField\(\)[\s\S]*?await openDoc\(id\)/);
  assert.match(source,/async function saveSourceText\(\)[\s\S]*?await openDoc\(id\)/);
- assert.match(source,/async function toggleDocument\(\)[\s\S]*?await openDoc\(id\)/);
+ assert.match(source,/async function toggleDocument\(key,value\)[\s\S]*?await openDoc\(id\)/);
  assert.match(source,/async function changeShare\(\)[\s\S]*?await openDoc\(current\.value\.id\)/);
  assert.match(source,/function clearPrivateWorkspace\(\)\{\s*detailOpenSerial\+\+/);
 });
