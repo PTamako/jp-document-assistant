@@ -86,16 +86,19 @@ export async function startHomeFlowSso(request,env,url){
    return json({ok:false,code:'INVALID_LOCAL_SESSION'},403);
  const state=randomToken(32);
  const stateHash=await hashString(state);
+ // The resume proof never crosses into the external authorization browser.
+ const resumeSecret=randomToken(32);
+ const resumeHash=await hashString(resumeSecret);
  const verifier=randomToken(48);
  const nonce=randomToken(24);
  const sealed=await sealVerifier(env,stateHash,verifier);
  const created=isoNow(),expires=nowPlus(PENDING_MS);
  await dbRun(env.DB,`INSERT INTO homeflow_oauth_pending
    (state_hash,verifier_cipher,verifier_iv,nonce,origin,
-    local_session_id,local_user_id,status,expires_at,created_at)
-   VALUES(?,?,?,?,?,?,?,'pending',?,?)`,
+    local_session_id,local_user_id,resume_secret_hash,status,expires_at,created_at)
+   VALUES(?,?,?,?,?,?,?,?,'pending',?,?)`,
    stateHash,sealed.cipher,sealed.iv,nonce,url.origin,
-   local?.session_id||null,local?.user_id||null,expires,created);
+   local?.session_id||null,local?.user_id||null,resumeHash,expires,created);
  const auth=new URL('/authorize',env.HOMEFLOW_OAUTH_ORIGIN);
  auth.searchParams.set('response_type','code');
  auth.searchParams.set('client_id',CLIENT_ID);
@@ -104,7 +107,8 @@ export async function startHomeFlowSso(request,env,url){
  auth.searchParams.set('code_challenge_method','S256');
  auth.searchParams.set('state',state);
  auth.searchParams.set('nonce',nonce);
- return json({ok:true,authorization_url:auth.toString(),expires_in:300},200,{
+ return json({ok:true,authorization_url:auth.toString(),state,
+   resume_secret:resumeSecret,expires_in:300},200,{
    'Set-Cookie':stateCookie(state,300)
  });
 }
@@ -210,61 +214,113 @@ async function resolveLocalIdentity(env,pending,hf){
  return {localUserId:uid,householdId:household.household_id,created:true};
 }
 function invalidCallback(code='SSO_CALLBACK_INVALID',status=403){
- return json({ok:false,code},status,{'Referrer-Policy':'no-referrer'});
+ return json({ok:false,code},status,{
+   'Referrer-Policy':'no-referrer','Cache-Control':'no-store'
+ });
 }
+// An OAuth redirect may land in Safari rather than the original standalone
+// iPhone PWA. Park an encrypted authorization code, NEVER a login session.
+// Only the original PWA (holding a separate unredirected 256-bit proof) can
+// complete the code exchange and receive its own HttpOnly cookie.
 export async function callbackHomeFlowSso(request,env,url){
  if(request.method!=='GET')return json({ok:false,code:'METHOD_NOT_ALLOWED'},405);
  if(!enabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
  const state=url.searchParams.get('state')||'';
- const cookie=parseCookie(request,'__Host-da_homeflow_state')||'';
- // SameSite=Lax binds the authorization result to the *same browser* that
- // started it. An iOS PWA/Safari context mismatch deliberately fails closed;
- // the later native-PWA handoff needs its own audited one-use mechanism.
- if(!/^[a-f0-9]{64}$/.test(state)||!safeEqual(state,cookie))
-   return invalidCallback('SSO_BROWSER_CONTEXT_MISMATCH');
- const hash=await hashString(state);
- const pending=await dbFirst(env.DB,`SELECT * FROM homeflow_oauth_pending
-   WHERE state_hash=? AND status='pending' AND expires_at>? AND origin=?`,
-   hash,isoNow(),url.origin);
+ const code=url.searchParams.get('code')||'';
+ if(!/^[a-f0-9]{64}$/.test(state) || url.searchParams.has('error') ||
+    !/^[a-f0-9]{64}$/.test(code))
+   return invalidCallback('SSO_CALLBACK_INVALID');
+ const stateHash=await hashString(state);
+ const pending=await dbFirst(env.DB,`SELECT state_hash FROM homeflow_oauth_pending
+   WHERE state_hash=? AND origin=? AND status='pending' AND code_cipher IS NULL
+     AND expires_at>?`,stateHash,url.origin,isoNow());
  if(!pending)return invalidCallback('SSO_INVALID_STATE');
+ const sealed=await sealVerifier(env,stateHash,code);
+ const updated=await dbRun(env.DB,`UPDATE homeflow_oauth_pending
+   SET code_cipher=?,code_iv=?,callback_received_at=?
+   WHERE state_hash=? AND origin=? AND status='pending'
+     AND code_cipher IS NULL AND expires_at>?`,
+   sealed.cipher,sealed.iv,isoNow(),stateHash,url.origin,isoNow());
+ if(Number(updated?.meta?.changes)!==1)return invalidCallback('SSO_REPLAY');
+ return new Response('<!doctype html><html lang="zh"><meta charset="utf-8">'+
+   '<meta name="viewport" content="width=device-width,initial-scale=1">'+
+   '<title>HomeFlow 授权</title><body><main><h1>授权已收到</h1>'+
+   '<p>请返回原来的文书助手 App，点击“完成登录”。</p></main></body></html>',{
+   status:200,headers:{
+     'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store',
+     'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff',
+     'Content-Security-Policy':"default-src 'none'; style-src 'none'; frame-ancestors 'none'"
+   }
+ });
+}
+export async function completeHomeFlowSso(request,env,url){
+ if(request.method!=='POST')return json({ok:false,code:'METHOD_NOT_ALLOWED'},405);
+ if(!enabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
+ if(request.headers.get('origin')!==url.origin)
+   return invalidCallback('BAD_ORIGIN');
+ if(!(request.headers.get('content-type')||'').toLowerCase().startsWith('application/json'))
+   return invalidCallback('SSO_INVALID_PROOF');
+ let params;
+ try{
+   const body=await request.text();
+   if(body.length>2048)throw Error('too long');
+   params=JSON.parse(body);
+ }catch{return invalidCallback('SSO_INVALID_PROOF');}
+ const state=params?.state,resumeSecret=params?.resume_secret;
+ if(typeof state!=='string'||!/^[a-f0-9]{64}$/.test(state)||
+   typeof resumeSecret!=='string'||!/^[a-f0-9]{64}$/.test(resumeSecret))
+   return invalidCallback('SSO_INVALID_PROOF');
+ const stateHash=await hashString(state);
+ const pending=await dbFirst(env.DB,`SELECT * FROM homeflow_oauth_pending
+   WHERE state_hash=? AND origin=? AND status='pending'
+    AND code_cipher IS NOT NULL AND code_iv IS NOT NULL AND expires_at>?`,
+   stateHash,url.origin,isoNow());
+ if(!pending || !safeEqual(await hashString(resumeSecret),pending.resume_secret_hash))
+   return invalidCallback('SSO_INVALID_PROOF');
+ // A legacy owner's original local session must still be active in this PWA,
+ // even if Safari authorized successfully. No borrowed Safari cookies.
+ if(pending.local_session_id){
+   const session=await localSession(env,request);
+   if(!session || session.session_id!==pending.local_session_id ||
+     session.user_id!==pending.local_user_id)
+     return invalidCallback('SSO_OWNER_PROOF_REQUIRED');
+ }
  const locked=await dbRun(env.DB,`UPDATE homeflow_oauth_pending
-   SET status='processing' WHERE state_hash=? AND status='pending' AND expires_at>?`,
-   hash,isoNow());
+   SET status='processing' WHERE state_hash=? AND status='pending'
+     AND code_cipher IS NOT NULL AND expires_at>?`,stateHash,isoNow());
  if(Number(locked?.meta?.changes)!==1)return invalidCallback('SSO_REPLAY');
  const fail=async reason=>{
    await dbRun(env.DB,`UPDATE homeflow_oauth_pending
-     SET status='failed',completed_at=? WHERE state_hash=? AND status='processing'`,
-     isoNow(),hash).catch(()=>null);
+     SET status='failed',completed_at=?,code_cipher=NULL,code_iv=NULL
+     WHERE state_hash=? AND status='processing'`,isoNow(),stateHash).catch(()=>null);
    return invalidCallback(reason);
  };
- const code=url.searchParams.get('code')||'';
- if(url.searchParams.has('error')||!/^[a-f0-9]{64}$/.test(code))
-   return fail('SSO_NO_CODE');
  try{
-   const verifier=await openVerifier(env,hash,pending);
+   const verifier=await openVerifier(env,stateHash,pending);
+   const code=await openVerifier(env,stateHash,{
+     verifier_cipher:pending.code_cipher,verifier_iv:pending.code_iv
+   });
+   if(!/^[a-f0-9]{64}$/.test(code))return fail('SSO_NO_CODE');
    const hf=await verifyHomeFlow(env,code,verifier);
    if(!hf)return fail('SSO_UNVERIFIED_IDENTITY');
    const local=await resolveLocalIdentity(env,pending,hf);
-   // Re-check and refresh the user-facing nickname. Keep the old local FK.
    if(!local.created)await dbRun(env.DB,
      'UPDATE users SET display_name=?,updated_at=? WHERE id=? AND status=? AND role=?',
      hf.nickname,isoNow(),local.localUserId,'active',hf.role);
    const cookieValue=randomToken(32),now=isoNow();
-   const exp=nowPlus(SESSION_MS);
    await env.DB.batch([
      env.DB.prepare(`INSERT INTO sessions
        (id,user_id,secret_hash,expires_at,created_at)
        VALUES(?,?,?,?,?)`)
-       .bind(randomToken(16),local.localUserId,await hashString(cookieValue),exp,now),
-     env.DB.prepare(`UPDATE homeflow_oauth_pending SET status='consumed',completed_at=?
-       WHERE state_hash=? AND status='processing'`).bind(now,hash)
+       .bind(randomToken(16),local.localUserId,await hashString(cookieValue),
+         nowPlus(SESSION_MS),now),
+     env.DB.prepare(`UPDATE homeflow_oauth_pending
+       SET status='consumed',completed_at=?,code_cipher=NULL,code_iv=NULL
+       WHERE state_hash=? AND status='processing'`).bind(now,stateHash)
    ]);
-   const headers=new Headers({
-     'Location':env.DA_PUBLIC_ORIGIN+'/?homeflow_sso=connected',
+   return json({ok:true,role:hf.role,nickname:hf.nickname},200,{
+     'Set-Cookie':cookieForSession(cookieValue,SESSION_MS/1000),
      'Cache-Control':'no-store','Referrer-Policy':'no-referrer'
    });
-   headers.append('Set-Cookie',cookieForSession(cookieValue,SESSION_MS/1000));
-   headers.append('Set-Cookie',clearState());
-   return new Response(null,{status:303,headers});
  }catch{return fail('SSO_LINK_FAILED');}
 }
