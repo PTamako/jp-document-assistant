@@ -53,6 +53,12 @@ test('Gemini status codes are categorized safely without exposing provider respo
  assert.equal(classifyGeminiHttpError(429),'gemini_quota_or_rate_limited');
  assert.equal(classifyGeminiHttpError(403),'gemini_access_denied');
  assert.equal(classifyGeminiHttpError(400),'gemini_invalid_request');
+ assert.equal(classifyGeminiHttpError(400,{error:{status:'FAILED_PRECONDITION'}}),'gemini_precondition_failed');
+ assert.equal(classifyGeminiHttpError(400,{error:{status:'INVALID_ARGUMENT',message:"Invalid value at 'generation_config.thinking_config.thinking_level'"}}),'gemini_thinking_invalid');
+ assert.equal(classifyGeminiHttpError(400,{error:{message:'Invalid responseMimeType parameter'}}),'gemini_response_format_invalid');
+ assert.equal(classifyGeminiHttpError(400,{error:{message:'Input token count exceeds model limit'}}),'gemini_input_limit');
+ assert.equal(classifyGeminiHttpError(400,{error:{details:[{reason:'API_KEY_INVALID'}],message:'private user request'}}),'gemini_access_denied');
+ assert.equal(classifyGeminiHttpError(400,{error:{message:'Text of a sensitive private document'}}),'gemini_invalid_request');
  assert.equal(classifyGeminiHttpError(404),'gemini_model_unavailable');
  assert.equal(classifyGeminiHttpError(503),'gemini_service_overloaded');
 });
