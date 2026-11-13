@@ -12,7 +12,7 @@ import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
 import { oauthCallback,handleBrowserGoogle } from './google-browser-oauth.js';
-import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso} from './homeflow-sso.js';
+import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso,homeflowSsoEnabled} from './homeflow-sso.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {workersAiImportPreview} from './ocr-import-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
@@ -527,7 +527,7 @@ async function route(request,env,ctx){
   }
   if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
   if(path==='/api/homeflow-sso/status' && request.method==='GET')
-    return new Response(JSON.stringify({enabled:env.HOMEFLOW_SSO_ENABLED==='true'}),
+    return new Response(JSON.stringify({enabled:homeflowSsoEnabled(env,url)}),
       {headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
   if(path==='/api/homeflow-sso/start')return startHomeFlowSso(request,env,url);
   if(path==='/api/homeflow-sso/callback')return callbackHomeFlowSso(request,env,url);
