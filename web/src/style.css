@@ -690,11 +690,12 @@ body{
 /* Compact Google source pickers: independent of recycle-bin card layout. */
 .google-source-sheet{max-height:min(88dvh,860px);min-width:0}
 .google-source-header{
-  position:sticky;top:0;z-index:3;display:grid;
+  /* One continuous frosted sheet: no opaque sticky banner above the content. */
+  position:relative;display:grid;
   grid-template-columns:44px minmax(0,1fr) 44px;
   gap:8px;align-items:center;min-width:0;min-height:52px;
   margin:0 -2px 5px;padding:3px 2px 6px;
-  background:var(--glass-sheet);
+  background:transparent;
 }
 .google-source-header h2{
   min-width:0;margin:0;text-align:center;font-size:19px;
@@ -705,7 +706,8 @@ body{
   flex:none;border-radius:14px;
 }
 .google-source-close,.google-disconnect{
-  background:var(--glass-card);border:1px solid var(--glass-outline);
+  /* Keep a 44px touch target without turning the header into three white cards. */
+  background:transparent;border:1px solid transparent;
 }
 .google-source-close{color:var(--secondary)}
 .google-disconnect{color:var(--danger)}
