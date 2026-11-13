@@ -208,7 +208,7 @@ function selectChoice(value){
   case 'importOcrEngine':importOcrEngine.value=value;importOcrSpaceConsent.value=false;break;
   case 'fileRetention':fileRetention.value=value;break;
   case 'reviewState':fieldDraft.state=value;break;
-  case 'taskVisibility':candidateDraft.visibility=value;candidateDraft.task_share_confirmed=false;break;
+  case 'taskVisibility':candidateDraft.visibility=value;candidateDraft.task_share_confirmed=false;candidateDraft.assignee='';candidateDraft.bonus_points=0;break;
   case 'ledgerCategory':candidateDraft.category=value;break;
   case 'ledgerPaymentSource':candidateDraft.payment_source=value;break;
  }
@@ -1559,7 +1559,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
         <p v-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))||(candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
   </div>
