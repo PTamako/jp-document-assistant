@@ -1,5 +1,6 @@
 import { randomToken, hashString, hmacHex, safeEqual, newCredential, checkPassword, parseCookie, cookieForSession, clearingCookie, sameOrigin, normalizedEmail, validatePassword, isoNow } from './security.js';
 import { parseJapaneseText,extractCampaignActionHints } from './analysis.js';
+import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
 import {isSalaryDepositNotice} from './payment-notices.js';
 import { deliveryTaskSuggestion } from './delivery-task.js';
 import { json, failure, readJson, bad, validString } from './http.js';
@@ -175,8 +176,8 @@ async function analyzeStored(env,doc,force=false){
   for(const f of result.fields){stmts.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',randomToken(16),doc.id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);}
   const amount=result.fields.find(f=>f.field_key==='net_salary'||f.field_key==='amount_jpy');
   if(amount && !['bank','topup','travel','hotel','shopping','delivery','medical','policy','terms','manual','campaign'].includes(result.category)){
-    const kind=result.category==='salary'?'income':'expense';
     const merchant=result.fields.find(f=>f.field_key==='merchant');
+    const kind=result.category==='salary'?'income':inferSbiInvestmentKind(merchant?.normalized_value)?'transfer':'expense';
     const stamp=result.fields.find(f=>['transaction_at','transaction_date'].includes(f.field_key));
     const note=result.category==='card_spend'?'信用卡单笔消费通知，需核对卡片、交易状态及是否已记账':'必须人工确认实际到账/付款并防重';
     stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'finance',
