@@ -37,7 +37,7 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.
  assert.equal(wrangler.preview_urls,false);
  assert.equal(wrangler.observability?.enabled,false);
- assert.deepEqual(wrangler.triggers,{crons:['*/2 * * * *']});
+ assert.deepEqual(wrangler.triggers,{crons:['*/5 * * * *']});
  for(const unwanted of ['kv_namespaces','queues','durable_objects','dispatch_namespaces','unsafe','containers','workflows','routes','route'])
    assert.equal(wrangler[unwanted],undefined,'unexpected billable/preview/routing setting '+unwanted);
 });
