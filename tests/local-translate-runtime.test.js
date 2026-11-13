@@ -69,7 +69,7 @@ test('iOS CORS or CSP failure automatically retries through same-origin fixed re
  await model.translate();
  assert.deepEqual(attempted.map(url=>url.includes('/api/local-translation/models/')), [false,true,false,true]);
  assert.match(attempted[1],/^\/api\/local-translation\/models\/source\.spm$/);
- assert.match(attempted[3],/^\/api\/local-translation\/models\/target\.spm$/);
+ assert.match(attempted[3],/^\/api\/local-translation\/models\/vocab\.json$/);
  assert.equal(model.messages.at(-1).code,'tokenizer_source');
  assert.ok(!attempted.some(url=>url.includes('ご利用ありがとうございます')));
 });
