@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import app from '../worker/index.js';
+import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
 import {geminiQuotaSlots,GEMINI_MODEL} from '../worker/gemini-budget.js';
 import {hmacHex} from '../worker/security.js';
 import {createZip} from '../web/src/zip.js';
@@ -2837,4 +2838,77 @@ test('re-interpret backfills only missing fully dated HomeFlow proposals and nev
   assert.equal(again.response.status,200);
   const rejected=(await req(env,'/api/documents/'+rejectedId+'/candidates',auth(owner))).data.items;
   assert.equal(rejected.filter(x=>x.candidate_kind==='homeflow_task').length,0);
+});
+
+
+test('SBI investment card notice is always a transfer, including pre-existing expense candidates',async()=>{
+ assert.equal(inferSbiInvestmentKind('SBI証券投信積立サービス（翌月買付分）'),'monthly');
+ assert.equal(inferSbiInvestmentKind('SBI証券 ポイント投資'),'purchase');
+ assert.equal(inferSbiInvestmentKind('SBI証券 投信 買付'),'purchase');
+ assert.equal(inferSbiInvestmentKind('SBI証券 保険料金'),'');
+ assert.equal(inferSbiInvestmentKind('セブン-イレブン 日用品'),'');
+ const env=makeEnv(),owner=await boot(env);
+ const notice=[
+  'いつも三井住友カードをご利用いただきありがとうございます。',
+  'カードの利用内容をお知らせします。',
+  'ご利用日時：2026/11/12 10:22',
+  'SBI証券投信積立サービス（翌月買付分） 15,000円'
+ ].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+  data:{retention:'summary',source_type:'text',text:notice}});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const amount=doc.fields.find(x=>x.field_key==='amount_jpy');
+ assert.equal(amount.normalized_value,'15000');
+ assert.equal((await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
+  data:{review_state:'confirmed',normalized_value:'15000'}})).response.status,200);
+ const candidate=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items
+   .find(x=>x.candidate_kind==='finance');
+ assert.ok(candidate,JSON.stringify(doc));
+ assert.equal(candidate.payload.kind,'transfer');
+ // Older persisted candidates already said "expense": new preview must still
+ // protect them without destroying their idempotency key.
+ env.DB.sql.prepare('UPDATE action_candidates SET payload_json=? WHERE id=?')
+  .run(JSON.stringify({...candidate.payload,kind:'expense'}),candidate.id);
+ const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+ env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{kakebo:'approved-kakebo-user'}});
+ env.KAKEBO_BRIDGE_SECRET='integration-secret-with-enough-entropy-1234';
+ const sent=[];
+ env.KAKEBO_BRIDGE_SERVICE={async fetch(request){
+  const data=JSON.parse(await request.text());
+  if(data.payload.operation==='options')return Response.json({ok:true,
+    categories:[{value:'投資・資産移動',label:'资产转移'}],
+    payment_sources:[{value:'三井住友カード',label:'三井住友カード'}],
+    suggested:{category:'投資・資産移動',payment_source:'三井住友カード'}});
+  sent.push(data);
+  return Response.json({ok:true,remote_id:'ledger-sbi-001'});
+ }};
+ const preview=await req(env,'/api/candidates/'+candidate.id+'/preview',auth(owner));
+ assert.equal(preview.response.status,200,JSON.stringify(preview.data));
+ assert.equal(preview.data.entry_type,'transfer');
+ assert.equal(preview.data.ledger_options.suggested.category,'投資・資産移動');
+ const send=transfer_date=>req(env,'/api/candidates/'+candidate.id+'/commit',{
+  method:'POST',...auth(owner),data:{confirm:'CONFIRM_ACCOUNTING',
+    payment_confirmed:true,date:'2026-11-12',category:'投資・資産移動',
+    payment_source:'三井住友カード',transfer_date},
+  extraHeaders:{'Idempotency-Key':'sbi-approved-transfer-123'}});
+ const missing=await send('');
+ assert.equal(missing.response.status,422);
+ assert.equal(missing.data.code,'TRANSFER_DATE_REQUIRED');
+ assert.equal(sent.length,0);
+ const done=await send('2026-12-15');
+ assert.equal(done.response.status,200,JSON.stringify(done.data));
+ assert.equal(sent.length,1);
+ const payload=sent[0].payload;
+ assert.deepEqual({
+  type:payload.type,category:payload.category,transferTarget:payload.transferTarget,
+  transferDate:payload.transferDate,sbiPurpose:payload.sbiPurpose,paymentSource:payload.paymentSource
+ },{
+  type:'transfer',category:'投資・資産移動',transferTarget:'sbi',
+  transferDate:'2026-12-15',sbiPurpose:'monthly',paymentSource:'三井住友カード'
+ });
+ const repeated=await send('2026-12-15');
+ assert.equal(repeated.data.already_synced,true);
+ assert.equal(sent.length,1);
 });
