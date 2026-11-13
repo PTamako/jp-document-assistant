@@ -117,7 +117,7 @@ export function classifyGeminiHttpError(status,body=null) {
    if(error.status==='FAILED_PRECONDITION')return 'gemini_precondition_failed';
    if(/thinking[_ .-]?(?:level|config|budget)|thinkingLevel/i.test(message))
     return 'gemini_thinking_invalid';
-   if(/response[_ .-]?(?:mime|format|json|schema)|responseMimeType|responseJsonSchema|application\\/json/i.test(message))
+   if(/response[_ .-]?(?:mime|format|json|schema)|responseMimeType|responseJsonSchema|application[/]json/i.test(message))
     return 'gemini_response_format_invalid';
    if(/(?:input|prompt|context|token|content|request).{0,50}(?:too (?:long|large)|exceed|limit)/i.test(message))
     return 'gemini_input_limit';
