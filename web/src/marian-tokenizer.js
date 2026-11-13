@@ -25,7 +25,17 @@ function skip(bytes,at,end,wire){
  else if(wire===1)at.i+=8;
  else if(wire===5)at.i+=4;
  else if(wire===2)at.i+=varint(bytes,at,end);
- else error('SPM_WIRE');
+ else if(wire===3){
+  // Protobuf group fields are rare but valid in extensions.
+  let depth=1;
+  while(at.i<end&&depth>0){
+   const tag=varint(bytes,at,end),nestedWire=tag%8;
+   if(nestedWire===3)depth++;
+   else if(nestedWire===4)depth--;
+   else skip(bytes,at,end,nestedWire);
+  }
+  if(depth!==0)error('SPM_TRUNCATED');
+ }else error('SPM_WIRE_'+wire);
  if(at.i>end)error('SPM_TRUNCATED');
 }
 function sliceField(bytes,at,end){
