@@ -107,3 +107,23 @@ test('recycle empty-all has a second confirmation, bounded server batches and no
  assert.match(server,/d\.lifecycle='active'/);
  assert.match(server,/processed_documents,processed_attachments,failed,remaining,has_more:remaining>0/);
 });
+
+test('Today becomes Pending without changing which documents qualify for its list',()=>{
+ const app=read('web/src/App.vue'),server=read('worker/index.js');
+ assert.match(app,/\{id:'today',name:'待办'\}/);
+ assert.match(app,/>待办概览<\/p>/);
+ assert.match(server,/if\(method==='GET'&&path==='\/api\/today'\)/);
+ assert.match(server,/d\.lifecycle='active' AND d\.archived_at IS NULL/);
+ assert.match(server,/AND \(d\.analysis_status='needs_review' OR EXISTS\(SELECT 1 FROM document_fields f WHERE f\.document_id=d\.id AND f\.field_key='due_date'\)\)/);
+});
+test('HomeFlow private/family task switch is always available and sharing private sources requires consent',()=>{
+ const app=read('web/src/App.vue'),bridge=read('worker/bridge.js');
+ assert.match(app,/taskVisibility:\{title:'同步到 HomeFlow',items:\[\{value:'private',label:'私人任务'\},\{value:'household',label:'家庭共享任务'\}\]\}/);
+ assert.doesNotMatch(app,/if\(field==='taskVisibility'&&current\.value\?\.visibility!=='shared'\)/);
+ assert.match(app,/current\?\.visibility==='private'&&candidateDraft\.visibility==='household'/);
+ assert.match(app,/v-model="candidateDraft\.task_share_confirmed"/);
+ assert.match(app,/!candidateDraft\.task_share_confirmed/);
+ assert.match(bridge,/body\.visibility==='household'&&body\.task_share_confirmed!==true/);
+ assert.match(bridge,/TASK_SHARE_CONFIRM_REQUIRED/);
+ assert.match(bridge,/visibility:body\.visibility/);
+});

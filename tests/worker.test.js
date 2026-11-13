@@ -999,6 +999,83 @@ test('HomeFlow delegated assignee explicitly carries bonus and synced status sur
   assert.equal(calls,1);
 });
 
+test('private document can create private or explicitly confirmed family HomeFlow task without exposing source',async()=>{
+ for(const visibility of ['private','household']){
+  const env=makeEnv(),owner=await boot(env);
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+   title:'私人银行文件（不要共享）',retention:'summary',source_type:'text',
+   text:'納付期限：令和8年11月30日（月）\n銀行口座番号 1234567890123456'
+  }});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  const id=imported.data.document_id;
+  const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+  assert.equal(doc.visibility,'private');
+  const due=doc.fields.find(field=>field.field_key==='due_date');
+  assert.ok(due);
+  const reviewed=await req(env,'/api/fields/'+due.id,{method:'PATCH',...auth(owner),
+   data:{review_state:'confirmed',normalized_value:'2026-11-30'}});
+  assert.equal(reviewed.response.status,200,JSON.stringify(reviewed.data));
+  const items=(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+  const task=items.find(item=>item.candidate_kind==='homeflow_task');
+  assert.ok(task,'a reviewed deadline has a HomeFlow task candidate');
+  const actor=env.DB.sql.prepare('SELECT id FROM users LIMIT 1').get().id;
+  env.BRIDGE_USER_MAP=JSON.stringify({[actor]:{homeflow:'homeflow_owner_123'}});
+  env.HOMEFLOW_BRIDGE_SECRET='test-homeflow-private-family-secret-123456';
+  const requests=[];
+  env.HOMEFLOW_BRIDGE_SERVICE={async fetch(request){
+   const msg=JSON.parse(await request.text());
+   requests.push(msg);
+   return Response.json({ok:true,remote_id:'homeflow-task-'+visibility});
+  }};
+  const data={confirm:'CONFIRM_TASK',title:'确认缴费',visibility};
+  const send=updates=>req(env,'/api/candidates/'+task.id+'/commit',{method:'POST',...auth(owner),
+   data:{...data,...updates},extraHeaders:{'Idempotency-Key':'homeflow-confirm-'+visibility+'-123'}});
+  if(visibility==='household'){
+   const unconfirmed=await send({});
+   assert.equal(unconfirmed.response.status,409,JSON.stringify(unconfirmed.data));
+   assert.equal(unconfirmed.data.code,'TASK_SHARE_CONFIRM_REQUIRED');
+   assert.equal(requests.length,0,'no remote request before explicit family sharing consent');
+  }
+  const success=await send({task_share_confirmed:visibility==='household'});
+  assert.equal(success.response.status,200,JSON.stringify(success.data));
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].payload.visibility,visibility);
+  assert.equal(requests[0].payload.title,'确认缴费');
+  assert.equal(requests[0].payload.dueOn,'2026-11-30');
+  assert.equal('task_share_confirmed' in requests[0].payload,false);
+  assert.equal(JSON.stringify(requests[0].payload).includes('1234567890123456'),false);
+  assert.equal(JSON.stringify(requests[0].payload).includes('私人银行文件'),false);
+  const stillPrivate=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+  assert.equal(stillPrivate.visibility,'private');
+  const retry=await send({task_share_confirmed:visibility==='household'});
+  assert.equal(retry.data.already_synced,true);
+  assert.equal(requests.length,1,'already synced task cannot duplicate');
+ }
+});
+
+test('Pending endpoint preserves review or due-date filtering and excludes archived records',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ async function importDoc(title,text){
+  const created=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+   data:{title,text,source_type:'text',retention:'summary'}});
+  assert.equal(created.response.status,201,JSON.stringify(created.data));
+  return created.data.document_id;
+ }
+ const reviewed=await importDoc('需要核验','纳付金額：1200円');
+ const due=await importDoc('到期文书','納付期限：令和8年11月30日（月）');
+ const regular=await importDoc('普通文书','こんにちは。何もありません。');
+ const archived=await importDoc('归档文书','納付期限：令和8年12月15日（火）');
+ env.DB.sql.prepare("UPDATE documents SET analysis_status='ready' WHERE id IN (?,?)").run(due,regular);
+ env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=?").run(regular);
+ env.DB.sql.prepare("UPDATE documents SET archived_at='2026-11-13T01:00:00Z' WHERE id=?").run(archived);
+ const result=await req(env,'/api/today?limit=10',auth(owner));
+ assert.equal(result.response.status,200,JSON.stringify(result.data));
+ const ids=result.data.items.map(d=>d.id);
+ assert.ok(ids.includes(reviewed),'needs-review document remains Pending');
+ assert.ok(ids.includes(due),'due-date document remains Pending');
+ assert.ok(!ids.includes(regular),'unreviewed flag cleared and no due date does not qualify');
+ assert.ok(!ids.includes(archived),'archived document is not Pending');
+});
 test('simultaneous permanent document deletions cannot abandon a shared R2 object',async()=>{
   const env=makeEnv(),owner=await boot(env);
   const form=()=>{const f=new FormData();f.append('file',new File([new Uint8Array([255,216,255,224,24,50,76])],'same.jpg',{type:'image/jpeg'}));f.append('retention','original');return f;};

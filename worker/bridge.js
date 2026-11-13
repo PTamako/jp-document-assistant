@@ -114,7 +114,10 @@ function validatedPayload(target,item,approved,body){
       if(date<today)bad('配送日期已过期，不允许创建过期配送待办','DELIVERY_DATE_PASSED',409);
     }
     if(!['private','household'].includes(body.visibility))bad('任务可见性无效');
-    if(item.visibility==='private'&&body.visibility!=='private')bad('私人文书不能创建共享任务','PRIVACY_BOUNDARY',403);
+    // Only a deliberately confirmed task is shared. The source document,
+    // attachments and original text stay private in the document app.
+    if(item.visibility==='private'&&body.visibility==='household'&&body.task_share_confirmed!==true)
+      bad('私人文书生成家庭共享任务，需要确认共享任务信息','TASK_SHARE_CONFIRM_REQUIRED',409);
     const bonusPoints=body.bonus_points===undefined?0:Number(body.bonus_points);
     if(!Number.isSafeInteger(bonusPoints)||bonusPoints<0||bonusPoints>10000)bad('额外任务积分必须是 0～10000 的整数','INVALID_BONUS',400);
     return {operation:'task',title:trim(body.title||x.title,120),dueOn:date,visibility:body.visibility,assignee:trim(body.assignee,60)||null,bonusPoints,remindEnabled:body.remindEnabled!==false};
