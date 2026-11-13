@@ -90,3 +90,11 @@ test('HomeFlow assignee selection uses picker instead of internal IDs',()=>{
   assert.ok(!app.includes('负责人 HomeFlow 用户 ID'));
   assert.ok(app.includes('核对家計簿状态'));
 });
+
+test('HomeFlow private assignment never displays both people, and paid delegated assignment is validated before sending',()=>{
+  const ui=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
+  assert.ok(!ui.includes('未指定（双方）'));
+  assert.ok(ui.includes("const needsOtherAssigneeBonus=computed"));
+  assert.ok(ui.includes('needsOtherAssigneeBonus&&(!Number.isSafeInteger(candidateDraft.bonus_points)'));
+  assert.ok(ui.includes('min="1" max="10000"'));
+});
