@@ -1309,33 +1309,69 @@ async function verifyLedgerStatus(item){
 }
 async function commitApprovedCandidate(){
  if(busy.value||!current.value)return;
+ const memberApproval=candidateApprovalRequired.value;
+ if(memberApproval&&!candidateApprovalReady.value){
+  problem(new Error('HomeFlow 审批申请暂不可用，尚未写入任何目标应用'));return;
+ }
  busy.value=true;
+ const account=accountEpoch.snapshot();
+ const stillCurrent=()=>{try{accountEpoch.assertCurrent(account);return true;}catch{return false;}};
  const id=candidateDraft.id,docId=current.value.id;
- const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value};
- if(body.kind==='finance'&&ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value){
+ const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',
+  confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value};
+ if(body.kind==='finance'&&!memberApproval&&ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value){
   problem(new Error('这笔消费有历史失败记录，请先勾选核对原记录后再提交'));
   busy.value=false;return;
  }
- if(body.kind==='finance'&&body.entry_type==='transfer'&&!body.transfer_date){problem(new Error('请选择 SBI 资金实际生效日'));busy.value=false;return;}
- if(body.kind==='finance'&&(!ledgerOptions.value.categories.some(x=>x.value===body.category)||
-   !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){problem(new Error('请从家計簿同步的分类和支付方式中选择'));busy.value=false;return;}
+ if(body.kind==='finance'&&body.entry_type==='transfer'&&!body.transfer_date){
+  problem(new Error('请选择 SBI 资金实际生效日'));busy.value=false;return;
+ }
+ if(body.kind==='finance'&&memberApproval&&
+    (!String(body.category||'').trim()||!String(body.payment_source||'').trim())){
+  problem(new Error('请填写申请使用的分类和支付账户；获批后仍需目标应用核验'));
+  busy.value=false;return;
+ }
+ if(body.kind==='finance'&&!memberApproval&&
+   (!ledgerOptions.value.categories.some(x=>x.value===body.category)||
+    !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){
+  problem(new Error('请从家計簿同步的分类和支付方式中选择'));
+  busy.value=false;return;
+ }
  let confirmed=false,feedback='';
  try{
-  const d=await api(`/api/candidates/${id}/commit`,{method:'POST',body,idempotencyKey:`jda-${id}`});
+  const path=memberApproval?'request-approval':'commit';
+  const d=await api(`/api/candidates/${id}/${path}`,{method:'POST',body,
+   ...(memberApproval?{}:{idempotencyKey:`jda-${id}`})});
+  if(!stillCurrent())return;
+  if(memberApproval){
+   if(d.approval_submitted!==true||d.applied!==false||d.target_changed!==false)
+    throw new Error('审批回执状态异常，没有确认目标应用写入');
+   candidateApprovalSubmitted.value=true;
+   candidateApprovalId.value=d.approval_id||'';
+   feedback=d.approval_status==='pending'
+    ?'已提交 HomeFlow 待审批，尚未同步到目标应用'
+    :'原审批申请已存在，请在 HomeFlow 查看状态；目标应用尚未写入';
+  }else{
+   feedback=d.recovered_prior?'家計簿已有该候选的旧记账；未重复写入，请核对分类':
+    d.already_synced?'已关联已有记录，不重复记账':'目标 App 已确认同步成功';
+  }
   confirmed=true;pendingCandidateRetry.value=null;
-  feedback=d.recovered_prior?'家計簿已有该候选的旧记账；未重复写入，请核对分类':d.already_synced?'已关联已有记录，不重复记账':'目标 App 已确认同步成功';
  }catch(e){
-  // Validation problems remain editable. A completed remote attempt closes
-  // this sheet while preserving its exact retry fields and failure state.
+  if(!stillCurrent())return;
+  // An ambiguous HomeFlow reply never becomes a success toast. The same
+  // candidate/snapshot may be retried, without creating a new approval ID.
+  if(memberApproval){problem(e);busy.value=false;return;}
   const attempted=String(e?.code||'').startsWith('TARGET_')||
    ['BRIDGE_UNCONFIRMED','LINK_CONFLICT','SENDING','RETRY_PAYLOAD_CHANGED'].includes(e?.code);
   if(!attempted){problem(e);busy.value=false;return;}
   pendingCandidateRetry.value={id,body};
   feedback='同步未成功：'+(e?.message||'请核对目标 App');
  }
+ if(!stillCurrent())return;
  sheet.value='';
  refreshDocumentViews();
  try{await openDoc(docId);}catch{}
+ if(!stillCurrent())return;
  if(confirmed)flash(feedback);else problem(new Error(feedback));
  busy.value=false;
 }
