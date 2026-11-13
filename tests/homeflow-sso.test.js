@@ -455,7 +455,7 @@ test('member document review requests retain an immutable private payload and cr
   f.env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED='true';
   f.env.DOCUMENT_APPROVAL_SUBMISSION_SECRET='d'.repeat(64);
   const original=f.env.HOMEFLOW_BRIDGE_SERVICE;
-  let submissions=0,lastWire=null,bridgeCalls=0;
+  let submissions=0,lastWire=null,bridgeCalls=0,loseOnceFor=null;
   f.env.HOMEFLOW_BRIDGE_SERVICE={fetch:async(request)=>{
    const url=new URL(request.url);
    if(url.pathname==='/api/internal/approvals/document-submit'){
@@ -474,12 +474,14 @@ test('member document review requests retain an immutable private payload and cr
      'household_id','payload_sha256','requester_user_id','resource_id','target_app']);
     assert.equal(body.requester_user_id,memberId);
     assert.equal(body.household_id,'primary');
-    assert.equal(body.resource_id,candidate);
+    assert.ok([candidate,'e'.repeat(32)].includes(body.resource_id));
     assert.equal(body.target_app,'it-study-platform');
     assert.match(body.payload_sha256,/^[a-f0-9]{64}$/);
     assert.doesNotMatch(raw,/確認|Private study|确认|かくにん/);
     lastWire=body;
-    return Response.json({ok:true,approval_id:'55555555-5555-4555-8555-555555555555',
+    if(loseOnceFor===body.resource_id){loseOnceFor=null;throw Error('lost HomeFlow response');}
+    return Response.json({ok:true,approval_id:body.resource_id===candidate?
+     '55555555-5555-4555-8555-555555555555':'66666666-6666-4666-8666-666666666666',
      status:'pending',...body,replayed:submissions>1,
      applied:false,target_changed:false});
    }
@@ -487,8 +489,8 @@ test('member document review requests retain an immutable private payload and cr
    return original.fetch(request);
   }};
   const post=async(payload={confirm:'CONFIRM_STUDY',privacy_confirmed:true,
-   redacted_term:'確認'})=>worker.fetch(new Request(
-   app+'/api/candidates/'+candidate+'/request-approval',{
+   redacted_term:'確認'},resource=candidate)=>worker.fetch(new Request(
+   app+'/api/candidates/'+resource+'/request-approval',{
     method:'POST',headers:{Origin:app,Cookie:cookie,'X-CSRF-Token':csrf,
      'Content-Type':'application/json'},body:JSON.stringify(payload)
    }),f.env,{});
@@ -521,6 +523,32 @@ test('member document review requests retain an immutable private payload and cr
    app+'/api/candidates/'+candidate+'/approval',{headers:{Cookie:cookie}}),f.env,{});
   assert.equal(status.status,200);
   assert.equal((await status.json()).approval_id,created.approval_id);
+  // Network reply loss creates a private 'prepared' record, not a second
+  // approval. A deliberate resume uses exactly the original frozen snapshot.
+  const second='e'.repeat(32);
+  f.sql.prepare(`INSERT INTO action_candidates
+   (id,document_id,candidate_kind,payload_json,created_at,updated_at)
+   VALUES(?,?,'vocabulary',?,?,?)`).run(second,doc,
+    JSON.stringify({term:'照会',meaning_zh:'查询'}),now(),now());
+  loseOnceFor=second;
+  const firstLost=await post({confirm:'CONFIRM_STUDY',privacy_confirmed:true,
+   redacted_term:'照会'},second);
+  assert.equal(firstLost.status,503);
+  assert.equal((await firstLost.json()).code,'APPROVAL_SUBMISSION_UNCONFIRMED');
+  const frozen=f.sql.prepare('SELECT * FROM document_member_sync_intents WHERE candidate_id=?').get(second);
+  assert.equal(frozen.status,'prepared');
+  assert.equal(frozen.approval_id,null);
+  const recovery=await post({confirm:'CONFIRM_STUDY',resume_existing:true},second);
+  assert.equal(recovery.status,200,await recovery.clone().text());
+  const recovered=await recovery.json();
+  assert.equal(recovered.approval_submitted,true);
+  assert.equal(recovered.applied,false);
+  assert.equal(recovered.target_changed,false);
+  assert.equal(f.sql.prepare('SELECT payload_json FROM document_member_sync_intents WHERE candidate_id=?').get(second).payload_json,
+   frozen.payload_json);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,2);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM audit_events WHERE kind='document_sync_approval_submitted'").get().n,2);
   assert.equal(bridgeCalls>=2,true,'member identity was live-introspected for each request');
   assert.throws(()=>f.sql.prepare('UPDATE document_member_sync_intents SET payload_sha256=?').run('f'.repeat(64)),/DOCUMENT_APPROVAL_INTENT_IMMUTABLE/);
   assert.throws(()=>f.sql.prepare('DELETE FROM document_member_sync_intents').run(),/DOCUMENT_APPROVAL_INTENT_NO_DELETE/);
