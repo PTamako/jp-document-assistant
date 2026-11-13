@@ -320,8 +320,8 @@ export async function completeHomeFlowSso(request,env,url){
      hf.sessionAssertionSeconds*1000));
    await env.DB.batch([
      env.DB.prepare(`INSERT INTO sessions
-       (id,user_id,secret_hash,expires_at,created_at)
-       VALUES(?,?,?,?,?)`)
+       (id,user_id,secret_hash,expires_at,created_at,auth_source)
+       VALUES(?,?,?,?,?,'homeflow')`)
        .bind(sessionId,local.localUserId,await hashString(cookieValue),
          proofExpires,now),
      env.DB.prepare(`INSERT INTO homeflow_session_proofs
