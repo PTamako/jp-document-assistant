@@ -13,6 +13,7 @@ import UiIcon from './UiIcon.vue';
 import { invalidateDocumentLists } from './document-list-cache.js';
 import { chineseExplanation } from './chinese-explanation.js';
 import { studySyncState } from './study-sync-status.js';
+import { inferSbiInvestmentKind } from '../../shared/sbi-investment.js';
 import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
@@ -103,7 +104,7 @@ let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
-const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
+const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 const needsOtherAssigneeBonus=computed(()=>
   candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
@@ -115,6 +116,8 @@ const sessions=ref([]),sessionsNext=ref(null);
 const missingYearDateDraft=ref(''),missingYearConfirmed=ref(false);
 const fieldLabel={due_date_partial:'原文截止日（月日）',required_action:'必须办理的事项',review_action:'需要确认的内容',merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
 const candidateLabel={finance:'家計簿 · 待确认记账',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
+const financeTypeLabel=item=>item?.payload?.kind==='income'?'收入':
+  (item?.payload?.kind==='transfer'||inferSbiInvestmentKind(item?.payload?.merchant))?'资产转移':'支出';
 const canManualSalary=computed(()=>current.value?.category==='salary'&&!current.value?.fields?.some(f=>f.field_key==='net_salary')&&/(?:入金内容|振込(?:による)?ご入金|振込入金)/.test(String(current.value?.extracted_text_ja||'').normalize('NFKC')));
 const topupAdvice=computed(()=>{
   if(current.value?.category!=='topup')return null;
@@ -1032,6 +1035,7 @@ async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(a
 async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
 async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
+ candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';
  const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
  candidateDraft.date=String(verifiedDate||item.payload?.transaction_date||'').slice(0,10);
  ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[]};
@@ -1076,6 +1080,7 @@ async function commitApprovedCandidate(){
   problem(new Error('这笔消费有历史失败记录，请先勾选核对原记录后再提交'));
   busy.value=false;return;
  }
+ if(body.kind==='finance'&&body.entry_type==='transfer'&&!body.transfer_date){problem(new Error('请选择 SBI 资金实际生效日'));busy.value=false;return;}
  if(body.kind==='finance'&&(!ledgerOptions.value.categories.some(x=>x.value===body.category)||
    !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){problem(new Error('请从家計簿同步的分类和支付方式中选择'));busy.value=false;return;}
  let confirmed=false,feedback='';
@@ -1287,7 +1292,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
           <p>扣款来源：<strong>待本人选择</strong>（不能从充值服务名称推断）</p>
           <p class="fine-print">当前家計簿安全接口只支持收入／支出，还不能接收资金转移。请先在家計簿手动选择「资产转移／充值」并核对是否已记账；此建议不会自动写入、不会重复记账。</p>
         </div>
-        <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted" v-if="item.candidate_kind==='finance'">{{item.payload.kind==='expense'?'支出':'收入'}} ¥{{Number(item.payload.amount_jpy).toLocaleString('ja-JP')}} · {{item.payload.merchant||'商户待确认'}} · {{item.payload.transaction_at||item.payload.transaction_date||'日期待确认'}}</p><p v-if="item.integration_state==='failed'" class="detail-note" role="status">上次同步未成功，未确认已记账。请核对后重试。</p>
+        <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted" v-if="item.candidate_kind==='finance'">{{financeTypeLabel(item)}} ¥{{Number(item.payload.amount_jpy).toLocaleString('ja-JP')}} · {{item.payload.merchant||'商户待确认'}} · {{item.payload.transaction_at||item.payload.transaction_date||'日期待确认'}}</p><p v-if="item.integration_state==='failed'" class="detail-note" role="status">上次同步未成功，未确认已记账。请核对后重试。</p>
           <p v-if="item.candidate_kind==='homeflow_task'" class="muted">{{(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p>
           <p v-if="item.candidate_kind==='finance'&&['synced','linked_existing'].includes(item.integration_state)" class="detail-note" role="status">
             {{financeStatusLabels[financeTargetStatus[item.id]]||'曾同步；家計簿当前状态尚未核对'}}
@@ -1578,9 +1583,11 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='restoreBackup'"><h2>确认恢复备份</h2><p>检查恢复内容。仅在点击确认后写入 D1 和私有 R2，不重发三个 App 的历史财务/任务/学习记录。</p><div v-for="(x,i) in restorePreview" :key="i" class="recycle-row"><div class="item-info"><strong>{{x.title}}</strong><small>{{x.action==='skip_duplicate'?'已存在 · 跳过':'恢复资料'}}{{x.has_original_reference?' · 原件按备份内容恢复':''}}</small></div></div><div class="sheet-actions"><button class="secondary" @click="sheet='backup'">取消</button><button class="primary" :disabled="busy" @click="confirmRestore">确认恢复</button></div></template>
       <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2>
-        <p v-if="candidateDraft.kind==='finance'&&candidateMerchant" class="muted">消费商户：{{candidateMerchant}}</p>
-        <label v-if="candidateDraft.kind==='finance'" class="form-label">{{current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}<input v-model="candidateDraft.date" type="date" /></label>
-        <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <p v-if="candidateDraft.kind==='finance'&&candidateMerchant" class="muted">交易商户：{{candidateMerchant}}</p>
+        <label v-if="candidateDraft.kind==='finance'" class="form-label">{{candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}<input v-model="candidateDraft.date" type="date" /></label>
+        <label v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label">SBI 资金生效日<input v-model="candidateDraft.transfer_date" type="date" /></label>
+        <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
+        <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
         <label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>已尝试同步，同意核对旧记录并防止重复记账</label>
@@ -1595,7 +1602,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
         <p v-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))||(candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)||(needsOtherAssigneeBonus&&(!Number.isSafeInteger(candidateDraft.bonus_points)||candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||(candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date)||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))||(candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)||(needsOtherAssigneeBonus&&(!Number.isSafeInteger(candidateDraft.bonus_points)||candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
   </div>
