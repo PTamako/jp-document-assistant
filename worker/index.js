@@ -8,6 +8,7 @@ import { attachmentTrash, attachmentRestore, attachmentDelete, attachmentList } 
 import { planBackup, exportBackup, previewImport, confirmImport } from './backup.js';
 import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus,integrationStatus } from './bridge.js';
+import {requestDocumentMemberApproval,documentMemberApprovalStatus} from './document-member-approval.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
@@ -1102,11 +1103,13 @@ ELSE 'unreviewed' END review_status,
   }
   const field=path.match(/^\/api\/fields\/([a-z0-9]+)$/i);
   if(method==='PATCH'&&field)return updateField(request,env,p,field[1]);
-  const candidate=path.match(/^\/api\/candidates\/([a-z0-9]+)\/(commit|preview|status)$/i);
+  const candidate=path.match(/^\/api\/candidates\/([a-z0-9]+)\/(commit|preview|status|request-approval|approval)$/i);
   if(candidate){
     if(method==='POST'&&candidate[2]==='commit')return commitCandidate(request,env,p,candidate[1]);
     if(method==='GET'&&candidate[2]==='preview')return candidatePreview(request,env,p,candidate[1]);
     if(method==='GET'&&candidate[2]==='status')return integrationStatus(env,p,candidate[1]);
+    if(method==='POST'&&candidate[2]==='request-approval')return requestDocumentMemberApproval(request,env,p,candidate[1]);
+    if(method==='GET'&&candidate[2]==='approval')return documentMemberApprovalStatus(env,p,candidate[1]);
   }
   if(method==='POST'&&['/api/auth/start','/api/auth/complete'].includes(path))return failure('AUTH_MODE_NOT_ENABLED','邮件挑战登录暂未启用，请使用密码登录',501);
   return failure('NOT_IMPLEMENTED','当前阶段尚未实现此接口',501);
