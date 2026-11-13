@@ -50,3 +50,15 @@ HomeFlow Draft #305 新增 15 分钟的**仅服务端** `session_assertion`：�
 已新增自动测试：双重绑定、无 Cookie Safari 回传、HomeFlow 源会话撤销、role/household 冒用、防重放、无 proof 不能回退 legacy、旧 owner 私人文书及 Google OAuth 不变。文书助手 [Pre-merge CI #43402597451](https://github.com/PTamako/jp-document-assistant/actions/runs/43402597451) success（Node/Python/D1 测试、Vue build）；该结果仍**不代表生产或设备验收**。
 
 **生产保护**：新 0022/原 0020/0021 迁移、HomeFlow 0053/0054、功能开关均未运行/启用。备份由用户在电脑上自行完成；在其确认加密持久备份及隔离恢复结果前不合并/上线。跨 App 真机登录、session 切换和角色失效需阶段 F 人工核验。
+
+
+## 2026-11-13 家庭共享文书操作权限与操作人审计增量（Draft，未上线）
+
+按照设计书 v1.1 的「私人文书仅自己，共享文书两人可读/改、管理员不默认查看私人原件」实现：
+- `worker/index.js` 新内部 `manageableDocument`：验证文书本人 owner，或同一 household 且真实 `visibility='shared'`。共享文书的标题/分类（普通）、收藏/归档/标签更新和 `document_fields` 人工核验现在允许双方，所有写 SQL 再次条件检查权限与版本；真实 `actor_user_id` 的审计与文书更新放同一 D1 batch。**共享范围仍仅原所有者可改**，非 owner 不能把共享文书转为敏感分类后偷偷继续公开；编辑失败不允许写假审计。 
+- 共享文书的移入回收站/恢复由双方操作，内部字段均按真实 actor 记录。原件永久删除仍是原 owner 专属，防止 R2 `storage_objects.owner_id` 与成员账号混用；无 R2 自动扫描。
+- `worker/lifecycle.js` 的共享附件现在允许双方移入回收站、恢复、查看附件回收列表，`worker/index.js` 允许成员对已有附件重新排序，全部采用再验权限、条件写入、真实 actor 审计；非 owner **不能永久删除**附件或做直接跨账号 R2 清理，撤销共享立即失去访问权限。
+- `tests/worker.test.js` 双人真实内存 SQLite/假 R2 验证：先私有不可访问→原 owner 显式共享→member 修改/回收/恢复/排序→版本冲突与审计→撤销后立即不可访问、R2 原件不变。
+- [Pre-merge CI #43406353483](https://github.com/PTamako/jp-document-assistant/actions/runs/43406353483) 已成功（共享文书基本操作）；其后新增共享附件协作的完整 [Pre-merge CI #43408316526](https://github.com/PTamako/jp-document-assistant/actions/runs/43408316526) **成功**（内存 D1+Vue build 等）。**所有代码仍在 Draft #97，生产没有迁移、合并或部署**。
+
+**保留未完成**：共享原件永久删除需要安全地以真实 owner 操作私有 R2 清理、记录实际成员 actor 并在发起时验证共享关系；新附件上传要处理异账号 R2 owner、权限和重复使用；共享关联候选动作可能仍需按所有权分支授权；文书助手将私人文书同步到 HomeFlow/知学/家計簿时必须贯彻各平台独立用户 ID 与 HomeFlow 审批 gate。不得把当前基础协作实现宣称为全站全部操作均已支持。
