@@ -200,7 +200,7 @@ const gmailAvailable=gmailConfigured(),gmailAuthorizedUi=ref(false),gmailIdentit
 const gmailPersistent=ref({enabled:false,connected:false,google_email:null,client_id:''});
 let gmailGeneration=0;
 const salaryAmountDraft=ref(''),salaryAmountConfirmed=ref(false);
-const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),inviteEmail=ref(''),inviteToken=ref('');
+const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),usageRefreshing=ref(false),inviteEmail=ref(''),inviteToken=ref('');
 const translationUsagePercent=computed(()=>{
  const used=Math.max(0,Number(usage.value?.translation_jst_day?.calls||0));
  const limit=Math.max(1,Number(usage.value?.translation_jst_day?.limit||80));
@@ -394,6 +394,7 @@ function clearPrivateWorkspace(){
   swipeOpenId.value='';swipeTrashTarget.value=null;
   clearGmailSession();revokeOriginal();closeSheet();current.value=null;
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
+  usageLoadSerial++;usageRefreshing.value=false;
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
   ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;candidateMerchant.value='';pendingCandidateRetry.value=null;
   homeflowMemberChoices.value=[{value:'',label:'未指定'}];homeflowMembersError.value='';
@@ -707,7 +708,19 @@ async function selectTab(tab){
   if(tab==='mine')void loadUsage(); // Refresh quota when returning from document translation.
 }
 async function searchDocs(){pages.docs.loaded=false;await loadTab('docs');closeSheet();}
-async function loadUsage(){try{usage.value=await api('/api/usage');}catch(e){problem(e);}}
+let usageLoadSerial=0;
+async function loadUsage(){
+ const serial=++usageLoadSerial;
+ usageRefreshing.value=true;
+ try{
+  const data=await api('/api/usage');
+  if(serial===usageLoadSerial)usage.value=data;
+ }catch(e){
+  if(serial===usageLoadSerial)problem(e);
+ }finally{
+  if(serial===usageLoadSerial)usageRefreshing.value=false;
+ }
+}
 async function cleanupStorage(){busy.value=true;try{const result=await api('/api/storage/cleanup-orphans',{method:'POST',body:{}});flash(result.pending?'部分 R2 文件清理失败，请稍后手动重试':`已清理 ${result.removed} 个无引用原件；不扫描 R2 全桶`);}catch(e){problem(e);}finally{busy.value=false;}}
 async function openDoc(id,{preserveScroll=true}={}){
   swipeOpenId.value='';
@@ -1389,20 +1402,30 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <button class="item-card link-list-card" v-for="item in pageData.items" :key="item.id" @click="openDoc(item.document_id)"><div class="item-icon"><UiIcon :name="candidateIcon(item.candidate_kind)" :size="22"/></div><div class="item-info"><div class="item-title">{{candidateLabel[item.candidate_kind]}}</div><p>{{item.title}} · {{item.candidate_kind==='finance'&&['synced','linked_existing'].includes(item.integration_state)?'曾同步 · 目标状态待核对':integrationLabel(item.integration_state)}}</p></div><span class="state-tag">预览</span></button>
         <button v-if="pageData.next!==null" class="load-more" @click="loadTab('links',true)">加载更多</button>
       </section>
-      <section v-else class="page-surface" key="mine">
+      <section v-else class="page-surface mine-page" key="mine">
         <div class="profile-card"><div class="avatar">{{(user.display_name||user.email||'我').slice(0,1).toUpperCase()}}</div><div><h3>{{user.display_name||'家庭成员'}}</h3><p class="muted">{{user.email}} · {{user.role==='owner'?'管理员':'家庭成员'}}</p></div></div>
-        <div class="section-head"><h3>家庭与数据</h3></div>
-        <button class="settings-line" v-if="user.role==='owner'" @click="sheet='invite'">邀请第二位家庭成员 <UiIcon name="chevron-right" :size="18"/></button>
-        <button class="settings-line" @click="showRecycle">回收站 <UiIcon name="chevron-right" :size="18"/></button>
-        <button class="settings-line" @click="sheet='backup'">备份与恢复 <UiIcon name="chevron-right" :size="18"/></button>
-        <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
-        <button class="settings-line" @click="loadUsage">刷新服务用量 <UiIcon name="refresh-cw" :size="17"/></button>
-        <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
-        <section class="usage-dashboard" v-if="usage" aria-label="服务用量">
-          <div class="usage-dashboard-header">
-            <h3>服务用量</h3>
-            <span class="usage-dashboard-period">今日 · 日本时间</span>
+        <section class="mine-section" aria-labelledby="mine-family-heading">
+          <h3 class="mine-section-heading" id="mine-family-heading">家庭与数据</h3>
+          <div class="mine-group-card">
+            <button class="settings-line" v-if="user.role==='owner'" @click="sheet='invite'">邀请第二位家庭成员 <UiIcon name="chevron-right" :size="18"/></button>
+            <button class="settings-line" @click="showRecycle">回收站 <UiIcon name="chevron-right" :size="18"/></button>
+            <button class="settings-line" @click="sheet='backup'">备份与恢复 <UiIcon name="chevron-right" :size="18"/></button>
+            <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
+            <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
           </div>
+        </section>
+        <section class="mine-section" aria-labelledby="mine-usage-heading">
+          <div class="mine-section-heading-row">
+            <h3 class="mine-section-heading" id="mine-usage-heading">服务用量</h3>
+            <button class="mine-usage-refresh" type="button" @click="loadUsage"
+              :disabled="usageRefreshing" aria-label="刷新服务用量" title="刷新服务用量">
+              <UiIcon name="refresh-cw" :size="17"/>
+            </button>
+          </div>
+          <div class="usage-dashboard" v-if="usage" aria-label="服务用量详情">
+            <div class="usage-dashboard-header">
+              <span class="usage-dashboard-period">今日 · 日本时间</span>
+            </div>
           <div class="usage-translation" v-if="usage.translation_jst_day">
             <div class="usage-translation-head">
               <div class="usage-translation-title">
@@ -1444,12 +1467,19 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
               <small>UTC 日额度</small>
             </div>
           </div>
-          <p class="usage-dashboard-note">翻译计数含已预留调用，缓存命中不扣次；与知学共用 Google 免费额度。</p>
+            <p class="usage-dashboard-note">翻译计数含已预留调用；缓存命中不扣次。与知学共用 Google 免费额度。</p>
+          </div>
+          <div v-else class="mine-group-card mine-usage-placeholder" role="status">服务用量尚未加载</div>
         </section>
-        <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
-        <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
-        <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
-        <p class="fine-print">删除文书不会删除其他 App 已同步的记录。</p>
+        <section class="mine-section" aria-labelledby="mine-account-heading">
+          <h3 class="mine-section-heading" id="mine-account-heading">账户与安全</h3>
+          <div class="mine-group-card">
+            <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
+            <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
+            <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
+          </div>
+        </section>
+        <p class="mine-footnote">删除文书不会删除其他 App 已同步的记录。</p>
       </section>
     </main>
     <nav class="bottom-nav" aria-label="主要导航">
