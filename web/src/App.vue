@@ -32,7 +32,7 @@ const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detail
 // Preserve exact retry fields in memory while the app stays open.
 const pendingCandidateRetry=ref(null);
 const ledgerOptions=ref({categories:[],paymentSources:[]}),ledgerOptionsError=ref(''),ledgerAttempted=ref(false),ledgerMappingChangeConfirmed=ref(false),candidateMerchant=ref('');
-const homeflowMemberChoices=ref([{value:'',label:'未指定（双方）'}]),homeflowMembersError=ref('');
+const homeflowMemberChoices=ref([{value:'',label:'未指定'}]),homeflowMembersError=ref('');
 const financeTargetStatus=reactive({});
 const financeStatusLabels={active:'家計簿账目仍存在',trashed:'家計簿账目已在回收站（不会重复记账）',missing:'目标账目已不存在，请在家計簿核对；不会自动重建'};
 const aiAnalysis=computed(()=>current.value?.ai_analysis?.result||null);
@@ -105,6 +105,9 @@ const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',confirm:'',date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
+const needsOtherAssigneeBonus=computed(()=>
+  candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
+  !!candidateDraft.assignee&&!homeflowMemberChoices.value.some(x=>x.value===candidateDraft.assignee&&x.self===true));
 // Selection belongs to THIS import only; never stored as a global/device default.
 const aiProvider=ref(''),geminiConsent=ref(false),docAiProvider=ref('none'),docGeminiConsent=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
@@ -279,7 +282,7 @@ function clearPrivateWorkspace(){
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
   ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;candidateMerchant.value='';pendingCandidateRetry.value=null;
-  homeflowMemberChoices.value=[{value:'',label:'未指定（双方）'}];homeflowMembersError.value='';
+  homeflowMemberChoices.value=[{value:'',label:'未指定'}];homeflowMembersError.value='';
   for(const key of Object.keys(financeTargetStatus))delete financeTargetStatus[key];
   sessions.value=[];sessionsNext.value=null;
   backupFile.value=null;backupPass.value='';backupOffset.value=0;
@@ -1034,7 +1037,7 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[]};
  ledgerOptionsError.value=d.ledger_options_error||'';
  homeflowMembersError.value=d.homeflow_members_error||'';
- homeflowMemberChoices.value=[{value:'',label:'未指定（双方）'},...(d.homeflow_members||[]).map(x=>({
+ homeflowMemberChoices.value=[{value:'',label:'未指定'},...(d.homeflow_members||[]).map(x=>({
    value:x.id,label:x.self?'我自己':x.label,self:x.self}))];
  ledgerAttempted.value=Number(d.integration?.attempt_count||0)>0&&d.integration?.state==='failed';ledgerMappingChangeConfirmed.value=false;
  // Suggestions are calculated by Kakebo against its real D1 merchant rules
@@ -1587,12 +1590,12 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         <label v-if="candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'" class="check-row"><input type="checkbox" v-model="candidateDraft.task_share_confirmed"/>确认将任务名称、日期等信息分享给家庭成员，原文与附件仍为私人</label>
         <div v-if="candidateDraft.kind==='homeflow_task'" class="choice-form-field"><span class="choice-field-label">负责人</span><button type="button" class="choice-field-control" :disabled="!!homeflowMembersError" @click="openChoice('taskAssignee')"><span>{{choiceLabel('taskAssignee')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p v-if="candidateDraft.kind==='homeflow_task'&&homeflowMembersError" class="fine-print" role="status">{{homeflowMembersError}}</p>
-        <label v-if="candidateDraft.kind==='homeflow_task' && candidateDraft.visibility==='household' && candidateDraft.assignee && !homeflowMemberChoices.some(x=>x.value===candidateDraft.assignee&&x.self)" class="form-label">指定对方时额外贡献积分（至少 1 分）<input v-model.number="candidateDraft.bonus_points" type="number" inputmode="numeric" min="0" max="10000" /><span class="fine-print">HomeFlow 现有规则要求指定其他成员时投入额外积分；请确认后再提交。余额不足时目标应用会拒绝，不会自动扣分。</span></label>
+        <label v-if="candidateDraft.kind==='homeflow_task' && needsOtherAssigneeBonus" class="form-label">指定对方时额外贡献积分（至少 1 分）<input v-model.number="candidateDraft.bonus_points" type="number" inputmode="numeric" min="1" max="10000" /><span class="fine-print">HomeFlow 现有规则要求指定其他成员时投入额外积分；请确认后再提交。余额不足时目标应用会拒绝，不会自动扣分。</span></label>
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
         <p v-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))||(candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))||(candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)||(needsOtherAssigneeBonus&&(!Number.isSafeInteger(candidateDraft.bonus_points)||candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
   </div>
