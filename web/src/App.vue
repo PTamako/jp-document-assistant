@@ -287,6 +287,29 @@ const candidateApprovalReady=ref(false),candidateApprovalSubmitted=ref(false),ca
 const needsOtherAssigneeBonus=computed(()=>
   candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
   !!candidateDraft.assignee&&!homeflowMemberChoices.value.some(x=>x.value===candidateDraft.assignee&&x.self===true));
+const candidateActionDisabled=computed(()=>{
+ if(busy.value)return true;
+ if(candidateApprovalRequired.value?!candidateApprovalReady.value:!integrationConfigured.value)return true;
+ if(candidateDraft.kind==='finance'){
+  if(!candidateDraft.date||
+   (candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date))return true;
+  if(candidateApprovalRequired.value){
+   if(!String(candidateDraft.category||'').trim()||
+      !String(candidateDraft.payment_source||'').trim())return true;
+  }else{
+   if(!ledgerOptions.value.categories.some(x=>x.value===candidateDraft.category)||
+      !ledgerOptions.value.paymentSources.some(x=>x.value===candidateDraft.payment_source)||
+      (ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value))return true;
+  }
+ }
+ if(candidateDraft.kind==='homeflow_task'&&current.value?.visibility==='private'&&
+    candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)return true;
+ if(needsOtherAssigneeBonus.value&&
+    (!Number.isSafeInteger(candidateDraft.bonus_points)||
+     candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))return true;
+ return false;
+});
+
 // Selection belongs to THIS import only; never stored as a global/device default.
 const aiProvider=ref(''),geminiConsent=ref(false),docAiProvider=ref('none'),docGeminiConsent=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
@@ -2002,8 +2025,10 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
-        <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
-        <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">申请分类（管理员批准后仍需账本核验）<input v-model="candidateDraft.category" maxlength="80" placeholder="填写家計簿分类" /></label>
+        <div v-else-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">申请支付账户（必须为本人账户）<input v-model="candidateDraft.payment_source" maxlength="100" placeholder="待目标账本二次验证" /></label>
+        <div v-else-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
         <label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>已尝试同步，同意核对旧记录并防止重复记账</label>
         <label v-if="candidateDraft.kind==='finance'" class="form-label">备注<input v-model="candidateDraft.note" /></label>
@@ -2016,9 +2041,11 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
-        <p v-if="candidateApprovalRequired" class="info-note" role="status">需要 HomeFlow 管理员审批。当前尚未提交申请，也没有同步到目标应用；审批联动功能开放后才能继续。</p>
+        <p v-if="candidateApprovalRequired&&candidateApprovalSubmitted" class="info-note" role="status">已提交 HomeFlow 审批，尚未同步目标应用。审批结果请到 HomeFlow 查看。</p>
+        <p v-else-if="candidateApprovalRequired&&candidateApprovalReady" class="info-note" role="status">将请求家庭管理员审批。这里只提交申请，不直接记账、建任务或保存生词。</p>
+        <p v-else-if="candidateApprovalRequired" class="info-note" role="status">HomeFlow 管理员审批入口暂未启用，没有提交申请或写入目标应用。</p>
         <p v-else-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||(candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date)||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))||(candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)||(needsOtherAssigneeBonus&&(!Number.isSafeInteger(candidateDraft.bonus_points)||candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':'提交 HomeFlow 审批'):ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
   </div>
