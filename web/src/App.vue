@@ -20,6 +20,74 @@ import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const initialized=ref(null);
+// HomeFlow SSO is invisible until the backend explicitly opts in.
+// The 5-minute resume proof stays only in the original PWA session.
+const homeflowSsoAvailable=ref(false),homeflowSsoPending=ref(false),homeflowSsoBusy=ref(false);
+const SSO_PENDING_KEY='da-homeflow-sso-pending';
+function readHomeflowSsoPending(){
+ try{
+  const raw=sessionStorage.getItem(SSO_PENDING_KEY);
+  if(!raw)return null;
+  const data=JSON.parse(raw);
+  if(!/^[a-f0-9]{64}$/.test(data?.state||'')||
+     !/^[a-f0-9]{64}$/.test(data?.resume_secret||'')||
+     !Number.isFinite(data?.until)||Date.now()>data.until){
+   sessionStorage.removeItem(SSO_PENDING_KEY);return null;
+  }
+  return data;
+ }catch{return null;}
+}
+function clearHomeflowSsoPending(){
+ try{sessionStorage.removeItem(SSO_PENDING_KEY);}catch{}
+ homeflowSsoPending.value=false;
+}
+async function refreshHomeflowSsoAvailability(){
+ try{
+  const r=await fetch('/api/homeflow-sso/status',{credentials:'same-origin',cache:'no-store'});
+  homeflowSsoAvailable.value=r.ok&&(await r.json()).enabled===true;
+ }catch{homeflowSsoAvailable.value=false;}
+ homeflowSsoPending.value=homeflowSsoAvailable.value&&!!readHomeflowSsoPending();
+}
+async function beginHomeflowSso(){
+ if(!homeflowSsoAvailable.value||homeflowSsoBusy.value)return;
+ homeflowSsoBusy.value=true;error.value='';
+ try{
+  const r=await fetch('/api/homeflow-sso/start',{method:'POST',credentials:'same-origin',
+   cache:'no-store',headers:{'Content-Type':'application/json'},body:'{}'});
+  const data=await r.json();
+  if(!r.ok||!data.ok)throw Error(data.code||'无法开始 HomeFlow 授权');
+  const url=new URL(data.authorization_url);
+  if(url.protocol!=='https:'||!/^[a-f0-9]{64}$/.test(data.state||'')||
+     !/^[a-f0-9]{64}$/.test(data.resume_secret||''))
+   throw Error('登录请求无效');
+  sessionStorage.setItem(SSO_PENDING_KEY,JSON.stringify({
+   state:data.state,resume_secret:data.resume_secret,until:Date.now()+300000
+  }));
+  homeflowSsoPending.value=true;
+  window.location.assign(url.href);
+ }catch(e){problem(e);homeflowSsoBusy.value=false;}
+}
+async function completeHomeflowSso(){
+ const p=readHomeflowSsoPending();
+ if(!p){clearHomeflowSsoPending();problem('登录已过期，请重新授权');return;}
+ if(homeflowSsoBusy.value)return;
+ homeflowSsoBusy.value=true;error.value='';
+ try{
+  const r=await fetch('/api/homeflow-sso/complete',{method:'POST',
+   credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({state:p.state,resume_secret:p.resume_secret})});
+  const data=await r.json();
+  if(!r.ok||!data.ok)throw Error(data.code||'登录尚未完成');
+  clearHomeflowSsoPending();
+  clearPrivateWorkspace();
+  await boot();
+  flash('HomeFlow 登录成功');
+ }catch(e){
+  problem(e);
+  if(['SSO_INVALID_PROOF','SSO_INVALID_STATE'].includes(e.message))
+   clearHomeflowSsoPending();
+ }finally{homeflowSsoBusy.value=false;}
+}
 const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
 const passwordDraft=reactive({current_password:'',new_password:'',confirm_password:''});
 const calendarLink=ref(''),calendarStatusInfo=ref(null),calendarShowTitle=ref(false);
@@ -680,7 +748,7 @@ async function changePassword(){
 }
 async function logout(){
   try{await api('/api/auth/logout',{method:'POST'});}catch{}
-  clearPrivateWorkspace();auth.password='';
+  clearHomeflowSsoPending();clearPrivateWorkspace();auth.password='';
 }
 async function loadTab(tab,append=false){
   const page=pages[tab];if(!page)return;
@@ -1345,7 +1413,8 @@ onMounted(async()=>{
   document.addEventListener('visibilitychange',onGoogleVisibility);
   window.addEventListener('pageshow',onAppPageShow);
   window.addEventListener('focus',onAppPageShow);
-  await boot();if(!user.value)await refreshInitStatus();
+  await Promise.all([boot(),refreshHomeflowSsoAvailability()]);
+  if(!user.value)await refreshInitStatus();
 });
 onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',onAppPageShow);window.removeEventListener('focus',onAppPageShow);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
@@ -1358,6 +1427,16 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <p class="eyebrow">私人家庭空间</p>
       <h1>日本生活文书助手</h1>
       <p class="muted auth-intro">读懂日本生活文书，重要事项不错过。</p>
+      <div v-if="homeflowSsoAvailable" class="auth-panel stack">
+        <button v-if="homeflowSsoPending" type="button" class="primary action-large"
+          :disabled="homeflowSsoBusy" @click="completeHomeflowSso">
+          {{homeflowSsoBusy?'核验中…':'完成 HomeFlow 登录'}}
+        </button>
+        <button type="button" class="secondary action-large"
+          :disabled="homeflowSsoBusy" @click="beginHomeflowSso">
+          {{homeflowSsoPending?'重新授权':'使用 HomeFlow 登录'}}
+        </button>
+      </div>
       <div class="auth-panel">
         <div class="segments"><button v-for="m in [{id:'login',name:'登录'},{id:'bootstrap',name:'首次设置'},{id:'join',name:'接受邀请'}]" :key="m.id" :class="{selected:authMode===m.id}" @click="authMode=m.id;error=''">{{m.name}}</button></div>
         <p v-if="initialized===false" class="fine-print">家庭尚未初始化。请使用「首次设置」，输入 Cloudflare 中完整的初始化令牌。设置完成后再使用「登录」。</p>
@@ -1417,6 +1496,14 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <section class="mine-section" aria-labelledby="mine-account-heading">
           <h3 class="mine-section-heading" id="mine-account-heading">账户与安全</h3>
           <div class="mine-group-card">
+            <button v-if="homeflowSsoAvailable && homeflowSsoPending" class="settings-line"
+              :disabled="homeflowSsoBusy" @click="completeHomeflowSso">
+              完成 HomeFlow 关联 <UiIcon name="chevron-right" :size="18"/>
+            </button>
+            <button v-if="homeflowSsoAvailable" class="settings-line"
+              :disabled="homeflowSsoBusy" @click="beginHomeflowSso">
+              使用 HomeFlow 登录 / 关联 <UiIcon name="chevron-right" :size="18"/>
+            </button>
             <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
             <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
             <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
