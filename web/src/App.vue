@@ -1414,6 +1414,14 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <button class="settings-line" :disabled="busy" @click="cleanupStorage">清理无引用原件 <UiIcon name="refresh-cw" :size="17"/></button>
           </div>
         </section>
+        <section class="mine-section" aria-labelledby="mine-account-heading">
+          <h3 class="mine-section-heading" id="mine-account-heading">账户与安全</h3>
+          <div class="mine-group-card">
+            <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
+            <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
+            <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
+          </div>
+        </section>
         <section class="mine-section" aria-labelledby="mine-usage-heading">
           <div class="mine-section-heading-row">
             <h3 class="mine-section-heading" id="mine-usage-heading">服务用量</h3>
@@ -1470,14 +1478,6 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <p class="usage-dashboard-note">翻译计数含已预留调用；缓存命中不扣次。与知学共用 Google 免费额度。</p>
           </div>
           <div v-else class="mine-group-card mine-usage-placeholder" role="status">服务用量尚未加载</div>
-        </section>
-        <section class="mine-section" aria-labelledby="mine-account-heading">
-          <h3 class="mine-section-heading" id="mine-account-heading">账户与安全</h3>
-          <div class="mine-group-card">
-            <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
-            <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
-            <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
-          </div>
         </section>
         <p class="mine-footnote">删除文书不会删除其他 App 已同步的记录。</p>
       </section>
