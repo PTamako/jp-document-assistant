@@ -38,11 +38,13 @@ const KAKEBO_REJECTIONS={
  actor_not_allowed:['TARGET_ACTOR_NOT_ALLOWED','家計簿未授权当前账号映射，本次没有记账'],
  invalid_source:['TARGET_INVALID_SOURCE','家計簿拒绝联动来源或幂等键，本次没有记账'],
  invalid_entry:['TARGET_INVALID_ENTRY','家計簿拒绝日期、金额或分类，本次没有记账'],
+ merchant_confirmation_required:['TARGET_MERCHANT_CONFIRMATION','请先在文书中确认商家或付款方，本次没有记账'],
+ category_not_registered:['TARGET_CATEGORY_CHANGED','家計簿分类已更新，请重新选择分类，本次没有记账'],
  invalid_text:['TARGET_INVALID_TEXT','家計簿拒绝了文字字段，本次没有记账'],
  payment_source_missing:['TARGET_PAYMENT_SOURCE_MISSING','家計簿没有登记该支付方式，本次没有记账'],
  payment_source_invalid:['TARGET_PAYMENT_SOURCE_INVALID','家計簿支付方式无效，本次没有记账'],
  payment_source_archived:['TARGET_PAYMENT_SOURCE_ARCHIVED','家計簿支付方式已归档，本次没有记账'],
- duplicate_candidate:['TARGET_DUPLICATE_CANDIDATE','家計簿可能已有同日、同金额、同卡的支出；未重复写入，请核对明细']
+ duplicate_candidate:['TARGET_DUPLICATE_CANDIDATE','家計簿可能已有同店、同金额、同卡且时间相近的明细；未重复写入，请核对']
 };
 export function classifyBridgeRejection(target,status,body){
  if(target!=='kakebo'||!Number.isInteger(status)||status<400||status>=500)return null;
