@@ -73,3 +73,9 @@ HomeFlow Draft #305 新增 15 分钟的**仅服务端** `session_assertion`：�
 - 自动回归覆盖共享前不可见、共享后双人权限、未先回收时不允许物理删除、共享成员删除两份同一 R2 的不同附件、唯一原件最后才删除、墓碑原始 owner、审计真实 actor、撤销共享立即 404、重复请求不再写成功日志。
 - 提交：[`06f9fb11`](https://github.com/PTamako/jp-document-assistant/commit/06f9fb11e0ab443de895767a384fe4985385d9ae)、[`6df3a333`](https://github.com/PTamako/jp-document-assistant/commit/6df3a333bc1d0fb4263bf99b1e36a39f5b1ace4a)；[Pre-merge CI #43438562835](https://github.com/PTamako/jp-document-assistant/actions/runs/43438562835) **success**。
 - 仍未完成：共享文书整份永久删除的跨所有者 R2 权限/恢复补偿，邮件与 Drive 源 OAuth 严格只归本人，跨 App 同步审批与单人旧会话清退，两个 iPhone 的授权/删除及断网真机验收。尤其不能因本模块而把未经迁移的生产身份功能打开。
+
+### 后续并发补强（同一 Draft，未上线）
+
+- `a124498da64b822a2ac238148e256634845ddd45` 修复“共享成员通过 D1/R2 授权校验并完成物理 R2 删除时，原所有者刚好取消共享”的 TOCTOU 边界：以开始删除和 R2 精确声明时的有效授权作为不可撤回的执行点，R2.delete 之后必须完成已登记的 `deletion_pending` 元数据清理，避免留下仍然引用已删除字节的附件。不增加陌生人读写权限；新请求在共享撤销后仍 404。
+- `d7fdc4e4feb994d2f33c71d3dfdf4e34ad690fcc` 新增在 `DOCUMENTS.delete` 过程中模拟撤销共享的 D1/R2 竞争测试：最终 R2 和附件引用均被精确清除，墓碑仍归原主，审计 `actor_user_id` 仍为实际执行的协作者，撤销后其他私人读取拒绝。
+- 最新包含该并发回归的 [Pre-merge CI #43440624817](https://github.com/PTamako/jp-document-assistant/actions/runs/43440624817) **success**，不等于生产部署或实机验收。后续仍需设计整份共享文书删除的独立容错机制，不能简单照搬附件清理的权限范围。
