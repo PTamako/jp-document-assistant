@@ -2856,7 +2856,7 @@ test('SBI investment card notice is always a transfer, including pre-existing ex
  ].join('\n');
  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
   data:{retention:'summary',source_type:'text',text:notice}});
- assert.equal(imported.response.status,200,JSON.stringify(imported.data));
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
  const id=imported.data.document_id;
  const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
  const amount=doc.fields.find(x=>x.field_key==='amount_jpy');
