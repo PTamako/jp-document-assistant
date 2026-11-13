@@ -6,12 +6,12 @@ import {enqueueDocumentAi,getDocumentAiJob,processDocumentAiJob} from '../worker
 
 function setup(){
  const sql=new DatabaseSync(':memory:');
- sql.exec("PRAGMA foreign_keys=ON; CREATE TABLE documents(id TEXT PRIMARY KEY, lifecycle TEXT DEFAULT 'active');");
+ sql.exec("PRAGMA foreign_keys=ON; CREATE TABLE documents(id TEXT PRIMARY KEY, lifecycle TEXT DEFAULT 'active', category TEXT, ai_provider TEXT, ai_consent_at TEXT, extracted_text_ja TEXT);");
  sql.exec(fs.readFileSync(new URL('../migrations/0012_document_ai_analysis.sql',import.meta.url),'utf8'));
  sql.exec(fs.readFileSync(new URL('../migrations/0018_document_ai_jobs.sql',import.meta.url),'utf8'));
  const db={prepare(query){return {bind(...args){const s=sql.prepare(query);
  return {first:async()=>s.get(...args)||null,run:async()=>({meta:{changes:s.run(...args).changes}}),all:async()=>({results:s.all(...args)})};}}}};
- sql.prepare("INSERT INTO documents(id,lifecycle) VALUES('doc1','active')").run();
+ sql.prepare("INSERT INTO documents(id,lifecycle,category,ai_provider,ai_consent_at,extracted_text_ja) VALUES('doc1','active','utility','gemini','2026-11-13T00:00:00Z','原文与队列不一致')").run();
  return {sql,env:{DB:db}};
 }
 const doc=(text='これは請求書です。',provider='gemini')=>({
