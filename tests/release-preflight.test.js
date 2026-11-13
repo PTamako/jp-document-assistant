@@ -59,6 +59,7 @@ test('private auth/API responses have strict session cookies, CSRF, no-store, an
  assert.match(read('worker/http.js'),/Cache-Control':'no-store'/);
  assert.doesNotMatch(worker,/\\.list\(/);
  assert.doesNotMatch(worker,/env\.DOCUMENTS\.createSignedUrl/);
+ assert.doesNotMatch(worker,/serveLocalTranslationModel|\/api\/local-translation\/models/);
 });
 
 test('Cloudflare PBKDF2 is within supported 100k iteration bound and frontend guides initialization',()=>{
