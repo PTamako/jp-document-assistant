@@ -1,6 +1,7 @@
 // Cross-application integration is opt-in and fail-closed. Never write to another app's D1.
 // All requests are authenticated server-to-server and assigned a stable idempotency key.
 import { randomToken, hmacHex, isoNow, hashString } from './security.js';
+import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
 import { json, bad, readJson, failure } from './http.js';
 const TARGETS={finance:'kakebo',homeflow_task:'homeflow',vocabulary:'zhixue',sentence:'zhixue'};
 const CONFIRMATIONS={finance:'CONFIRM_ACCOUNTING',homeflow_task:'CONFIRM_TASK',vocabulary:'CONFIRM_STUDY',sentence:'CONFIRM_STUDY'};
@@ -86,26 +87,38 @@ async function checkedFields(env,docId){
   const rs=(await env.DB.prepare('SELECT field_key,normalized_value,review_state FROM document_fields WHERE document_id=?').bind(docId).all()).results||[];
   return new Map(rs.filter(x=>['confirmed','corrected'].includes(x.review_state)).map(x=>[x.field_key,x.normalized_value]));
 }
+function ledgerEntryType(x,merchant=x.merchant){
+  if(['expense','transfer'].includes(x.kind)&&inferSbiInvestmentKind(merchant))return 'transfer';
+  return x.kind;
+}
 function validatedPayload(target,item,approved,body){
   const x=JSON.parse(item.payload_json);
   if(target==='kakebo'){
     const amountText=approved.get(x.kind==='income'?'net_salary':'amount_jpy');
     const amount=Number(amountText);
     if(!safeVal(amount)||amount!==x.amount_jpy)bad('必须先核对金额；金额修改后请重新生成候选','REVIEW_REQUIRED',409);
-    if(!['income','expense'].includes(x.kind))bad('信用卡还款/账单不能直接作为收支','NOT_EXPENSE',409);
     if(body.payment_confirmed!==true||!/^(?:19|20)\d\d-\d\d-\d\d$/.test(body.date||''))bad('请确认真实付款或到账日期','CONFIRM_REQUIRED',409);
     if(!trim(body.category,80)||!trim(body.payment_source,100))bad('请选择目标账本的类别与支付账户','MISSING_MAPPING',422);
-    // Prefer the user's verified merchant, falling back to the extracted
-    // candidate. The source of truth is server-side, not browser-sent text.
+    // Reviewed source fields take precedence; do not trust browser-supplied
+    // entry types, merchants or investment purposes.
     const merchant=trim(approved.get('merchant')||x.merchant,100);
+    const type=ledgerEntryType(x,merchant);
+    if(!['income','expense','transfer'].includes(type))bad('不支持的财务联动类型','INVALID_ENTRY_TYPE',409);
+    const purpose=inferSbiInvestmentKind(merchant);
+    if(type==='transfer'&&(!purpose||trim(body.category,80)!=='投資・資産移動'))
+      bad('证券资金转移必须使用正确的投资类型与资产转移分类','INVALID_TRANSFER',422);
+    const transferDate=type==='transfer'?trim(body.transfer_date,10):'';
+    if(type==='transfer'&&(!/^(?:19|20)\d\d-\d\d-\d\d$/.test(transferDate)||
+      !Number.isFinite(Date.parse(transferDate+'T00:00:00Z'))||
+      new Date(transferDate+'T00:00:00Z').toISOString().slice(0,10)!==transferDate))
+      bad('请先确认 SBI 证券资金实际生效日','TRANSFER_DATE_REQUIRED',422);
     const approvedTimestamp=String(approved.get('transaction_at')||'');
-    // Never invent a purchase clock or use the email's received timestamp.
-    // Only a reviewed source-backed timestamp matching the selected date is sent.
     const time=approvedTimestamp.slice(0,10)===body.date&&
       /^\d{4}-\d\d-\d\d (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(approvedTimestamp)
       ?approvedTimestamp.slice(11,16):'';
-    return {operation:'entry',type:x.kind,date:body.date,time,amount,category:trim(body.category,80),
+    return {operation:'entry',type,date:body.date,time,amount,category:trim(body.category,80),
       paymentSource:trim(body.payment_source,100),merchant,note:trim(body.note,180),
+      ...(type==='transfer'?{transferTarget:'sbi',transferDate,sbiPurpose:purpose}:{}),
       source_kind:'document_assistant'};
   }
   if(target==='homeflow'){
@@ -150,7 +163,7 @@ export async function ledgerPickerOptions(env,userId,kind,merchant='',recognized
  const dest=config(env,'kakebo'),actor=authorizedMapping(env,userId,'kakebo');
  if(!dest)return {error:'家計簿安全联动尚未配置'};
  if(!actor)return {error:'家計簿账号尚未完成授权映射'};
- if(!['income','expense'].includes(kind))return {error:'不支持的记账类型'};
+ if(!['income','expense','transfer'].includes(kind))return {error:'不支持的记账类型'};
  const body=JSON.stringify({source:'jp-document-assistant',actor_user_id:actor,
   payload:{operation:'options',entryType:kind,merchant:String(merchant||'').slice(0,100),
     recognizedPayment:String(recognizedPayment||'').slice(0,80)}});
@@ -250,9 +263,11 @@ export async function candidatePreview(request,env,p,id){
   const fields=await checkedFields(env,item.document_id);
   const link=await first(env.DB,'SELECT state,remote_id,attempt_count,last_error_code FROM integration_links WHERE candidate_id=?',id);
   const payload=JSON.parse(item.payload_json);
-  const picker=target==='kakebo'?await ledgerPickerOptions(env,p.user_id,payload.kind,payload.merchant,payload.payment_source_hint):null;
+  const verifiedMerchant=fields.get('merchant')||payload.merchant;
+  const entryType=target==='kakebo'?ledgerEntryType(payload,verifiedMerchant):null;
+  const picker=target==='kakebo'?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
   const members=target==='homeflow'?await homeflowMemberOptions(env,p.user_id,id):null;
-  return json({candidate_id:id,target,kind:item.candidate_kind,payload,ledger_options:picker?.data||null,
+  return json({candidate_id:id,target,kind:item.candidate_kind,payload,entry_type:entryType,ledger_options:picker?.data||null,
     ledger_options_error:picker?.error||null,
     homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
