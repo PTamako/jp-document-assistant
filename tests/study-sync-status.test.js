@@ -20,5 +20,5 @@ test('both vocabulary and sentence cards use the server link status',()=>{
   assert.equal((vue.match(/studySyncState\(item\)==='linked'/g)||[]).length,2);
   assert.equal((vue.match(/class="study-sync-tag"/g)||[]).length,2);
   assert.equal((vue.match(/v-if="!\['linked','sending'\]\.includes\(studySyncState\(item\)\)"/g)||[]).length,2);
-  assert.match(vue,/openDoc\(docId,\{preserveTab:true,preserveScroll:true\}\)/);
+  assert.match(vue,/openDoc\(docId\)/);
 });
