@@ -3184,3 +3184,115 @@ test('an already authorized shared-attachment purge finishes metadata cleanup if
  assert.equal((await req(env,'/api/documents/'+docId,auth(member))).response.status,404,
   'after revocation, no further private reads are granted');
 });
+
+
+test('Stage E shared document does not expose the owner private integration candidate or remote ledger ID',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const invite=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
+    data:{invitee_email:'private-bridge-member@example.com'}});
+  const join=await req(env,'/api/household/join',{method:'POST',data:{
+    invite_token:invite.data.invite_token,email:'private-bridge-member@example.com',
+    password:'member-document-long-secret',display_name:'家庭成员'
+  }});
+  assert.equal(join.response.status,201,JSON.stringify(join.data));
+  const member={cookie:join.response.headers.get('set-cookie').split(';')[0],
+    csrf:join.data.csrf_token};
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+    data:{source_type:'text',retention:'summary',
+      text:'ご請求金額：1,200円\n納付期限 令和8年11月30日'}});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  const id=imported.data.document_id;
+  const ownerCandidates=await req(env,'/api/documents/'+id+'/candidates',auth(owner));
+  assert.ok(ownerCandidates.data.items.length>0);
+  const candidate=ownerCandidates.data.items[0];
+  const now=new Date().toISOString();
+  env.DB.sql.prepare(
+    'INSERT INTO integration_links(id,candidate_id,target,idempotency_key,state,remote_id,updated_at) '+
+    "VALUES(?,?,'kakebo',?,'synced',?,?)"
+  ).run('e'.repeat(32),candidate.id,'jda:kakebo:'+candidate.id,'private-remote-ledger-id',now);
+  const original=await req(env,'/api/documents/'+id,auth(owner));
+  const shared=await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+    data:{visibility:'shared',confirm_sensitive_share:true,version:original.data.document.version}});
+  assert.equal(shared.response.status,200,JSON.stringify(shared.data));
+  assert.equal((await req(env,'/api/documents/'+id,auth(member))).response.status,200,
+    'a shared document is still visible to its collaborator');
+  const memberCandidates=await req(env,'/api/documents/'+id+'/candidates',auth(member));
+  assert.equal(memberCandidates.response.status,200,JSON.stringify(memberCandidates.data));
+  assert.deepEqual(memberCandidates.data,{items:[],shared_document:true,integration_access:false});
+  assert.doesNotMatch(JSON.stringify(memberCandidates.data),/private-remote-ledger-id|jda:kakebo/);
+  const ownerStill=await req(env,'/api/documents/'+id+'/candidates',auth(owner));
+  assert.equal(ownerStill.data.items[0].remote_id,'private-remote-ledger-id',
+    'the original owner retains the private bridge history');
+  const ownerPreview=await req(env,'/api/candidates/'+candidate.id+'/preview',auth(owner));
+  assert.equal(ownerPreview.response.status,200);
+  assert.equal(ownerPreview.data.approval_required,false);
+  for(const suffix of ['preview','status']){
+    const denied=await req(env,'/api/candidates/'+candidate.id+'/'+suffix,auth(member));
+    assert.equal(denied.response.status,404,'sharing the document does not share target integrations');
+  }
+  const deniedWrite=await req(env,'/api/candidates/'+candidate.id+'/commit',{
+    method:'POST',...auth(member),extraHeaders:{'Idempotency-Key':'member-bridge-denied'},
+    data:{confirm:'CONFIRM_ACCOUNTING'}});
+  assert.equal(deniedWrite.response.status,404);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,1);
+});
+
+test('Stage D/E real member session cannot bypass missing HomeFlow approval to directly sync any target',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const invite=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
+    data:{invitee_email:'approval-member@example.com'}});
+  const join=await req(env,'/api/household/join',{method:'POST',data:{
+    invite_token:invite.data.invite_token,email:'approval-member@example.com',
+    password:'member-approval-long-secret',display_name:'申请人'
+  }});
+  assert.equal(join.response.status,201,JSON.stringify(join.data));
+  const member={cookie:join.response.headers.get('set-cookie').split(';')[0],
+    csrf:join.data.csrf_token};
+  const userId=join.data.user.id;
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(member),
+    data:{source_type:'text',retention:'summary',
+      text:'ご請求金額：1,200円\n納付期限 令和8年11月30日'}});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  const id=imported.data.document_id;
+  const items=(await req(env,'/api/documents/'+id+'/candidates',auth(member))).data.items;
+  assert.ok(items.length>0);
+  const candidate=items[0];
+  let calls=0;
+  env.BRIDGE_USER_MAP=JSON.stringify({[userId]:{
+    kakebo:'member-kakebo-mapping',homeflow:'member-homeflow-mapping',zhixue:'member-study-mapping'
+  }});
+  env.KAKEBO_BRIDGE_SECRET='test-only-long-bridge-secret-at-least-32-characters';
+  env.KAKEBO_BRIDGE_SERVICE={async fetch(){calls++;throw Error('UNAUTHORIZED_EXTERNAL_WRITE')}};
+  env.HOMEFLOW_BRIDGE_SECRET=env.KAKEBO_BRIDGE_SECRET;
+  env.HOMEFLOW_BRIDGE_SERVICE=env.KAKEBO_BRIDGE_SERVICE;
+  env.ZHIXUE_BRIDGE_SECRET=env.KAKEBO_BRIDGE_SECRET;
+  env.ZHIXUE_BRIDGE_SERVICE=env.KAKEBO_BRIDGE_SERVICE;
+  const preview=await req(env,'/api/candidates/'+candidate.id+'/preview',auth(member));
+  assert.equal(preview.response.status,200,JSON.stringify(preview.data));
+  assert.equal(preview.data.approval_required,true);
+  assert.equal(preview.data.approval_submitted,false);
+  assert.equal(preview.data.applied,false);
+  assert.equal(preview.data.available,false);
+  assert.equal(preview.data.account_mapping_ready,false);
+  assert.equal(preview.data.ledger_options,null);
+  assert.equal(preview.data.homeflow_members,null);
+  assert.equal(calls,0,'approval-gated preview never requests private target account options');
+  const original=env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n;
+  const auditBefore=env.DB.sql.prepare('SELECT COUNT(*) n FROM audit_events').get().n;
+  const attempt=await req(env,'/api/candidates/'+candidate.id+'/commit',{
+    method:'POST',...auth(member),extraHeaders:{'Idempotency-Key':'approval-member-candidate'},
+    data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true}});
+  assert.equal(attempt.response.status,409,JSON.stringify(attempt.data));
+  assert.equal(attempt.data.code,'APPROVAL_REQUIRED');
+  assert.match(attempt.data.message,/未提交申请/);
+  assert.equal(calls,0,'no external target write for a non-approved member');
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,original,
+    'do not create a sending or succeeded journal entry');
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM audit_events').get().n,auditBefore,
+    'do not invent an approval or a successful integration audit');
+  const repeated=await req(env,'/api/candidates/'+candidate.id+'/commit',{
+    method:'POST',...auth(member),extraHeaders:{'Idempotency-Key':'approval-member-candidate'},
+    data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true}});
+  assert.equal(repeated.response.status,409);
+  assert.equal(calls,0);
+});
