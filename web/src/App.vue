@@ -28,7 +28,7 @@ const categoryOptions=Object.entries(cats);
 const categoryIcon=kind=>({salary:'wallet',card_spend:'wallet',bank:'wallet',topup:'wallet',tax:'file-text',utility:'file-text',housing:'file-text',campaign:'tag',policy:'shield',manual:'book',travel:'calendar',delivery:'archive'}[kind]||'file');
 const candidateIcon=kind=>({finance:'wallet',homeflow_task:'today',vocabulary:'book',sentence:'book'}[kind]||'links');
 const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',failed:'同步失败',pending:'待确认'}[state]||'待确认');
-const current=ref(null),detailTab=ref('explain'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
+const current=ref(null),detailTab=ref('original'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 // Preserve exact retry fields in memory while the app stays open.
 const pendingCandidateRetry=ref(null);
 const ledgerOptions=ref({categories:[],paymentSources:[]}),ledgerOptionsError=ref(''),ledgerAttempted=ref(false),ledgerMappingChangeConfirmed=ref(false),candidateMerchant=ref('');
@@ -78,8 +78,14 @@ const aiFailureLabels={
  cloudflare_service_unavailable:'Workers AI 服务暂时不可用',
  provider_failed:'AI 分析失败'
 };
-const aiFailureMessage=computed(()=>current.value?.ai_analysis?.status==='failed'
- ?(aiFailureLabels[current.value.ai_analysis.failure_code]||'AI 分析失败'):'');
+const aiFailureMessage=computed(()=>{
+ const job=current.value?.ai_job;
+ if(job?.state==='queued'||job?.state==='running')return 'AI 正在后台解析，可继续使用文书';
+ if(job?.state==='retry_wait')return 'Google 暂时繁忙，已安排自动重试';
+ if(job?.state==='failed')return aiFailureLabels[job.last_error]||'AI 解析未完成，可手动重试';
+ return current.value?.ai_analysis?.status==='failed'
+  ?(aiFailureLabels[current.value.ai_analysis.failure_code]||'AI 分析失败'):'';
+});
 const swipeOpenId=ref(''),swipeTrashTarget=ref(null);
 const sheet=ref(''),textDraft=reactive({title:'',text:'',retention:'summary',source_type:'text'}),fileDraft=ref(null),fileInput=ref(null),localTextInput=ref(null),localImportNote=ref(''),inputMode=ref('text');
 const fileText=ref(''),fileWarning=ref(''),fileRetention=ref('original'),fileSource=ref('local_file'),ocrProgress=ref('');
@@ -595,7 +601,7 @@ async function openDoc(id,{preserveTab=false,preserveScroll=false}={}){
   const scrollBefore=preserveScroll&&sameDocument
     ?document.querySelector('.detail-body')?.scrollTop:null;
   detailLoading.value=true;amountVisible.value=false;detailCandidates.value=[];
-  if(!sameDocument){detailTab.value='explain';explanationExpanded.value=false;ocrTextExpanded.value=false;}
+  if(!sameDocument){detailTab.value='original';explanationExpanded.value=false;ocrTextExpanded.value=false;}
   try{
     const d=await api(`/api/documents/${id}`);current.value=d.document;
     const c=await api(`/api/documents/${id}/candidates`);detailCandidates.value=c.items||[];
@@ -613,8 +619,8 @@ async function runAiForCurrent(){
  const id=current.value.id;busy.value=true;
  try{
   const result=await api('/api/documents/'+id+'/ai/analyze',{method:'POST',body:{confirm:true}});
-  await openDoc(id);
-  const labels={success:'AI 已生成中文解读和学习建议',cached:'已使用缓存的 AI 分析',disabled:'AI 服务当前未启用（规则讲解仍可使用）',not_configured:'所选 AI 尚未完成安全配置',budget_exhausted:'Cloudflare AI 今日已达上限',budget_disabled:'AI 预算尚未开放',provider_failed:'AI 返回无效或服务暂不可用，原有数据不受影响',...Object.fromEntries(Object.entries(aiFailureLabels).filter(([k])=>k!=='provider_failed')),awaiting_text:'请先完成 OCR 或补充原文',privacy_blocked:'请确认发送至 Gemini',too_long:'原文过长，请拆分后重试',cooldown:'稍后重试',in_progress:'本份文书的 AI 请求正在执行'};
+  await openDoc(id,{preserveTab:true,preserveScroll:true});
+  const labels={queued:'AI 已开始后台解析，可继续使用文书',success:'AI 已生成中文解读和学习建议',cached:'已使用缓存的 AI 分析',disabled:'AI 服务当前未启用（规则讲解仍可使用）',not_configured:'所选 AI 尚未完成安全配置',budget_exhausted:'Cloudflare AI 今日已达上限',budget_disabled:'AI 预算尚未开放',provider_failed:'AI 返回无效或服务暂不可用，原有数据不受影响',...Object.fromEntries(Object.entries(aiFailureLabels).filter(([k])=>k!=='provider_failed')),awaiting_text:'请先完成 OCR 或补充原文',privacy_blocked:'请确认发送至 Gemini',too_long:'原文过长，请拆分后重试',cooldown:'稍后重试',in_progress:'本份文书的 AI 请求正在执行'};
   flash(result.ai_status==='gemini_retry_cooldown'?`Google 服务器繁忙，约 ${result.retry_after_seconds||60} 秒后再试`:(labels[result.ai_status]||'AI 尚未产生新结果'));
  }catch(e){problem(e);}finally{busy.value=false;}
 }
@@ -1150,12 +1156,29 @@ function todayReviewBadge(d){
 }
 const labelFor=(key)=>current.value?.category==='campaign'&&key==='due_date'?'活动截止日期':current.value?.category==='campaign'&&key==='due_date_partial'?'原文活动期限（月日）':key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
+let aiStatusInterval=null,aiPolling=false;
+async function pollAiStatus(){
+ if(aiPolling||!user.value||document.visibilityState!=='visible')return;
+ const id=current.value?.id,job=current.value?.ai_job;
+ if(!id||!['queued','running','retry_wait'].includes(job?.state))return;
+ aiPolling=true;
+ try{
+  const d=await api('/api/documents/'+id);
+  if(current.value?.id!==id)return;
+  current.value=d.document;
+  if(['done','failed'].includes(d.document?.ai_job?.state)){
+   const c=await api('/api/documents/'+id+'/candidates');
+   if(current.value?.id===id)detailCandidates.value=c.items||[];
+  }
+ }catch{}finally{aiPolling=false;}
+}
 onMounted(async()=>{
+  aiStatusInterval=setInterval(pollAiStatus,9000);
   document.addEventListener('visibilitychange',onGoogleVisibility);
   window.addEventListener('pageshow',refreshGoogleOnReturn);
   await boot();if(!user.value)await refreshInitStatus();
 });
-onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',refreshGoogleOnReturn);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
+onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',refreshGoogleOnReturn);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
 
 <template>
@@ -1245,7 +1268,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
         {{current.fields?.find(f=>f.field_key==='merchant'&&f.review_state!=='rejected')?.normalized_value||'商户待核验'}}
         <template v-if="current.fields?.some(f=>['transaction_at','transaction_date'].includes(f.field_key)&&f.review_state!=='rejected')"> · {{current.fields?.find(f=>f.field_key==='transaction_at'&&f.review_state!=='rejected')?.normalized_value||current.fields?.find(f=>f.field_key==='transaction_date'&&f.review_state!=='rejected')?.normalized_value}}</template>
       </p>
-      <div class="detail-tabs-sticky"><div class="segments detail-tabs"><button v-for="t in [{id:'explain',name:'讲解'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'},{id:'original',name:'原文'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div></div>
+      <div class="detail-tabs-sticky"><div class="segments detail-tabs"><button v-for="t in [{id:'original',name:'原文'},{id:'explain',name:'中文解释'},{id:'finance',name:'字段'},{id:'tasks',name:'待办'},{id:'study',name:'学习'}]" :key="t.id" :class="{selected:detailTab===t.id}" @click="detailTab=t.id">{{t.name}}</button></div></div>
       <section v-if="detailTab==='explain'">
         <div v-if="['policy','government','terms','campaign'].includes(current.category)" class="content-card policy-check-card">
           <h3>{{current.category==='campaign'?'活动期限':'文件时效'}}</h3><p class="detail-note" v-if="current.category==='campaign'">{{current.fields?.find(f=>f.field_key==='due_date'&&f.review_state!=='rejected')?.normalized_value||'截止日期待核对'}} · {{current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed')?'年份待确认 · ':''}}优惠状态未验证</p><p v-else class="detail-note">{{current.source_document_date||'日期待核对'}} · {{current.official_current_verified_at?'已查验':'官方状态未核验'}}</p>
@@ -1259,7 +1282,7 @@ onBeforeUnmount(()=>{document.removeEventListener('visibilitychange',onGoogleVis
             <button v-if="current.ai_provider!=='none'" class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button>
             <button class="secondary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="16"/>重新解析</button>
           </div>
-          <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}} · 下方为规则讲解</p>
+          <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}}</p>
           <p class="multiline explanation-text" :class="{expanded:explanationExpanded}">{{(explanationExpanded?explanationText:explanationPreview)||'还没有可讲解的文字，可在原文页补充。'}}</p>
           <button v-if="explanationText.length>150" class="text-button expand-copy" type="button" :aria-expanded="explanationExpanded" @click="explanationExpanded=!explanationExpanded">{{explanationExpanded?'收起讲解':'查看完整讲解'}}</button>
           <details v-if="aiAnalysis?.important_points_zh?.length" class="explain-points"><summary>重要事项（{{aiAnalysis.important_points_zh.length}}）</summary><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">{{line}}</p></details>
