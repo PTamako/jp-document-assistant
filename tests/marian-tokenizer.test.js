@@ -21,7 +21,10 @@ function sampleSpm(type=1){
  const body=[
   ...piece('<unk>',0,2),
   ...piece('▁',-2),
-  ...piece('▁ありがとう',10),
+  ...piece('▁ありがとう',12),
+  ...piece('▁ありがと',11),
+  ...piece('▁ありが',10),
+  ...piece('▁あり',9),
   ...piece('あ',-3),
   ...piece('り',-3),
   ...piece('▁あ',8),
@@ -35,17 +38,18 @@ function sampleSpm(type=1){
 function vocabObj(){
  return {'</s>':0,'<unk>':1,'<pad>':65000,'▁':4,'▁ありがとう':11506,
    'あ':15,'り':16,'▁あ':17,'が':18,'と':19,'う':20,
+   '▁あり':25,'▁ありが':26,'▁ありがと':27,
    '多':220,'谢':221,'啦':222,'▁多':223,'▁谢':224};
 }
-test('parse real SentencePiece protobuf field structure and UNIGRAM type',()=>{
+test('parse real SentencePiece protobuf fields while ignoring pinned model TrainerSpec extras',()=>{
  const model=readSentencePiece(sampleSpm(1),{minPieces:3});
- assert.equal(model.pieces.length,9);
- assert.equal(model.modelType,1);
+ assert.equal(model.pieces.length,12);
+ assert.equal(model.modelType,2);
  assert.equal(model.pieces[2].piece,'▁ありがとう');
- assert.equal(model.pieces[2].score,10);
+ assert.equal(model.pieces[2].score,12);
 });
 test('Marian source token uses vocab.json ID rather than .spm piece index',()=>{
- const spm=readSentencePiece(sampleSpm(),{minPieces:3});
+ const spm=readSentencePiece(sampleSpm(2),{minPieces:3});
  const vocab=readMarianVocabulary(JSON.stringify(vocabObj()),{minEntries:4});
  const tokenizer=createMarianTokenizer(spm,vocab);
  assert.deepEqual(encodeMarian('ありがとう',tokenizer),[11506,0]);
