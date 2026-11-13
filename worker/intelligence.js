@@ -279,6 +279,9 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  try{
   const result=normalizeAiAnalysis(await generate(env,provider,source),source);
   if(!result)throw Error(provider==='gemini'?'gemini_invalid_json':'cloudflare_invalid_json');
+  const current=await first(env.DB,"SELECT extracted_text_ja,ai_provider,lifecycle FROM documents WHERE id=?",doc.id);
+  if(!current||current.lifecycle!=='active'||current.ai_provider!==provider||
+     await hashString(current.extracted_text_ja||'')!==sourceHash)return {ai_status:'stale_document'};
   await run(env.DB,"UPDATE document_ai_analyses SET state='success',result_json=?,updated_at=? WHERE document_id=? AND provider=? AND source_sha=?",
    JSON.stringify(result),isoNow(),doc.id,provider,sourceHash);
   await addStudyCandidates(env,doc,result);
