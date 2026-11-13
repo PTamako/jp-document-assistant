@@ -216,6 +216,7 @@ async function main(text){
   const sourcePieces=readSentencePiece(src),targetPieces=readSentencePiece(tgt);
   const trie=makeTrie(sourcePieces);
   progress(10,'本地分词器已就绪');
+  progress(15,'正在下载日文模型（约 105 MB）');
   let encoderBytes=await fetchModel('encoder_model.onnx');
   setPhase('encoder_init');
   progress(40,'正在初始化日文模型');
@@ -223,6 +224,7 @@ async function main(text){
   encoder=await ort.InferenceSession.create(encoderBytes,options);
   encoderBytes=null;
   progress(55,'日文模型已就绪，正在准备中文模型');
+  progress(58,'正在下载中文模型（约 118 MB）');
   let decoderBytes=await fetchModel('decoder_model.onnx');
   setPhase('decoder_init');
   progress(73,'正在初始化中文模型');
