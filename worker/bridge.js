@@ -91,7 +91,7 @@ function ledgerEntryType(x,merchant=x.merchant){
   if(['expense','transfer'].includes(x.kind)&&inferSbiInvestmentKind(merchant))return 'transfer';
   return x.kind;
 }
-function validatedPayload(target,item,approved,body){
+export function validatedPayload(target,item,approved,body){
   const x=JSON.parse(item.payload_json);
   if(target==='kakebo'){
     const amountText=approved.get(x.kind==='income'?'net_salary':'amount_jpy');
