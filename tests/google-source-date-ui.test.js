@@ -65,3 +65,15 @@ test('date controls do not duplicate the Vue confirm-deadline conditional during
   assert.equal((app.match(/<template v-else-if="sheet==='confirmDeadline'">/g)||[]).length,1);
   assert.equal((app.match(/class="date-clear"/g)||[]).length,4);
 });
+
+test('Google picker headings blend into the frosted sheet without a white sticky banner',()=>{
+  const header=css.match(/\\.google-source-header\\{([^}]*)\\}/)?.[1];
+  const actions=css.match(/\\.google-source-close,\\.google-disconnect\\{([^}]*)\\}/)?.[1];
+  assert.ok(header,'Google source header styles exist');
+  assert.ok(actions,'Google header actions exist');
+  assert.match(header,/background:transparent/);
+  assert.doesNotMatch(header,/position:sticky|background:var\\(--glass-sheet\\)/);
+  assert.match(actions,/background:transparent/);
+  assert.doesNotMatch(actions,/background:var\\(--glass-card\\)/);
+  assert.match(css,/\\.google-source-close,\\.google-disconnect,\\.google-source-placeholder\\{[^}]*44px/);
+});
