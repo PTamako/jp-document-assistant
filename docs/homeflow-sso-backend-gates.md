@@ -62,3 +62,14 @@ HomeFlow Draft #305 新增 15 分钟的**仅服务端** `session_assertion`：�
 - [Pre-merge CI #43406353483](https://github.com/PTamako/jp-document-assistant/actions/runs/43406353483) 已成功（共享文书基本操作）；其后新增共享附件协作的完整 [Pre-merge CI #43408316526](https://github.com/PTamako/jp-document-assistant/actions/runs/43408316526) **成功**（内存 D1+Vue build 等）。**所有代码仍在 Draft #97，生产没有迁移、合并或部署**。
 
 **保留未完成**：共享原件永久删除需要安全地以真实 owner 操作私有 R2 清理、记录实际成员 actor 并在发起时验证共享关系；新附件上传要处理异账号 R2 owner、权限和重复使用；共享关联候选动作可能仍需按所有权分支授权；文书助手将私人文书同步到 HomeFlow/知学/家計簿时必须贯彻各平台独立用户 ID 与 HomeFlow 审批 gate。不得把当前基础协作实现宣称为全站全部操作均已支持。
+
+
+## 2026-11-13 Stage E 增量：家庭共享附件永久删除
+
+- **仅在原 Draft #97 中开发，未合并/未生产部署；A=待用户完成、0020～0022 禁止上线。** 修改 `worker/lifecycle.js` 与 `tests/worker.test.js`。
+- 已共享且仍处于同一 `household_id` 的附件，原所有者与家庭成员均可在先移入回收站、再次明确输入 `DELETE_FOREVER` 后永久删除；私人/已撤销共享无权操作仍为 `404`。只针对**请求中精确 attachment_id** 授权；不是让 member 管理他人的所有私有 R2。
+- D1 编辑前、R2 对象回收前与最终附件删除时校验仍属于可管理的同一共享文书；R2 物理对象及删除墓碑仍绑定原 `owner_id`，绝不将原主人伪装为实际执行人。新增 `audit_events(kind='attachment_permanently_deleted', actor_user_id=实际用户 ID)`，不记私人原文/附件字节。
+- 如果多个附件引用同一 `storage_objects.id`，先删除引用记录；原件仅在确认无引用时删除，最后引用消失时才精准执行单个对象 `cleanupOrphans`。异常 R2 删除仍按现有 `deletion_jobs` / `delete_failed` 机制报错并可重试；不做全桶扫描和跨账号认证绕过。
+- 自动回归覆盖共享前不可见、共享后双人权限、未先回收时不允许物理删除、共享成员删除两份同一 R2 的不同附件、唯一原件最后才删除、墓碑原始 owner、审计真实 actor、撤销共享立即 404、重复请求不再写成功日志。
+- 提交：[`06f9fb11`](https://github.com/PTamako/jp-document-assistant/commit/06f9fb11e0ab443de895767a384fe4985385d9ae)、[`6df3a333`](https://github.com/PTamako/jp-document-assistant/commit/6df3a333bc1d0fb4263bf99b1e36a39f5b1ace4a)；[Pre-merge CI #43438562835](https://github.com/PTamako/jp-document-assistant/actions/runs/43438562835) **success**。
+- 仍未完成：共享文书整份永久删除的跨所有者 R2 权限/恢复补偿，邮件与 Drive 源 OAuth 严格只归本人，跨 App 同步审批与单人旧会话清退，两个 iPhone 的授权/删除及断网真机验收。尤其不能因本模块而把未经迁移的生产身份功能打开。
