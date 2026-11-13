@@ -17,7 +17,7 @@ const isUrlOrigin=value=>{
     url.origin===value&&!url.username&&!url.password&&!url.hash&&!url.search;}
   catch{return false;}
 };
-function enabled(env,url){
+export function homeflowSsoEnabled(env,url){
  return env.HOMEFLOW_SSO_ENABLED==='true' &&
    typeof env.HOMEFLOW_SSO_ENCRYPTION_KEY==='string' &&
    /^[a-f0-9]{64}$/i.test(env.HOMEFLOW_SSO_ENCRYPTION_KEY) &&
@@ -76,7 +76,7 @@ const callbackUrl=env=>env.DA_PUBLIC_ORIGIN+'/api/homeflow-sso/callback';
 
 export async function startHomeFlowSso(request,env,url){
  if(request.method!=='POST')return json({ok:false,code:'METHOD_NOT_ALLOWED'},405);
- if(!enabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
+ if(!homeflowSsoEnabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
  if(request.headers.get('origin')!==url.origin)
    return json({ok:false,code:'BAD_ORIGIN'},403);
  const local=await localSession(env,request);
@@ -224,7 +224,7 @@ function invalidCallback(code='SSO_CALLBACK_INVALID',status=403){
 // complete the code exchange and receive its own HttpOnly cookie.
 export async function callbackHomeFlowSso(request,env,url){
  if(request.method!=='GET')return json({ok:false,code:'METHOD_NOT_ALLOWED'},405);
- if(!enabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
+ if(!homeflowSsoEnabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
  const state=url.searchParams.get('state')||'';
  const code=url.searchParams.get('code')||'';
  if(!/^[a-f0-9]{64}$/.test(state) || url.searchParams.has('error') ||
@@ -255,7 +255,7 @@ export async function callbackHomeFlowSso(request,env,url){
 }
 export async function completeHomeFlowSso(request,env,url){
  if(request.method!=='POST')return json({ok:false,code:'METHOD_NOT_ALLOWED'},405);
- if(!enabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
+ if(!homeflowSsoEnabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
  if(request.headers.get('origin')!==url.origin)
    return invalidCallback('BAD_ORIGIN');
  if(!(request.headers.get('content-type')||'').toLowerCase().startsWith('application/json'))
