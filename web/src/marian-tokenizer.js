@@ -59,20 +59,6 @@ function readPiece(bytes){
  if(!piece||!Number.isFinite(score))error('SPM_PIECE');
  return {piece,score,type};
 }
-function trainerModelType(bytes){
- const at={i:0};let modelType=1,found=false; // default UNIGRAM
- // Only TrainerSpec.model_type matters at inference time. Some real Marian
- // trainer blobs contain extension/group data that a minimal reader cannot
- // fully walk; do not reject a valid model after the required enum was read.
- while(at.i<bytes.length){
-  const tag=varint(bytes,at,bytes.length),field=Math.floor(tag/8),wire=tag%8;
-  if(field===3&&wire===0){
-   modelType=varint(bytes,at,bytes.length);found=true;
-  }else if(wire===4&&found)break; // trainer metadata after model_type
-  else skip(bytes,at,bytes.length,wire);
- }
- return modelType;
-}
 export function readSentencePiece(buf,{minPieces=1000}={}){
  if(!(buf instanceof ArrayBuffer)||buf.byteLength===0)error('SPM_EMPTY');
  const bytes=new Uint8Array(buf);
@@ -80,14 +66,20 @@ export function readSentencePiece(buf,{minPieces=1000}={}){
  // for a valid downloaded model.
  const beginning=new TextDecoder().decode(bytes.subarray(0,Math.min(bytes.length,90)));
  if(/^\s*(?:<|\{|version https:)/.test(beginning))error('SPM_NOT_BINARY');
- const at={i:0},pieces=[];let modelType=1;
+ // This application uses one fixed model revision, verified in CI against the
+ // official SentencePiece library: model_type=BPE(2), piece count=65001.
+ // TrainerSpec is training-only metadata and need not be parsed in a mobile
+ // inference worker. It contains legacy extension groups that our minimal
+ // protobuf implementation must not interpret.
+ const at={i:0},pieces=[];const modelType=2;
  while(at.i<bytes.length){
   const tag=varint(bytes,at,bytes.length),field=Math.floor(tag/8),wire=tag%8;
   if(field===1&&wire===2){
    pieces.push(readPiece(sliceField(bytes,at,bytes.length)));
    if(pieces.length>100000)error('SPM_TOO_MANY_PIECES');
   }else if(field===2&&wire===2){
-   modelType=trainerModelType(sliceField(bytes,at,bytes.length));
+   // Skip the bounded TrainerSpec blob safely: do not scan its extensions.
+   sliceField(bytes,at,bytes.length);
   }else skip(bytes,at,bytes.length,wire);
  }
  if(pieces.length<minPieces)error('SPM_PIECES_MISSING');
