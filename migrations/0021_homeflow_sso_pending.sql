@@ -9,6 +9,12 @@ CREATE TABLE IF NOT EXISTS homeflow_oauth_pending (
   origin TEXT NOT NULL,
   local_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   local_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  -- Proof stays in the originating PWA; never placed in OAuth redirects.
+  resume_secret_hash TEXT NOT NULL,
+  -- OAuth callback parks only an AES-GCM sealed code. No session issued in Safari.
+  code_cipher TEXT,
+  code_iv TEXT,
+  callback_received_at TEXT,
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK(status IN ('pending','processing','consumed','failed')),
   expires_at TEXT NOT NULL,
