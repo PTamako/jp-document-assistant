@@ -3,6 +3,12 @@
 -- been durably encrypted, verified and restored in an isolated environment.
 -- A proof is tied to an existing local app session; deleting/revoking the
 -- local session or source HomeFlow session ends access.
+-- Legacy sessions remain legacy; new SSO sessions MUST be explicitly tagged.
+-- Without this marker deleting the proof would incorrectly fall through to
+-- old-auth treatment. Require a valid matching proof on every SSO request.
+ALTER TABLE sessions ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'legacy'
+  CHECK(auth_source IN ('legacy','homeflow'));
+
 CREATE TABLE IF NOT EXISTS homeflow_session_proofs (
   session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   homeflow_user_id TEXT NOT NULL,
