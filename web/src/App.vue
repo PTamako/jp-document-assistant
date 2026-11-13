@@ -4,6 +4,7 @@ import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
 import { isIosStandalonePwa } from './google-auth-context.js';
+import { isMemoryConstrainedIosWebKit,deleteOldLocalTranslationWeights } from './local-translation-support.js';
 import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke,gmailPayloadToDocument} from './gmail-import.js';
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
@@ -33,6 +34,7 @@ const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',f
 const current=ref(null),detailTab=ref('original'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 const localTranslation=ref(''),translationSource=ref(''),translationVisible=ref(false),
  translationBusy=ref(false),translationProgress=ref(''),translationError=ref('');
+const localTranslationBlocked=isMemoryConstrainedIosWebKit();
 let translationWorker=null;
 function stopTranslation({clear=false}={}){
  if(translationWorker){translationWorker.terminate();translationWorker=null;}
@@ -44,6 +46,13 @@ function stopTranslation({clear=false}={}){
  }
 }
 function translateOriginal(){
+ // On iOS, this 220MB FP16 encoder/decoder can kill the entire WebKit page.
+ // Fail before creating the Worker; an OOM kill cannot be caught as an error.
+ if(localTranslationBlocked){
+  stopTranslation({clear:true});
+  translationError.value='iPhone/iPad 本地翻译已暂停，避免页面崩溃。中文解释仍可正常使用。';
+  return;
+ }
  const text=String(current.value?.extracted_text_ja||'').trim();
  if(!text||translationBusy.value)return;
  if(localTranslation.value&&translationSource.value===text){
@@ -1251,6 +1260,7 @@ async function pollAiStatus(force=false){
  }finally{aiPolling=false;}
 }
 onMounted(async()=>{
+ if(localTranslationBlocked)void deleteOldLocalTranslationWeights();
   // Only pending documents are polled. Four seconds keeps PWA feedback responsive.
   aiStatusInterval=setInterval(pollAiStatus,4000);
   document.addEventListener('visibilitychange',onGoogleVisibility);
@@ -1446,12 +1456,13 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <div class="original-section-heading">
               <h3>OCR 文字</h3>
               <div class="original-translate-actions">
-                <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="translationBusy" @click="translateOriginal" :aria-pressed="translationVisible" aria-label="切换日文原文与本地中文机翻">
+                <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="translationBusy || localTranslationBlocked" @click="translateOriginal" :aria-pressed="translationVisible" :aria-label="localTranslationBlocked?'iPhone 本地翻译已暂停，避免页面崩溃':'切换日文原文与本地中文机翻'">
                   <UiIcon name="languages" :size="17"/>{{translationBusy?'翻译中':translationVisible?'看原文':localTranslation&&translationSource===current.extracted_text_ja.trim()?'看译文':'翻译'}}
                 </button>
                 <button class="text-button icon-label" type="button" @click="editText"><UiIcon name="edit" :size="16"/>编辑</button>
               </div>
             </div>
+            <p v-if="localTranslationBlocked && current.extracted_text_ja" class="detail-note">iPhone 本地翻译暂不可用，已暂停高内存模型以防闪退；中文解释正常使用。</p>
             <p v-if="translationBusy" class="detail-note" role="status">{{translationProgress}} <button class="text-button" type="button" @click="stopTranslation()">取消</button></p>
             <p v-if="translationError" class="detail-note" role="alert">{{translationError}}</p>
             <p v-if="translationVisible" class="detail-note">本地机翻 · 仅供对照，日期金额请核对日文原文</p>
