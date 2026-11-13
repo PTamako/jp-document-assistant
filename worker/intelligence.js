@@ -100,11 +100,30 @@ function config(env,provider){
  return 'rules_only';
 }
 // Keep only short diagnostic categories, not Google's error bodies or private text.
-export function classifyGeminiHttpError(status) {
+// Classify only known Google validation categories. Never persist provider
+// message/details: they can contain a fragment of the original private request.
+export function classifyGeminiHttpError(status,body=null) {
  if(status===429)return 'gemini_quota_or_rate_limited';
  if(status===401||status===403)return 'gemini_access_denied';
  if(status===404)return 'gemini_model_unavailable';
- if(status===400)return 'gemini_invalid_request';
+ if(status===400){
+  const error=body?.error;
+  if(error&&typeof error==='object'){
+   const details=Array.isArray(error.details)?error.details:[];
+   const reasons=details.map(x=>typeof x?.reason==='string'?x.reason:'').join(' ');
+   const message=typeof error.message==='string'?error.message.slice(0,3000):'';
+   if(/API_KEY_INVALID|INVALID_API_KEY|API_KEY_EXPIRED/i.test(reasons+' '+message))
+    return 'gemini_access_denied';
+   if(error.status==='FAILED_PRECONDITION')return 'gemini_precondition_failed';
+   if(/thinking[_ .-]?(?:level|config|budget)|thinkingLevel/i.test(message))
+    return 'gemini_thinking_invalid';
+   if(/response[_ .-]?(?:mime|format|json|schema)|responseMimeType|responseJsonSchema|application\\/json/i.test(message))
+    return 'gemini_response_format_invalid';
+   if(/(?:input|prompt|context|token|content|request).{0,50}(?:too (?:long|large)|exceed|limit)/i.test(message))
+    return 'gemini_input_limit';
+  }
+  return 'gemini_invalid_request';
+ }
  if(status===503)return 'gemini_service_overloaded';
  if(status>=500)return 'gemini_service_unavailable';
  return 'gemini_request_failed';
@@ -179,7 +198,14 @@ async function generate(env,provider,source){
  }catch{
   throw Error('gemini_network_error');
  }
- if(!response.ok)throw Error(classifyGeminiHttpError(response.status));
+ if(!response.ok){
+  // A 400 is not retried: another identical request will waste the free quota.
+  // Extract only a finite set of safe error classes; no raw Google response is
+  // returned to the browser, logged, or saved to D1.
+  const failureBody=response.status===400
+   ?await response.json().catch(()=>null):null;
+  throw Error(classifyGeminiHttpError(response.status,failureBody));
+ }
  let body;
  try{body=await response.json();}catch{throw Error('gemini_invalid_response');}
  return extractGeminiResponseText(body);
