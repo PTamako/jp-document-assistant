@@ -3135,3 +3135,52 @@ test('revoking shared visibility removes collaborator permanent-delete rights im
  assert.equal(allowed.response.status,200,JSON.stringify(allowed.data));
  assert.equal(env._blobs.size,0);
 });
+
+
+test('an already authorized shared-attachment purge finishes metadata cleanup if sharing changes during R2.delete',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const inv=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
+  data:{invitee_email:'midflight@example.invalid'}});
+ const joined=await req(env,'/api/household/join',{method:'POST',data:{
+  invite_token:inv.data.invite_token,email:'midflight@example.invalid',
+  password:'long-safe-password-123',display_name:'协作者'}});
+ assert.equal(joined.response.status,201);
+ const member={cookie:joined.response.headers.get('set-cookie').split(';')[0],
+  csrf:joined.data.csrf_token};
+ const form=new FormData();
+ form.append('file',new File([new Uint8Array([255,216,255,224,1,3,3,7])],
+  'midflight.jpg',{type:'image/jpeg'}));
+ form.append('retention','original');
+ const upload=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+ assert.equal(upload.response.status,201);
+ const docId=upload.data.document_id;
+ const doc=(await req(env,'/api/documents/'+docId,auth(owner))).data.document;
+ const aid=doc.attachments[0].id;
+ assert.equal((await req(env,'/api/documents/'+docId,{
+  method:'PATCH',...auth(owner),data:{version:doc.version,visibility:'shared',confirm_sensitive_share:true}
+ })).response.status,200);
+ assert.equal((await req(env,'/api/documents/'+docId+'/attachments/'+aid+'/trash',{
+  method:'POST',...auth(member),data:{}})).response.status,200);
+ let r2Calls=0;
+ env.DOCUMENTS.delete=async key=>{
+  r2Calls++;
+  // Simulate a different device revoking access after the R2 claim. The
+  // permanent deletion was authorized before physical removal started.
+  env.DB.sql.prepare("UPDATE documents SET visibility='private' WHERE id=?").run(docId);
+  env._blobs.delete(key);
+ };
+ const result=await req(env,'/api/documents/'+docId+'/attachments/'+aid+'/permanent-delete',{
+  method:'POST',...auth(member),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(result.response.status,200,JSON.stringify(result.data));
+ assert.equal(r2Calls,1);
+ assert.equal(env._blobs.size,0);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM attachments WHERE id=?').get(aid).n,0,
+  'do not retain a reference to already deleted R2 bytes');
+ assert.equal(env.DB.sql.prepare("SELECT visibility FROM documents WHERE id=?").get(docId).visibility,'private');
+ assert.equal(env.DB.sql.prepare('SELECT owner_id FROM deletion_tombstones WHERE request_key=?')
+  .get('att:'+aid).owner_id,owner.user.id);
+ assert.equal(env.DB.sql.prepare("SELECT actor_user_id FROM audit_events WHERE kind='attachment_permanently_deleted' AND entity_id=?")
+  .get(aid).actor_user_id,joined.data.user.id);
+ assert.equal((await req(env,'/api/documents/'+docId,auth(member))).response.status,404,
+  'after revocation, no further private reads are granted');
+});
