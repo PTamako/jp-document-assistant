@@ -101,7 +101,8 @@
   border-radius:25px 25px 0 0;padding-inline:17px}
 .bottom-sheet h2{font-size:20px;letter-spacing:-.025em;margin:13px 0 15px}
 .grabber{background:#b6c4d3;margin-top:2px}
-.sheet-actions{background:linear-gradient(transparent,var(--panel) 13%);padding-top:17px}
+/* Footer surfaces inherit the sheet's glass; no opaque strip. */
+.sheet-actions{background:transparent}
 .upload-box{padding:16px 13px;margin:10px 0;border:1px dashed #b9cce0;
   background:var(--soft);border-radius:15px}
 .upload-box .secondary{background:var(--panel)}
