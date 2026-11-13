@@ -4,7 +4,7 @@ import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
 import { isIosStandalonePwa } from './google-auth-context.js';
-import { isMemoryConstrainedIosWebKit,deleteOldLocalTranslationWeights } from './local-translation-support.js';
+import { deleteOldLocalTranslationWeights } from './local-translation-support.js';
 import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke,gmailPayloadToDocument} from './gmail-import.js';
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
@@ -35,61 +35,90 @@ const current=ref(null),detailTab=ref('original'),detailCandidates=ref([]),detai
 // Ignore stale document responses after another document opens, the detail closes or the account changes.
 let detailOpenSerial=0;
 const localTranslation=ref(''),translationSource=ref(''),translationVisible=ref(false),
- translationBusy=ref(false),translationProgress=ref(''),translationError=ref('');
-const localTranslationBlocked=isMemoryConstrainedIosWebKit();
-let translationWorker=null;
+ translationBusy=ref(false),translationProgress=ref(''),translationError=ref(''),
+ translationConsent=ref(false);
+let translationAbort=null,translationSerial=0;
 function stopTranslation({clear=false}={}){
- if(translationWorker){translationWorker.terminate();translationWorker=null;}
- translationBusy.value=false;
- translationProgress.value='';
+ translationSerial++;
+ if(translationAbort){translationAbort.abort();translationAbort=null;}
+ translationBusy.value=false;translationProgress.value='';
+ translationConsent.value=false;
  if(clear){
   localTranslation.value='';translationSource.value='';translationVisible.value=false;
   translationError.value='';
  }
 }
-function translateOriginal(){
- // On iOS, this 220MB FP16 encoder/decoder can kill the entire WebKit page.
- // Fail before creating the Worker; an OOM kill cannot be caught as an error.
- if(localTranslationBlocked){
-  stopTranslation({clear:true});
-  translationError.value='iPhone/iPad 本地翻译已暂停，避免页面崩溃。中文解释仍可正常使用。';
+async function translateOriginal(){
+ const text=String(current.value?.extracted_text_ja||'').trim();
+ const id=current.value?.id;
+ if(!id||!text||translationBusy.value)return;
+ if(localTranslation.value&&translationSource.value===text){
+  translationVisible.value=!translationVisible.value;
   return;
  }
- const text=String(current.value?.extracted_text_ja||'').trim();
- if(!text||translationBusy.value)return;
- if(localTranslation.value&&translationSource.value===text){
-  translationVisible.value=!translationVisible.value;return;
+ if(text.length>8000){
+  translationError.value='全文翻译单次最多 8000 字';
+  return;
  }
- if(text.length>8000){translationError.value='原文较长，请先分段后再翻译（最多 8000 字）';return;}
  stopTranslation({clear:true});
- const id=current.value?.id;
- translationBusy.value=true;
- translationProgress.value='正在准备本机翻译模型';
+ const serial=++translationSerial;
+ translationBusy.value=true;translationProgress.value='读取已有译文';
  try{
-  const worker=new Worker(new URL('./local-translate.worker.js',import.meta.url),{type:'module'});
-  translationWorker=worker;
-  worker.onmessage=event=>{
-   if(translationWorker!==worker||current.value?.id!==id)return;
-   const message=event.data||{};
-   if(message.type==='progress'){
-    translationProgress.value=message.message||'正在翻译';return;
-   }
-   if(message.type==='complete'){
-    localTranslation.value=String(message.translation||'');
-    translationSource.value=text;
-    translationVisible.value=true;
-    stopTranslation();
-   }
-   if(message.type==='error'){
-    translationError.value=String(message.message||'本机翻译失败');
-    stopTranslation();
-   }
-  };
-  worker.onerror=()=>{if(translationWorker!==worker)return;translationError.value='本机翻译无法启动';stopTranslation();};
-  worker.postMessage({type:'translate',text});
- }catch{
-  translationError.value='当前设备不支持本地翻译';stopTranslation();
+  // Cache lookup is private and never sends text outside this Worker.
+  const data=await api('/api/documents/'+id+'/translation');
+  if(serial!==translationSerial||current.value?.id!==id)return;
+  if(data.cached&&typeof data.translation==='string'&&data.translation.trim()){
+   localTranslation.value=data.translation;
+   translationSource.value=text;
+   translationVisible.value=true;
+  }else{
+   translationConsent.value=false;
+   sheet.value='translateConfirm';
+  }
+ }catch(e){
+  if(serial===translationSerial)translationError.value=e?.message||'读取译文失败';
+ }finally{
+  if(serial===translationSerial){
+   translationBusy.value=false;translationProgress.value='';
+  }
  }
+}
+async function confirmTranslateOriginal(){
+ const text=String(current.value?.extracted_text_ja||'').trim();
+ const id=current.value?.id;
+ if(!id||!text||!translationConsent.value||translationBusy.value)return;
+ if(text.length>8000){translationError.value='全文翻译单次最多 8000 字';return;}
+ const serial=++translationSerial;
+ const controller=new AbortController();
+ translationAbort=controller;
+ translationError.value='';translationBusy.value=true;
+ translationProgress.value='正在使用知学的 Google 免费机翻';
+ translationConsent.value=false;
+ sheet.value='';
+ try{
+  const data=await api('/api/documents/'+id+'/translation',{
+   method:'POST',body:{confirm_google_translation:true},signal:controller.signal
+  });
+  if(serial!==translationSerial||current.value?.id!==id||
+    String(current.value?.extracted_text_ja||'').trim()!==text)return;
+  if(!data?.ok||!data.translation)throw new Error('未返回有效译文');
+  localTranslation.value=String(data.translation);
+  translationSource.value=text;
+  translationVisible.value=true;
+ }catch(e){
+  if(serial===translationSerial&&!controller.signal.aborted)
+   translationError.value=e?.message||'Google 免费翻译暂不可用';
+ }finally{
+  if(serial===translationSerial){
+   translationAbort=null;
+   translationBusy.value=false;translationProgress.value='';
+  }
+ }
+}
+function invalidateStaleTranslation(){
+ if(localTranslation.value&&
+   translationSource.value!==String(current.value?.extracted_text_ja||'').trim())
+  stopTranslation({clear:true});
 }
 // Preserve exact retry fields in memory while the app stays open.
 const pendingCandidateRetry=ref(null);
@@ -698,6 +727,7 @@ async function openDoc(id,{preserveScroll=true}={}){
     const d=await api(`/api/documents/${id}`);
     if(serial!==detailOpenSerial)return;
     current.value=d.document;
+    invalidateStaleTranslation();
     const c=await api(`/api/documents/${id}/candidates`);
     if(serial!==detailOpenSerial)return;
     detailCandidates.value=c.items||[];
@@ -741,7 +771,7 @@ async function saveDocAiProvider(){
  try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
  closeSheet();await openDoc(id);flash('已保存 AI 选择');}catch(e){problem(e);}finally{busy.value=false;}
 }
-function closeSheet(){attachmentActionsTarget.value=null;importOcrEngine.value='local';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;gmailLastQuery.value='';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){translationConsent.value=false;attachmentActionsTarget.value=null;importOcrEngine.value='local';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;gmailLastQuery.value='';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){
   inputMode.value=mode;sheet.value='import';
 }
@@ -1279,6 +1309,7 @@ async function pollAiStatus(force=false){
   if(current.value?.id!==id)return;
   const previous=current.value;
   current.value=d.document; // Recomputes Chinese explanation and status without closing the detail.
+  invalidateStaleTranslation();
   if(aiResultBecameAvailable(previous,d.document)||isAiJobPending(previous?.ai_job)&&!isAiJobPending(d.document?.ai_job)){
    const c=await api('/api/documents/'+id+'/candidates',{signal:AbortSignal.timeout(12000)});
    if(current.value?.id===id)detailCandidates.value=c.items||[];
@@ -1290,7 +1321,7 @@ async function pollAiStatus(force=false){
  }finally{aiPolling=false;}
 }
 onMounted(async()=>{
- if(localTranslationBlocked)void deleteOldLocalTranslationWeights();
+ void deleteOldLocalTranslationWeights();
   // Only pending documents are polled. Four seconds keeps PWA feedback responsive.
   aiStatusInterval=setInterval(pollAiStatus,4000);
   document.addEventListener('visibilitychange',onGoogleVisibility);
@@ -1486,16 +1517,16 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <div class="original-section-heading">
               <h3>OCR 文字</h3>
               <div class="original-translate-actions">
-                <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="translationBusy || localTranslationBlocked" @click="translateOriginal" :aria-pressed="translationVisible" :aria-label="localTranslationBlocked?'iPhone 本地翻译已暂停，避免页面崩溃':'切换日文原文与本地中文机翻'">
-                  <UiIcon name="languages" :size="17"/>{{translationBusy?'翻译中':translationVisible?'看原文':localTranslation&&translationSource===current.extracted_text_ja.trim()?'看译文':'翻译'}}
+                <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="translationBusy" @click="translateOriginal" :aria-pressed="translationVisible" aria-label="切换日文原文与 Google 中文机翻">
+                  <UiIcon name="languages" :size="17"/>{{translationBusy?'翻译中':translationVisible?'看原文':localTranslation&&translationSource===current.extracted_text_ja.trim()?'看译文':'翻译全文'}}
                 </button>
                 <button class="text-button icon-label" type="button" @click="editText"><UiIcon name="edit" :size="16"/>编辑</button>
               </div>
             </div>
-            <p v-if="localTranslationBlocked && current.extracted_text_ja" class="detail-note">iPhone 本地翻译暂不可用，已暂停高内存模型以防闪退；中文解释正常使用。</p>
+            
             <p v-if="translationBusy" class="detail-note" role="status">{{translationProgress}} <button class="text-button" type="button" @click="stopTranslation()">取消</button></p>
             <p v-if="translationError" class="detail-note" role="alert">{{translationError}}</p>
-            <p v-if="translationVisible" class="detail-note">本地机翻 · 仅供对照，日期金额请核对日文原文</p>
+            <p v-if="translationVisible" class="detail-note">Google 免费机翻 · 日期金额请以日文原文为准</p>
             <p v-if="current.extracted_text_ja" class="multiline ocr-text-preview" :class="{expanded:ocrTextExpanded}">{{translationVisible&&localTranslation&&translationSource===current.extracted_text_ja.trim()?localTranslation:current.extracted_text_ja}}</p>
             <p v-else class="muted">暂无文字。</p>
             <button v-if="current.extracted_text_ja?.length>130" class="text-button expand-copy" type="button" :aria-expanded="ocrTextExpanded" @click="ocrTextExpanded=!ocrTextExpanded">{{ocrTextExpanded?'收起文字':'展开全部文字'}}</button>
@@ -1519,6 +1550,12 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label v-if="aiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="geminiConsent"/>同意将本份文书发送至 Gemini（可能产生费用）</label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="importDocument">{{busy?'处理中…':inputMode==='file'&&fileRetention==='original'?'确认保存原件':'开始处理'}}</button></div></template>
       <template v-else-if="sheet==='confirmDeadline'"><h2>{{current?.category==='campaign'?'确认活动截止年份':'补全截止日期的年份'}}</h2><p class="fine-print">原文只有月日，系统暂按日本当年补全。请核对原文日期和星期；确认前不会创建 HomeFlow 待办。</p><label class="form-label">完整截止日期<input type="date" v-model="missingYearDateDraft"/></label><label class="check-row"><input type="checkbox" v-model="missingYearConfirmed"/>我已核对并确认年份，不是 AI 自动推断。</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!missingYearConfirmed||!missingYearDateDraft" @click="confirmCompleteDeadline">保存待核对日期</button></div></template>
+      <template v-else-if="sheet==='translateConfirm'">
+        <h2>翻译日文全文</h2>
+        <p class="fine-print">经由知学已有的 Google Apps Script 免费翻译。仅发送本份文书的日文文字，不上传原件、照片或 PDF；不使用 Gemini 或 Workers AI。</p>
+        <label class="check-row"><input type="checkbox" v-model="translationConsent" />我同意将本份日文文字发送给 Google 进行机翻。</label>
+        <div class="sheet-actions"><button class="secondary" type="button" @click="closeSheet">取消</button><button class="primary" type="button" :disabled="!translationConsent||translationBusy" @click="confirmTranslateOriginal">开始翻译</button></div>
+      </template>
       <template v-else-if="sheet==='docAiProvider'"><h2>为当前文书选择 AI</h2><p class="fine-print">仅影响本份文书。</p><div class="choice-form-field"><span class="choice-field-label">分析引擎</span><button class="choice-field-control" type="button" @click="openChoice('docAiProvider')"><span>{{choiceLabel('docAiProvider')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label v-if="docAiProvider==='gemini'" class="check-row"><input type="checkbox" v-model="docGeminiConsent"/>同意将本份文书发送至 Gemini（可能产生费用）</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="saveDocAiProvider">保存选择</button></div></template>
       <template v-else-if="sheet==='importSources'">
   <h2>选择导入来源</h2>
