@@ -10,7 +10,18 @@ export const MAX_TRANSLATION_CHUNKS=8;
 export const MAX_GOOGLE_CALLS_PER_JST_DAY=80;
 const ENDPOINT='https://internal.invalid/api/bridge/document-assistant/translate';
 const provider='zhixue_gas';
-const jstDay=()=>new Date(Date.now()+9*60*60*1000).toISOString().slice(0,10);
+const jstDay=(time=Date.now())=>new Date(time+9*60*60*1000).toISOString().slice(0,10);
+export async function documentTranslationBudgetUsage(db,time=Date.now()){
+ const day=jstDay(time);
+ const record=await db.prepare('SELECT calls FROM document_translation_daily_budget WHERE japan_day=?').bind(day).first();
+ // Counter is RESERVED translation chunks (not actual Google quota usage).
+ // App-level cap stays independent of 知学's separate dictionary calls.
+ const n=Number(record?.calls||0);
+ const calls=Number.isFinite(n)?Math.max(0,Math.min(MAX_GOOGLE_CALLS_PER_JST_DAY,Math.trunc(n))):0;
+ return {japan_day:day,calls,limit:MAX_GOOGLE_CALLS_PER_JST_DAY,
+  remaining:MAX_GOOGLE_CALLS_PER_JST_DAY-calls,
+  count_type:'reserved_chunks',scope:'document_assistant_only'};
+}
 const messageByRemoteError={
   bridge_disabled:'知学翻译联动未开启',
   bridge_not_configured:'知学翻译联动尚未配置',
