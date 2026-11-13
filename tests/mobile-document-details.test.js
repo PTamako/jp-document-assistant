@@ -39,7 +39,7 @@ test('Chinese explanation and OCR originals stay available through explicit expa
  assert.match(app,/explanationExpanded=!explanationExpanded/);
  assert.match(app,/ocrTextExpanded=!ocrTextExpanded/);
  assert.match(app,/explanationExpanded\?explanationText:explanationPreview/);
- assert.match(app,/\{\{current\.extracted_text_ja\}\}/);
+ assert.match(app,/translationVisible&&localTranslation&&translationSource===current.extracted_text_ja.trim\(\)\?localTranslation:current.extracted_text_ja/);
  assert.match(app,/explain-actions/);
  assert.match(app,/explain-provider/);
  assert.match(css,/\.explanation-text:not\(\.expanded\)/);

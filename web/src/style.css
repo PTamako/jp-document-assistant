@@ -572,3 +572,13 @@ body{
 @supports not (backdrop-filter:blur(1px)){
   :is(.bottom-sheet,.bottom-nav,.topbar,.detail-top){background:var(--panel)}
 }
+
+/* Source-first view: keep local translation and edit controls on a single mobile row. */
+.original-translate-actions{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.original-translate-actions .text-button{white-space:nowrap;min-width:0;display:inline-flex;align-items:center;gap:4px}
+.original-translate-actions .ui-icon{flex:none}
+.original-copy-section .detail-note{overflow-wrap:anywhere}
+@media(max-width:370px){
+ .original-translate-actions{gap:4px}
+ .original-translate-actions .text-button{padding-inline:3px}
+}

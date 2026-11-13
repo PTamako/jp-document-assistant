@@ -8,7 +8,7 @@ const ci=read('.github/workflows/ci.yml');
 const worker=read('worker/index.js');
 const security=read('worker/security.js');
 
-test('approved production Wrangler only targets dedicated D1/R2 and excludes all previews, cron and new billable resources',()=>{
+test('approved production Wrangler only targets dedicated D1/R2 and excludes previews and unapproved resources; allows one AI recovery Cron',()=>{
  assert.equal(wrangler.name,'jp-document-assistant');
  assert.equal(wrangler.main,'worker/index.js');
  assert.equal(wrangler.assets?.directory,'./dist');
@@ -37,7 +37,8 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes all
  assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.
  assert.equal(wrangler.preview_urls,false);
  assert.equal(wrangler.observability?.enabled,false);
- for(const unwanted of ['kv_namespaces','queues','durable_objects','triggers','dispatch_namespaces','unsafe','containers','workflows','routes','route'])
+ assert.deepEqual(wrangler.triggers,{crons:['*/2 * * * *']});
+ for(const unwanted of ['kv_namespaces','queues','durable_objects','dispatch_namespaces','unsafe','containers','workflows','routes','route'])
    assert.equal(wrangler[unwanted],undefined,'unexpected billable/preview/routing setting '+unwanted);
 });
 
