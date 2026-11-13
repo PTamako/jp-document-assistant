@@ -31,7 +31,7 @@ export function splitJapaneseDocument(text,max=MAX_CHUNK_CHARS){
   let cut=max;
   for(const mark of ['\n','。','！','？','；','、','，',' ','\t']){
    const i=rest.lastIndexOf(mark,max-1);
-   if(i>=Math.floor(max*.5)){cut=i+1;break;}
+   if(i>=Math.floor(max*.92)){cut=i+1;break;}
   }
   chunks.push(rest.slice(0,cut));
   rest=rest.slice(cut);
