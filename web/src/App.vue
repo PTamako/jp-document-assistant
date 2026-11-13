@@ -283,6 +283,7 @@ const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recyc
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 const candidateApprovalRequired=ref(false);
+const candidateApprovalReady=ref(false),candidateApprovalSubmitted=ref(false),candidateApprovalId=ref('');
 const needsOtherAssigneeBonus=computed(()=>
   candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
   !!candidateDraft.assignee&&!homeflowMemberChoices.value.some(x=>x.value===candidateDraft.assignee&&x.self===true));
@@ -465,6 +466,7 @@ function clearPrivateWorkspace(){
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usageLoadSerial++;usageRefreshing.value=false;
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
+  candidateApprovalRequired.value=false;candidateApprovalReady.value=false;candidateApprovalSubmitted.value=false;candidateApprovalId.value='';
   ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;candidateMerchant.value='';pendingCandidateRetry.value=null;
   homeflowMemberChoices.value=[{value:'',label:'未指定'}];homeflowMembersError.value='';
   for(const key of Object.keys(financeTargetStatus))delete financeTargetStatus[key];
@@ -1264,6 +1266,9 @@ async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(a
 async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
 async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
  candidateApprovalRequired.value=d.approval_required===true;
+ candidateApprovalReady.value=d.approval_action_enabled===true;
+ candidateApprovalSubmitted.value=d.approval_submitted===true;
+ candidateApprovalId.value=d.approval_id||'';
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
  candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';
  const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
@@ -1276,7 +1281,8 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  ledgerAttempted.value=Number(d.integration?.attempt_count||0)>0&&d.integration?.state==='failed';ledgerMappingChangeConfirmed.value=false;
  // Suggestions are calculated by Kakebo against its real D1 merchant rules
  // and user-configured defaults. The user can always override either picker.
- candidateDraft.category=ledgerOptions.value.suggested?.category||'';
+ candidateDraft.category=ledgerOptions.value.suggested?.category||
+  (candidateApprovalRequired.value&&candidateDraft.entry_type==='transfer'?'投資・資産移動':'');
  candidateDraft.payment_source=ledgerOptions.value.suggested?.payment_source||'';
  // Explanatory warnings are not a real transaction memo. Leave the
  // accounting note blank for card purchase; the user can add their own.
