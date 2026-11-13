@@ -1,12 +1,22 @@
 // Stage D/E: durable, private member intent -> signed HomeFlow pending review.
 // NO target-app bridge call is made here. Approval does not authorize execution;
 // document.sync.* needs its own verified executor, which is NOT implemented.
-import {randomToken,hashString,hmacHex,isoNow} from './security.js';
+import {randomToken,hashString,isoNow} from './security.js';
 import {json,bad,readJson,failure} from './http.js';
 import {validatedPayload} from './bridge.js';
 
 const idPattern=/^[a-f0-9]{32}$/;
 const hashPattern=/^[a-f0-9]{64}$/;
+// Unlike the document-assistant's legacy UTF-8 bridge secrets, HomeFlow
+// approval secrets are 32 raw bytes encoded as 64 hex characters.
+async function approvalSignature(secret,stamp,raw){
+ const bytes=Uint8Array.from(secret.match(/.{2}/g),x=>parseInt(x,16));
+ const key=await crypto.subtle.importKey('raw',bytes,
+  {name:'HMAC',hash:'SHA-256'},false,['sign']);
+ const signed=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(
+  'jp-document-assistant\n'+stamp+'\n'+raw));
+ return Array.from(new Uint8Array(signed),b=>b.toString(16).padStart(2,'0')).join('');
+}
 const kinds={
  finance:{target:'kakebo',confirm:'CONFIRM_ACCOUNTING'},
  homeflow_task:{target:'homeflow',confirm:'CONFIRM_TASK'},
@@ -119,8 +129,8 @@ export async function requestDocumentMemberApproval(request,env,p,id){
   requester_user_id:p.homeflow_user_id,resource_id:id,
   payload_sha256:digest,target_app:target};
  const raw=JSON.stringify(wire),stamp=String(Date.now());
- const signature=await hmacHex(env.DOCUMENT_APPROVAL_SUBMISSION_SECRET,
-  'jp-document-assistant\n'+stamp+'\n'+raw);
+ const signature=await approvalSignature(env.DOCUMENT_APPROVAL_SUBMISSION_SECRET,
+  stamp,raw);
  let response,data;
  try{
   response=await env.HOMEFLOW_BRIDGE_SERVICE.fetch(new Request(
