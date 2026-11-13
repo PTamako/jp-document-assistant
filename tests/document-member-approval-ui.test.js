@@ -31,7 +31,7 @@ test('member PWA differentiates submitting a review from owner direct target syn
  assert.match(app,/已提交 HomeFlow 待审批，尚未同步到目标应用/);
  assert.match(app,/candidateApprovalRequired\?\(candidateApprovalSubmitted\?'已提交待审批'/);
  assert.match(app,/:disabled="candidateActionDisabled\|\|candidateApprovalSubmitted"/);
- assert.match(app,/已提交 HomeFlow 审批，尚未同步目标应用/);
+ assert.match(app,/申请已提交，尚未查询到最新审批状态；目标应用没有同步/);
  assert.match(app,/candidateApprovalReady\.value=false;candidateApprovalSubmitted\.value=false;candidateApprovalPrepared\.value=false/);
 });
 
@@ -48,4 +48,30 @@ test('network uncertainty retries original private snapshot without quietly chan
  assert.match(app,/candidateApprovalRequired&&candidateApprovalPrepared/);
  assert.match(app,/重试原申请/);
  assert.match(app,/if\(!stillCurrent\(\)\)return/);
+});
+
+test('manual approval status is verified through a purpose-separated HMAC and never becomes execution proof',()=>{
+ const status=app.slice(app.indexOf('async function checkCandidateApprovalStatus(){'),
+  app.indexOf('\nasync function verifyLedgerStatus',app.indexOf('async function checkCandidateApprovalStatus(){')));
+ assert.match(status,/\/api\/candidates\/\$\{candidateId\}\/approval/);
+ assert.match(status,/accountEpoch\.snapshot\(\)/);
+ assert.match(status,/accountEpoch\.assertCurrent\(account\)/);
+ assert.match(status,/candidateDraft\.id===candidateId&&current\.value\?\.id===docId/);
+ assert.match(status,/result\?\.applied!==false\|\|result\.target_changed!==false/);
+ assert.match(status,/candidateApprovalChecked\.value=result\.approval_checked===true/);
+ assert.doesNotMatch(status,/setInterval|setTimeout/);
+ assert.match(app,/@click="checkCandidateApprovalStatus"/);
+ assert.match(app,/查询 HomeFlow 审批状态/);
+ assert.match(app,/管理员已批准，但目前尚无此操作的安全执行器/);
+ assert.match(app,/管理员已拒绝该申请/);
+ assert.match(app,/candidateApprovalStatus\.value='not_submitted';candidateApprovalChecked\.value=false/);
+ const worker=intent.slice(intent.indexOf('export async function documentMemberApprovalStatus('),
+  intent.indexOf('export async function requestDocumentMemberApproval(',intent.indexOf('export async function documentMemberApprovalStatus(')));
+ assert.match(worker,/checkedMember\(p\)/);
+ assert.match(worker,/row\.homeflow_household_id!==p\.homeflow_household_id/);
+ assert.match(worker,/jp-document-assistant:status/);
+ assert.match(worker,/remote\.payload_sha256!==row\.payload_sha256/);
+ assert.match(worker,/remote\.applied!==false\|\|remote\.target_changed!==false/);
+ assert.match(worker,/APPROVAL_STATUS_UNCONFIRMED/);
+ assert.doesNotMatch(worker,/KAKEBO_BRIDGE_SERVICE|ZHIXUE_BRIDGE_SERVICE|\/\/api\/candidates\/.*commit/);
 });
