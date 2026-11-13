@@ -53,3 +53,28 @@ test('dedicated translator loads ONNX sessions sequentially and caps decoding',(
  assert.match(source,/MAX_OUTPUT_TOKENS=64/);
  assert.match(source,/ort\.env\.wasm\.numThreads=1/);
 });
+
+
+test('iOS CORS or CSP failure automatically retries through same-origin fixed relay',async()=>{
+ const attempted=[];
+ const model=runModel(async url=>{
+  attempted.push(String(url));
+  if(String(url).startsWith('https://huggingface.co/'))throw TypeError('Failed to fetch');
+  return {ok:true,status:200,headers:{get:()=>null},arrayBuffer:async()=>new ArrayBuffer(600000)};
+ });
+ await model.translate();
+ assert.deepEqual(attempted.map(url=>url.includes('/api/local-translation/models/')), [false,true,false,true]);
+ assert.match(attempted[1],/^\/api\/local-translation\/models\/source\.spm$/);
+ assert.match(attempted[3],/^\/api\/local-translation\/models\/target\.spm$/);
+ assert.equal(model.messages.at(-1).code,'tokenizer');
+ assert.ok(!attempted.some(url=>url.includes('ご利用ありがとうございます')));
+});
+test('relay 502 is surfaced as a source network failure with no raw model body',async()=>{
+ const model=runModel(async url=>{
+  if(String(url).startsWith('https://'))throw TypeError('CSP blocked redirect');
+  return {ok:false,status:502,headers:{get:()=>null}};
+ });
+ await model.translate();
+ assert.equal(model.messages.at(-1).code,'download');
+ assert.match(model.messages.at(-1).message,/模型源站连接失败/);
+});
