@@ -141,7 +141,7 @@ async function verifyHomeFlow(env,code,verifier){
     typeof info.user_id!=='string'||info.sub!==info.user_id||
     !/^[a-f0-9-]{32,64}$/i.test(info.user_id)||
     typeof info.household_id!=='string'||
-    !/^[a-f0-9-]{32,64}$/i.test(info.household_id)||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(info.household_id)||
     !['owner','member'].includes(info.role)||
     typeof info.nickname!=='string'||!info.nickname.trim()||
     info.nickname.length>80)return null;
