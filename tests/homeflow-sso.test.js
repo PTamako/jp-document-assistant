@@ -117,7 +117,8 @@ async function setup(){
    }
    return {response,body,authUrl:callback,
      state:callback?.searchParams.get('state'),
-     cookie:response.headers.get('set-cookie')?.split(';')[0]};
+     cookie:response.headers.get('set-cookie')?.split(';')[0],
+     localCookie:oldSession?'__Host-da_session='+oldCookie:''};
  };
  const finish=async(flow,{cookie=flow.cookie,stateParam=flow.state,code='f'.repeat(64),
    resumeSecret=flow.body.resume_secret}={})=>{
@@ -128,7 +129,7 @@ async function setup(){
    if(cb.status!==200)return cb;
    return completeHomeFlowSso(new Request(app+'/api/homeflow-sso/complete',{
      method:'POST',headers:{Origin:app,'Content-Type':'application/json',
-       ...(cookie?{Cookie:cookie}:{})},
+       ...(flow.localCookie?{Cookie:flow.localCookie}:{})},
      body:JSON.stringify({state:stateParam,resume_secret:resumeSecret})
    }),env,new URL(app+'/api/homeflow-sso/complete'));
  };
