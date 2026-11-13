@@ -526,6 +526,9 @@ async function route(request,env,ctx){
     return json({ok:true,initialized:Number(state?.count||0)>0});
   }
   if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
+  if(path==='/api/homeflow-sso/status' && request.method==='GET')
+    return new Response(JSON.stringify({enabled:env.HOMEFLOW_SSO_ENABLED==='true'}),
+      {headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
   if(path==='/api/homeflow-sso/start')return startHomeFlowSso(request,env,url);
   if(path==='/api/homeflow-sso/callback')return callbackHomeFlowSso(request,env,url);
   if(path==='/api/homeflow-sso/complete')return completeHomeFlowSso(request,env,url);
