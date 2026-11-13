@@ -5,6 +5,8 @@ const CF_MODEL='@cf/qwen/qwen3.8-27b';
 // Thinking tokens count toward maxOutputTokens; MEDIUM balances quality and cost.
 export const GEMINI_THINKING_LEVEL='MEDIUM';
 export const GEMINI_MAX_OUTPUT_TOKENS=8192;
+// Long-running thinking requests must not be mistaken for connectivity failures.
+export const GEMINI_REQUEST_TIMEOUT_MS=45000;
 const PROMPT='document-v3-20261112-json';
 const SUCCESS_PROMPT_VERSIONS=new Set([PROMPT,'document-v2-20261112-fields','document-v1-20261112']);
 const first=(db,q,...a)=>db.prepare(q).bind(...a).first();
@@ -180,6 +182,12 @@ export function classifyCloudflareError(error){
  if(/(?:\b50[023]\b|overloaded|service\s*unavailable)/i.test(message))return 'cloudflare_service_unavailable';
  return 'provider_failed';
 }
+export function classifyGeminiTransportError(error){
+ // Workerd/Fetch may surface the timeout as TimeoutError or AbortError.
+ // No raw provider exception is ever persisted or shown to the user.
+ const name=String(error?.name||'');
+ return name==='TimeoutError'||name==='AbortError'?'gemini_timeout':'gemini_network_error';
+}
 async function generate(env,provider,source){
  const content=prompt(source);
  if(provider==='cloudflare'){
@@ -191,12 +199,12 @@ async function generate(env,provider,source){
  try{
   response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent',{
    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':env.GEMINI_API_KEY},
-   signal:AbortSignal.timeout(20000),
+   signal:AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
     body:JSON.stringify({contents:[{role:'user',parts:[{text:content}]}],
     generationConfig:geminiGenerationConfig()})
   });
- }catch{
-  throw Error('gemini_network_error');
+ }catch(error){
+  throw Error(classifyGeminiTransportError(error));
  }
  if(!response.ok){
   // A 400 is not retried: another identical request will waste the free quota.
@@ -207,7 +215,10 @@ async function generate(env,provider,source){
   throw Error(classifyGeminiHttpError(response.status,failureBody));
  }
  let body;
- try{body=await response.json();}catch{throw Error('gemini_invalid_response');}
+ try{body=await response.json();}catch(error){
+  const category=classifyGeminiTransportError(error);
+  throw Error(category==='gemini_timeout'?'gemini_timeout':'gemini_invalid_response');
+ }
  return extractGeminiResponseText(body);
 }
 async function addStudyCandidates(env,doc,result){
