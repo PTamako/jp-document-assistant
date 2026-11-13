@@ -1033,9 +1033,11 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  candidateDraft.note=current.value.category==='card_spend'?'':(item.payload?.note||'');
  candidateMerchant.value=item.candidate_kind==='finance'?(item.payload?.merchant||''):'';
  candidateDraft.title=item.payload?.title||current.value.title;
- if(pendingCandidateRetry.value?.id===item.id)Object.assign(candidateDraft,pendingCandidateRetry.value.body);
  candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;candidateDraft.task_share_confirmed=false;
  candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||item.payload?.sentence||'';
+ // A failed network attempt must reopen with precisely its previously
+ // authorized scope and fields, or immutable idempotency rejects the retry.
+ if(pendingCandidateRetry.value?.id===item.id)Object.assign(candidateDraft,pendingCandidateRetry.value.body);
  sheet.value='candidate';integrationConfigured.value=d.available&&(item.candidate_kind!=='finance'||(ledgerOptions.value.categories.length>0&&ledgerOptions.value.paymentSources.length>0));
  }catch(e){problem(e);}}
 async function commitApprovedCandidate(){
