@@ -493,6 +493,13 @@ async function updateField(request,env,p,fieldId){
 async function candidatesForDoc(env,p,id){
   const doc=await visibleDocument(env.DB,id,p);
   if(!doc)bad('文书不存在','NOT_FOUND',404);
+  // Sharing a source document does NOT share the owner's private target
+  // accounts, approval candidates, remote ledger IDs or sync history.
+  // The collaborator may edit the shared document, but must create any
+  // personal target intent from their OWN verified account after approval
+  // workflow support is available. Avoid even loading these private rows.
+  if(doc.owner_id!==p.user_id)
+    return json({items:[],shared_document:true,integration_access:false});
   const rows=await dbAll(env.DB,`SELECT c.id,c.candidate_kind,c.payload_json,c.state,
     i.state integration_state,i.target,i.remote_id FROM action_candidates c
     LEFT JOIN integration_links i ON i.candidate_id=c.id WHERE c.document_id=? ORDER BY c.created_at ASC`,id);
