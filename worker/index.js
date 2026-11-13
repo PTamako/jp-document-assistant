@@ -513,7 +513,6 @@ async function contentForAttachment(env,p,id,aid){
   if(!result)bad('R2 原件已缺失','ORIGINAL_MISSING',404);
   return new Response(result.body,{headers:{'Content-Type':a.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox",'Content-Disposition':'inline'}});
 }
-import { serveLocalTranslationModel } from './local-translate-model.js';
 async function route(request,env,ctx){
   const url=new URL(request.url),path=url.pathname,method=request.method;
   if(!path.startsWith('/api/'))return env.ASSETS?.fetch(request) || new Response('Not found',{status:404});
@@ -530,8 +529,6 @@ async function route(request,env,ctx){
   if(method==='GET'&&path==='/api/google/oauth/callback')return oauthCallback(request,env,url);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
-  const localModel=path.match(/^\/api\/local-translation\/models\/([A-Za-z0-9_.-]+)$/);
-  if(localModel)return serveLocalTranslationModel(request,localModel[1]);
   if(path.startsWith('/api/google/oauth/')||path.startsWith('/api/google/drive/'))return handleBrowserGoogle(request,env,p,url);
   if(path.startsWith('/api/google/gmail/'))return handleGoogleGmail(request,env,p,path,url);
   if(method==='GET'&&path==='/api/calendar/status')return calendarStatus(env,p);
