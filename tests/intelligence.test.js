@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeAiAnalysis,geminiGenerationConfig,classifyGeminiHttpError,extractGeminiResponseText,geminiRetryCooldown,cloudflareGenerationConfig,extractCloudflareResponseText,classifyCloudflareError} from '../worker/intelligence.js';
+import {normalizeAiAnalysis,geminiGenerationConfig,GEMINI_REQUEST_TIMEOUT_MS,classifyGeminiTransportError,classifyGeminiHttpError,extractGeminiResponseText,geminiRetryCooldown,cloudflareGenerationConfig,extractCloudflareResponseText,classifyCloudflareError} from '../worker/intelligence.js';
 test('AI output only generates source-grounded Chinese explanations, words and sentences',()=>{
  const source='営業時間を確認してください。納付期限は明日ではありません。';
  const raw=JSON.stringify({summary_zh:'营业时间说明，需要人工确认',
