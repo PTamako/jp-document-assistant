@@ -519,7 +519,30 @@ test('private documents are not exposed to invited user and shared only when con
   const ok=await req(env,`/api/documents/${id}`,{method:'PATCH',...auth(a),data:{visibility:'shared',version:doc.version,confirm_sensitive_share:true}});
   assert.equal(ok.response.status,200);
   assert.equal((await req(env,`/api/documents/${id}`,auth(b))).response.status,200);
-  assert.equal((await req(env,`/api/documents/${id}/trash`,{method:'POST',...auth(b),data:{}})).response.status,404);
+  const nonOwner=(await req(env,`/api/documents/${id}`,auth(b))).data.document;
+  const forbiddenVisibility=await req(env,`/api/documents/${id}`,{
+    method:'PATCH',...auth(b),data:{visibility:'private',version:nonOwner.version}
+  });
+  assert.equal(forbiddenVisibility.response.status,403,'original owner controls privacy');
+  const updated=await req(env,`/api/documents/${id}`,{
+    method:'PATCH',...auth(b),data:{title:'共享协作修改',version:nonOwner.version}
+  });
+  assert.equal(updated.response.status,200,JSON.stringify(updated.data));
+  assert.equal((await req(env,`/api/documents/${id}`,auth(a))).data.document.title,'共享协作修改');
+  assert.equal((await req(env,`/api/documents/${id}`,{
+    method:'PATCH',...auth(b),data:{title:'旧版本覆盖',version:nonOwner.version}
+  })).response.status,409,'a stale editor must never overwrite a newer version');
+  const trash=await req(env,`/api/documents/${id}/trash`,{method:'POST',...auth(b),data:{}});
+  assert.equal(trash.response.status,200,'shared collaborator may trash a shared document');
+  assert.equal((await req(env,`/api/documents/${id}`,auth(a))).response.status,404);
+  const restored=await req(env,`/api/documents/${id}/restore`,{method:'POST',...auth(b),data:{}});
+  assert.equal(restored.response.status,200,'shared collaborator may restore shared document');
+  assert.equal((await req(env,`/api/documents/${id}`,auth(a))).response.status,200);
+  const events=env.DB.sql.prepare(`SELECT kind,actor_user_id FROM audit_events
+    WHERE entity_id=? AND kind IN ('document_metadata_updated','document_trashed','document_restored')
+    ORDER BY created_at,kind`).all(id);
+  assert.equal(events.length,5-2,'one metadata, trash and restore each audited');
+  assert.ok(events.every(x=>x.actor_user_id===joined.data.user.id));
 });
 
 test('trash restores without deleting R2; permanent deletion removes R2 and private rows',async()=>{
