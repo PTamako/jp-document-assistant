@@ -5,13 +5,16 @@
 ## 当前正式环境（截至 2026-11-13）
 
 - Cloudflare 正式 Worker：[jp-document-assistant](https://jp-document-assistant.yupan6706.workers.dev/)；专用 D1 `jp-document-assistant`；专用私有 R2 `jp-document-assistant-private`。Worker Preview URLs 关闭，没有任何本项目 Preview 数据库或 R2。
-- 正式 D1 已核对 18 条迁移记录；支持文书、字段人工核验、回收站、附件清理、备份/恢复、家庭权限及 Google OAuth 授权记录。
+- 正式 D1 已核对 19 条迁移记录；支持文书、字段人工核验、回收站、附件清理、备份/恢复、家庭权限及 Google OAuth 授权记录。
 - Gmail、Google Drive：服务器端加密 refresh token，iPhone PWA 通过浏览器授权并在返回时刷新状态。Gmail 搜索全邮箱，每页 5 封；不读取 iPhone Apple Mail 全部邮箱。
-- 知学有正式已同步记录；家計簿也有历史同步，但**家計簿可能在之后删除账目**。本仓库提供按需签名核对目标当前状态的代码，删除/回收站记录一律不自动重建。
+- 历史记录中曾有知学和家計簿联动成功，但本次只读查询文书助手的 `integration_links` 现为 0。远端是否仍保有记录需经用户主动签名核对；目标的删除/回收站记录不自动重建或新增。
 - HomeFlow 允许本人选择私人或家庭共享任务；私人文书要共享任务元数据需要再次确认。家庭成员选项来自签名、当前家庭限定的 HomeFlow 只读接口，不能假冒其他账号。
 - OCR：PDF 有文字层时优先本机解析；扫描 PDF 和照片可选本机 PaddleOCR、Workers AI 或 OCR.space。Gemini 3.6 Flash 为用户逐份确认的外部 AI，应用内日限 20 次、分钟限 5 次；这些上限**不等于** Google/Cloudflare 实际免费余额。
 - 文书详情按「原文 → 中文解释 → 字段 → 待办 → 学习」排序；全文日中机翻现在使用**知学既有 Google Apps Script LanguageApp**，通过 `ZHIXUE_BRIDGE_SERVICE` 与 `ZHIXUE_BRIDGE_SECRET` 在两个正式 Worker 之间进行 HMAC 签名调用。iPhone 不运行 227 MB OPUS-MT/ONNX 模型。仅在用户逐份勾选同意后发送已保存的日文文字，不发送照片、PDF 原件、密钥，不自动降级到 MyMemory、非正式 Google 译源或 Workers AI。每份最多 8000 字，拆成至多 8 段；文书助手按日本时间全站每日最多预留 80 次 Google 翻译调用（与知学词典共用 Google 账号免费额度，但并非全局精准余量）。译文仅在已有 D1 私有文书下按文本 SHA 复用；修改原文时失效，删除文书时级联删除缓存。机翻结果只用于对照，不影响原文、字段核验或 AI 中文解释。首次真机端到端翻译还需验收。
-- AI 中文解读改为 D1 持久队列后台处理，Google 503 最多自动重试 1 次；同一正式 Worker 使用每 2 分钟 Cron 恢复中断任务，不创建 Preview 资源。
+- OCR.space 已加入失败后五分钟冷却、同一原件最多一次明确重试、D1 原子抢占与每日预算保护；成功结果命中缓存时不重复调用。失败不自动重试。
+- Google Drive 为全盘**只读搜索权限**（`drive.readonly`），而不是 Picker 的 `drive.file`；仅用户点击导入时才读取指定文件，不做后台全盘镜像。用户需理解授权范围。
+- 旧 OPUS-MT 大模型中转 API 已从正在运行的 Worker 路由移除，不再提供手机端下载路径；历史本地模型源文件暂保留供测试与迁移参考。
+- AI 中文解读改为 D1 持久队列后台处理，Google 503 最多自动重试 1 次；同一正式 Worker 使用每 5 分钟 Cron 兜底恢复中断任务，不创建 Preview 资源。
 - Cloudflare Builds 发布命令只运行 JavaScript 语法、单元测试和生产构建，因为构建镜像 Python 3.13 缺少 `_sqlite3`；GitHub PR CI 仍运行完整 Python/D1 测试。
 - Cloudflare 当前资源配置见 [wrangler.jsonc](wrangler.jsonc)；业务代码合并到 `main` 后使用 Cloudflare Builds 发布。PR CI 只做检查、测试、构建，不接触生产数据库、不创建 Preview。
 

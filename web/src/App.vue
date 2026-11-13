@@ -1661,6 +1661,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
   <p v-if="driveCloud.connected" class="google-source-account"><UiIcon name="check-circle" :size="15"/>已连接 <span>{{driveCloud.google_email}}</span></p>
   <template v-if="!driveCloud.connected">
     <button class="primary full" :disabled="driveBusy||!driveCloud.enabled" @click="startGoogleAuthorization('drive')">连接 Google Drive</button>
+     <p v-if="driveCloud.enabled" class="fine-print">授权只读搜索 Drive 文件；只有点“导入”才读取所选文件。</p>
     <p v-if="!driveCloud.enabled" class="fine-print">Google 授权配置尚未完成</p><p v-else-if="driveCloud.progress_error" class="fine-print">{{driveCloud.progress_error}}</p>
   </template>
   <template v-else>

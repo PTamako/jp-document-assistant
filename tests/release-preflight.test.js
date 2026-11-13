@@ -37,7 +37,7 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.
  assert.equal(wrangler.preview_urls,false);
  assert.equal(wrangler.observability?.enabled,false);
- assert.deepEqual(wrangler.triggers,{crons:['*/2 * * * *']});
+ assert.deepEqual(wrangler.triggers,{crons:['*/5 * * * *']});
  for(const unwanted of ['kv_namespaces','queues','durable_objects','dispatch_namespaces','unsafe','containers','workflows','routes','route'])
    assert.equal(wrangler[unwanted],undefined,'unexpected billable/preview/routing setting '+unwanted);
 });
@@ -59,6 +59,7 @@ test('private auth/API responses have strict session cookies, CSRF, no-store, an
  assert.match(read('worker/http.js'),/Cache-Control':'no-store'/);
  assert.doesNotMatch(worker,/\\.list\(/);
  assert.doesNotMatch(worker,/env\.DOCUMENTS\.createSignedUrl/);
+ assert.doesNotMatch(worker,/serveLocalTranslationModel|\/api\/local-translation\/models/);
 });
 
 test('Cloudflare PBKDF2 is within supported 100k iteration bound and frontend guides initialization',()=>{
