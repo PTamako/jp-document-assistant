@@ -151,55 +151,63 @@ const progress=(value,message)=>self.postMessage({type:'progress',progress:value
 const setPhase=(value,file='')=>{phase=value;phaseFile=file;};
 async function fetchModel(path){
  setPhase('download',path);
- const url=MODEL_BASE+path+'?download=true';
- let cache=null,response=null;
- // CacheStorage may be disabled by iOS storage policy: fetch directly in that case.
+ // Prefer the provider CDN to avoid Cloudflare requests when it works.
+ // Xet redirects are sometimes blocked by iOS PWA CSP/CORS; then use a
+ // fixed, authenticated same-origin streaming endpoint. Only file names
+ // travel over this endpoint; document text never leaves the device.
+ const direct=MODEL_BASE+path+'?download=true';
+ const relay='/api/local-translation/models/'+path;
+ let cache=null,buffer=null,failedCode='download_network';
  try{
-  if(typeof caches!=='undefined'){
-   cache=await caches.open('jda-ja-zh-mt-v2');
-   response=await cache.match(url);
-  }
- }catch{cache=null;response=null;}
- if(response&&Number(response.headers.get('content-length'))>0&&
-    Number(response.headers.get('content-length'))<MIN_BYTES[path]){
-  try{await cache?.delete(url);}catch{}
-  response=null;
- }
- if(!response){
-  try{
-   response=await fetch(url,{
-    mode:'cors',credentials:'omit',redirect:'follow',
-    signal:typeof AbortSignal.timeout==='function'?AbortSignal.timeout(240000):undefined
-   });
-  }catch(error){
-   const code=error?.name==='TimeoutError'?'download_timeout':'download_network';
-   throw new Error(code);
-  }
-  if(!response.ok)throw new Error('download_http_'+response.status);
-  // Cache only public weights; user-provided text never goes into this cache.
-  // Keep each download sequential to avoid an over-400MB temporary memory spike.
+  if(typeof caches!=='undefined')cache=await caches.open('jda-ja-zh-mt-v3');
+ }catch{cache=null;}
+ for(const url of [direct,relay]){
+  let response=null,fromCache=false;
   if(cache){
+   try{response=await cache.match(url);fromCache=!!response;}catch{/* storage disabled */}
+  }
+  if(!response){
    try{
-    const cloned=response.clone();
-    const write=cache.put(url,cloned).catch(()=>{});
-    const buffer=await response.arrayBuffer();
-    await write;
-    if(buffer.byteLength<MIN_BYTES[path])throw new Error('download_incomplete');
-    return buffer;
-   }catch(e){
-    if(e?.message==='download_incomplete')throw e;
-    // If Safari refuses storage, still allow ordinary one-off translation.
-    if(!response.bodyUsed)return await response.arrayBuffer();
-    throw new Error('download_storage_or_memory');
+    response=await fetch(url,{
+     mode:'cors',credentials:url===relay?'same-origin':'omit',
+     redirect:'follow',
+     signal:typeof AbortSignal.timeout==='function'?AbortSignal.timeout(300000):undefined
+    });
+   }catch(error){
+    failedCode=error?.name==='TimeoutError'?'download_timeout':'download_network';
+    continue;
    }
   }
+  if(!response.ok){
+   failedCode=url===relay?'download_relay_http_'+response.status:'download_http_'+response.status;
+   continue;
+  }
+  const n=Number(response.headers?.get?.('content-length')||0);
+  if(n>0&&n<MIN_BYTES[path]){
+   failedCode='download_incomplete';
+   if(fromCache){try{await cache?.delete(url);}catch{}}
+   continue;
+  }
+  try{
+   // CacheStorage can duplicate a large transfer internally. Only attempt
+   // it for model files within the browser's cache budget, never in parallel
+   // with another model. If it fails, the downloaded model still works.
+   const shouldCache=!fromCache&&!!cache;
+   const pending=shouldCache?cache.put(url,response.clone()).catch(()=>{}):null;
+   buffer=await response.arrayBuffer();
+   if(pending)await pending;
+   if(buffer.byteLength<MIN_BYTES[path]){
+    failedCode='download_incomplete';
+    try{await cache?.delete(url);}catch{}
+    buffer=null;continue;
+   }
+   return buffer;
+  }catch(e){
+   failedCode='download_storage_or_memory';
+   if(fromCache){try{await cache?.delete(url);}catch{}}
+  }
  }
- const buffer=await response.arrayBuffer();
- if(buffer.byteLength<MIN_BYTES[path]){
-  try{await cache?.delete(url);}catch{}
-  throw new Error('download_incomplete');
- }
- return buffer;
+ throw new Error(failedCode);
 }
 async function main(text){
  const segments=splitText(text);
@@ -268,6 +276,8 @@ const failureMessage=(phase,error)=>{
   if(detail.includes('incomplete'))return '模型文件不完整，请重新点击翻译';
   if(detail.includes('timeout'))return '下载模型超时，请在 Wi-Fi 下重试';
   if(detail.includes('storage_or_memory'))return '本机存储或内存不足，无法读取模型';
+  if(detail.includes('relay_http_401')||detail.includes('relay_http_403'))return '模型下载会话已过期，请重新登录文书助手';
+  if(detail.includes('relay_http_502'))return '模型源站连接失败，稍后再试';
   return '模型下载失败，请检查网络后重试';
  }
  const suffix=/memory|alloc|out of bounds|out of memory/.test(detail)?
