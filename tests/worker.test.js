@@ -2967,7 +2967,7 @@ test('SBI investment card notice is always a transfer, including pre-existing ex
 });
 
 
-test('shared attachment editor can trash, restore and reorder but not purge R2 owned by another member',async()=>{
+test('shared attachment editor can trash, restore and reorder; permanent deletion requires trash first',async()=>{
  const env=makeEnv(),a=await boot(env);
  const inv=await req(env,'/api/household/invites',{method:'POST',...auth(a),
    data:{invitee_email:'collaborator@example.invalid'}});
@@ -3009,7 +3009,7 @@ test('shared attachment editor can trash, restore and reorder but not purge R2 o
  const purge=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/permanent-delete',{
    method:'POST',...auth(b),data:{confirm:'DELETE_FOREVER'}
  });
- assert.equal(purge.response.status,403);
+ assert.equal(purge.response.status,409);
  assert.equal(env._blobs.size,1);
  const one=env.DB.sql.prepare('SELECT * FROM attachments WHERE id=?').get(aid);
  const second='f'.repeat(32);
@@ -3035,4 +3035,103 @@ test('shared attachment editor can trash, restore and reorder but not purge R2 o
  assert.equal((await req(env,'/api/documents/'+id+'/attachments/'+aid+'/trash',{
    method:'POST',...auth(b),data:{}})).response.status,404);
  assert.equal(env._blobs.size,1);
+});
+
+
+test('shared editor permanently deletes an explicitly trashed attachment; R2 ownership and audit actor remain distinct',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const inv=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
+   data:{invitee_email:'attachment-member@example.invalid'}});
+ const joined=await req(env,'/api/household/join',{method:'POST',data:{
+   invite_token:inv.data.invite_token,email:'attachment-member@example.invalid',
+   password:'strong-member-password-123',display_name:'成员'}});
+ assert.equal(joined.response.status,201);
+ const member={cookie:joined.response.headers.get('set-cookie').split(';')[0],
+   csrf:joined.data.csrf_token};
+ const form=new FormData();
+ form.append('file',new File([new Uint8Array([255,216,255,224,5,6,7,8])],
+  'shared-delete.jpg',{type:'image/jpeg'}));
+ form.append('retention','original');
+ const up=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+ assert.equal(up.response.status,201,JSON.stringify(up.data));
+ const id=up.data.document_id;
+ const before=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const aid=before.attachments[0].id;
+ const deny=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/trash',{
+  method:'POST',...auth(member),data:{}});
+ assert.equal(deny.response.status,404,'private document must remain opaque');
+ const shared=await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+  data:{version:before.version,visibility:'shared',confirm_sensitive_share:true}});
+ assert.equal(shared.response.status,200);
+ // Reuse a single R2 object for two attachment references in the same document.
+ // The first shared-editor delete must never destroy its sibling's bytes.
+ const source=env.DB.sql.prepare('SELECT * FROM attachments WHERE id=?').get(aid);
+ const sibling='e'.repeat(32);
+ const now=new Date().toISOString();
+ env.DB.sql.prepare(`INSERT INTO attachments
+  (id,document_id,object_id,file_label,sort_order,sha256,created_at,updated_at)
+  VALUES(?,?,?,?,?,?,?,?)`).run(sibling,id,source.object_id,'second-copy.jpg',1,
+   source.sha256,now,now);
+ assert.equal(env._blobs.size,1);
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments/'+aid+'/trash',{
+  method:'POST',...auth(member),data:{}})).response.status,200);
+ const removed=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/permanent-delete',{
+  method:'POST',...auth(member),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(removed.response.status,200,JSON.stringify(removed.data));
+ assert.equal(env._blobs.size,1,'R2 must remain while sibling attachment still references it');
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM attachments WHERE id=?').get(aid).n,0);
+ const tomb=env.DB.sql.prepare("SELECT owner_id FROM deletion_tombstones WHERE request_key=?")
+  .get('att:'+aid);
+ assert.equal(tomb.owner_id,owner.user.id,'tombstone belongs to original owner, not editor');
+ const audit=env.DB.sql.prepare("SELECT actor_user_id FROM audit_events WHERE entity_id=? AND kind='attachment_permanently_deleted'").get(aid);
+ assert.equal(audit.actor_user_id,joined.data.user.id,'audit records real executor');
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments/'+sibling+'/trash',{
+  method:'POST',...auth(member),data:{}})).response.status,200);
+ const last=await req(env,'/api/documents/'+id+'/attachments/'+sibling+'/permanent-delete',{
+  method:'POST',...auth(member),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(last.response.status,200,JSON.stringify(last.data));
+ assert.equal(env._blobs.size,0,'last shared-editor delete cleans only now orphaned R2 object');
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM storage_objects').get().n,0);
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM audit_events WHERE actor_user_id=? AND kind='attachment_permanently_deleted'")
+  .get(joined.data.user.id).n,2);
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments/'+sibling+'/permanent-delete',{
+  method:'POST',...auth(member),data:{confirm:'DELETE_FOREVER'}})).response.status,404,
+  'repeating the request cannot create an extra delete event');
+});
+
+test('revoking shared visibility removes collaborator permanent-delete rights immediately',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const inv=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
+  data:{invitee_email:'revoked-editor@example.invalid'}});
+ const joined=await req(env,'/api/household/join',{method:'POST',data:{
+  invite_token:inv.data.invite_token,email:'revoked-editor@example.invalid',
+  password:'member-strong-password-123',display_name:'成员'}});
+ const member={cookie:joined.response.headers.get('set-cookie').split(';')[0],
+  csrf:joined.data.csrf_token};
+ const form=new FormData();
+ form.append('file',new File([new Uint8Array([255,216,255,224,8,7,6,5])],
+  'revoked.jpg',{type:'image/jpeg'}));
+ form.append('retention','original');
+ const added=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form});
+ const id=added.data.document_id;
+ const initial=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const aid=initial.attachments[0].id;
+ assert.equal((await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+  data:{version:initial.version,visibility:'shared',confirm_sensitive_share:true}})).response.status,200);
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments/'+aid+'/trash',{
+  method:'POST',...auth(member),data:{}})).response.status,200);
+ const visible=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal((await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+  data:{version:visible.version,visibility:'private'}})).response.status,200);
+ const unauthorized=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/permanent-delete',{
+  method:'POST',...auth(member),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(unauthorized.response.status,404);
+ assert.equal(env._blobs.size,1);
+ assert.equal(env.DB.sql.prepare('SELECT state FROM attachments WHERE id=?').get(aid).state,'trashed');
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM audit_events WHERE actor_user_id=? AND kind='attachment_permanently_deleted'")
+  .get(joined.data.user.id).n,0);
+ const allowed=await req(env,'/api/documents/'+id+'/attachments/'+aid+'/permanent-delete',{
+  method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(allowed.response.status,200,JSON.stringify(allowed.data));
+ assert.equal(env._blobs.size,0);
 });
