@@ -15,7 +15,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql','0019_document_translation_cache.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -60,6 +60,28 @@ async function boot(env){
   return {cookie:r.response.headers.get('set-cookie').split(';')[0],csrf:r.data.csrf_token,user:r.data.user};
 }
 function auth(p){return {cookie:p.cookie,csrf:p.csrf};}
+
+test('service usage reports translation reserved chunks separately without exposing global Google quota',async()=>{
+ const env=makeEnv(),user=await boot(env);
+ const day=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+ env.DB.sql.prepare('INSERT INTO document_translation_daily_budget(japan_day,calls) VALUES(?,?)').run(day,3);
+ const usage=await req(env,'/api/usage',auth(user));
+ assert.equal(usage.response.status,200);
+ assert.deepEqual(usage.data.translation_jst_day,{
+  japan_day:day,calls:3,limit:80,remaining:77,
+  count_type:'reserved_chunks',scope:'document_assistant_only'
+ });
+ assert.ok(!('google_account_remaining' in usage.data));
+});
+test('other service usage remains available if translation statistics table is missing',async()=>{
+ const env=makeEnv(),user=await boot(env);
+ env.DB.sql.exec('DROP TABLE document_translation_daily_budget');
+ const usage=await req(env,'/api/usage',auth(user));
+ assert.equal(usage.response.status,200);
+ assert.equal(usage.data.translation_jst_day,null);
+ assert.equal(usage.data.app_utc_day.limit,5);
+ assert.equal(usage.data.ocr_space_utc_day.limit,20);
+});
 
 test('Workers AI file/photo import preview needs consent and uses shared five-call budget without R2 writes',async()=>{
  const env=makeEnv(),owner=await boot(env);
