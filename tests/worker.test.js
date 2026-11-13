@@ -47,7 +47,9 @@ async function req(env,path,{method='GET',data,cookie,csrf,form,extraHeaders={}}
   if(csrf)headers['X-CSRF-Token']=csrf;
   let body;
   if(form){body=form;}else if(data!==undefined){headers['Content-Type']='application/json';body=JSON.stringify(data);}
-  const response=await app.fetch(new Request(`https://app.example.test${path}`,{method,headers,body}),env);
+  const pending=[];
+  const response=await app.fetch(new Request(`https://app.example.test${path}`,{method,headers,body}),env,{waitUntil:promise=>pending.push(promise)});
+  await Promise.all(pending); // Worker waitUntil is nonblocking in production; tests drain it deterministically.
   const type=response.headers.get('Content-Type')||'';
   return {response,data:type.includes('application/json')?await response.json():null};
 }
@@ -322,7 +324,7 @@ test('selected Cloudflare AI analyzes a source once and caches grounded study ca
   source_type:'text',retention:'summary',text:source,ai_provider:'cloudflare'
  }});
  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
- assert.equal(imported.data.ai_status,'success');
+ assert.equal(imported.data.ai_status,'queued');
  assert.equal(calls,1);
  const id=imported.data.document_id;
  const detail=await req(env,'/api/documents/'+id,auth(u));
@@ -2663,7 +2665,7 @@ test('Gemini quota failure persists an error code and explicit user retry succee
    title:'测试工资',text:'給与明細 差引支給額 123456円',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
   }});
   assert.equal(created.response.status,201,JSON.stringify(created.data));
-  assert.equal(created.data.ai_status,'gemini_quota_or_rate_limited');
+  assert.equal(created.data.ai_status,'queued');
   assert.equal(calls,1,'no automatic Gemini retry spending quota');
   const id=created.data.document_id;
   const failed=(await req(env,'/api/documents/'+id,auth(u))).data.document.ai_analysis;
@@ -2672,7 +2674,7 @@ test('Gemini quota failure persists an error code and explicit user retry succee
   assert.equal(failed.result,null);
   assert.doesNotMatch(JSON.stringify(failed),/secret should not be shown/);
   const retried=await req(env,'/api/documents/'+id+'/ai/analyze',{method:'POST',...auth(u),data:{confirm:true}});
-  assert.equal(retried.data.ai_status,'success');
+  assert.equal(retried.data.ai_status,'queued');
   assert.equal(calls,2,'retry only happens on explicit user request');
   const passed=(await req(env,'/api/documents/'+id,auth(u))).data.document.ai_analysis;
   assert.equal(passed.status,'success');
@@ -2695,7 +2697,7 @@ test('a 20/20 Gemini 3.6 budget blocks imports before Google fetch and is visibl
    title:'工资',text:'給与明細 差引支給額 100000円',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
   }});
   assert.equal(imported.response.status,201,JSON.stringify(imported.data));
-  assert.equal(imported.data.ai_status,'gemini_daily_limit');
+  assert.equal(imported.data.ai_status,'queued');
   assert.equal(externalCalls,0);
   const doc=(await req(env,'/api/documents/'+imported.data.document_id,auth(owner))).data.document;
   assert.equal(doc.ai_analysis.model,'gemini-3.6-flash');
@@ -2709,7 +2711,7 @@ test('a 20/20 Gemini 3.6 budget blocks imports before Google fetch and is visibl
  }finally{globalThis.fetch=existingFetch;}
 });
 
-test('Gemini 503 only retries after a new user action and cooldown, without consuming a second request while waiting',async()=>{
+test('Gemini 503 waits for scheduled one-time recovery without consuming quota during cooldown',async()=>{
  const env=makeEnv(),owner=await boot(env);
  env.GEMINI_API_KEY='local-test-key';
  const previousFetch=globalThis.fetch;
@@ -2728,23 +2730,26 @@ test('Gemini 503 only retries after a new user action and cooldown, without cons
    title:'优惠券',text:'セブンプレミアム 5%OFF キャンペーン。内容をご確認ください。',source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
   }});
   assert.equal(imported.response.status,201,JSON.stringify(imported.data));
-  assert.equal(imported.data.ai_status,'gemini_service_overloaded');
+  assert.equal(imported.data.ai_status,'queued');
   assert.equal(googleCalls,1);
   const id=imported.data.document_id;
   const failed=(await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_analysis;
   assert.equal(failed.failure_code,'gemini_service_overloaded');
   assert.doesNotMatch(JSON.stringify(failed),/sensitive information/);
   const retry=await req(env,'/api/documents/'+id+'/ai/analyze',{method:'POST',...auth(owner),data:{confirm:true}});
-  assert.equal(retry.data.ai_status,'gemini_retry_cooldown');
-  assert.ok(retry.data.retry_after_seconds>0);
+  assert.equal(retry.data.ai_status,'in_progress');
   assert.equal(googleCalls,1,'no new Gemini call while in cooldown');
   const before=await req(env,'/api/usage',auth(owner));
   assert.equal(before.data.gemini_daily.calls,1,'rate limit counts only actual attempt');
   env.DB.sql.prepare('UPDATE document_ai_analyses SET updated_at=? WHERE document_id=?')
    .run(new Date(Date.now()-61000).toISOString(),id);
-  const success=await req(env,'/api/documents/'+id+'/ai/analyze',{method:'POST',...auth(owner),data:{confirm:true}});
-  assert.equal(success.data.ai_status,'success');
-  assert.equal(googleCalls,2,'one explicitly requested retry');
+  env.DB.sql.prepare("UPDATE document_ai_jobs SET next_attempt_at=? WHERE document_id=?")
+   .run(new Date(Date.now()-1000).toISOString(),id);
+  const pending=[];
+  await app.scheduled({},env,{waitUntil:promise=>pending.push(promise)});
+  await Promise.all(pending);
+  assert.equal((await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_job.state,'done');
+  assert.equal(googleCalls,2,'one scheduled recovery retry');
   const after=await req(env,'/api/usage',auth(owner));
   assert.equal(after.data.gemini_daily.calls,2);
  }finally{globalThis.fetch=previousFetch;}
