@@ -1731,7 +1731,7 @@ test('Google Picker CSP allows only explicitly trusted Google origins',async()=>
   assert.match(csp,/script-src 'self' 'wasm-unsafe-eval' https:\/\/accounts\.google\.com https:\/\/apis\.google\.com;/);
   assert.doesNotMatch(csp,/'unsafe-eval'/);
   assert.match(csp,/worker-src 'self'/);
-  assert.match(csp,/connect-src 'self' https:\/\/gmail\.googleapis\.com https:\/\/www\.googleapis\.com https:\/\/accounts\.google\.com https:\/\/oauth2\.googleapis\.com https:\/\/apis\.google\.com https:\/\/cdn\.jsdelivr\.net https:\/\/paddle-model-ecology\.bj\.bcebos\.com;/);
+  assert.match(csp,/connect-src 'self' https:\/\/gmail\.googleapis\.com https:\/\/www\.googleapis\.com https:\/\/accounts\.google\.com https:\/\/oauth2\.googleapis\.com https:\/\/apis\.google\.com https:\/\/cdn\.jsdelivr\.net https:\/\/paddle-model-ecology\.bj\.bcebos\.com https:\/\/huggingface\.co https:\/\/cas-bridge\.xethub\.hf\.co https:\/\/cdn-lfs\.hf\.co;/);
   assert.match(csp,/frame-src 'self' blob: https:\/\/accounts\.google\.com https:\/\/docs\.google\.com https:\/\/drive\.google\.com;/);
   assert.match(csp,/object-src 'none'/);
   assert.match(csp,/frame-ancestors 'none'/);
