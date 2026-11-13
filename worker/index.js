@@ -628,7 +628,7 @@ ELSE 'unreviewed' END review_status,
           AND f.review_state IN ('confirmed','corrected')
         ORDER BY CASE f.field_key WHEN 'transaction_at' THEN 0 ELSE 1 END LIMIT 1) verified_transaction_at
       FROM documents d WHERE d.lifecycle='active' AND d.archived_at IS NULL AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))
-      AND (d.analysis_status='needs_review' OR EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.field_key='due_date'))
+      -- Pending includes all active, visible and unarchived documents.
       ORDER BY CASE WHEN due_date IS NULL THEN 1 ELSE 0 END,due_date ASC,d.created_at DESC LIMIT ? OFFSET ?`,p.user_id,p.household_id,limit+1,offset);
     return json({items:rows.slice(0,limit),next_offset:rows.length>limit?offset+limit:null});
   }
