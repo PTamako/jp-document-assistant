@@ -44,6 +44,10 @@ defineProps({
     <template v-else-if="name==='mail'">
       <rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="m3.5 7 8.5 7 8.5-7"/>
     </template>
+    <template v-else-if="name==='languages'">
+      <path d="M2 5h12M8 3v3M5 8c.7 3.6 3.2 6.8 7 9M12 8c-.6 3.3-3.2 6.8-7 9"/>
+      <path d="M13 21l4-10 4 10M14.5 17h5"/>
+    </template>
     <template v-else-if="name==='book'">
       <path d="M12 6C9 3.6 6 4 3 4v16c3-.5 6-.6 9 2 3-2.6 6-2.5 9-2V4c-3 0-6-.4-9 2Zm0 0v16"/>
     </template>
