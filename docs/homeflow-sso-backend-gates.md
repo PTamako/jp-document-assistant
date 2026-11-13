@@ -39,3 +39,14 @@
 ## 测试与交接
 
 `tests/homeflow-sso.test.js` 使用内存 SQLite 实测“默认关闭、非法 Origin、浏览器绑定、状态单次消费、管理员双重绑定、旧文书/Gmail 原样保留、member 个人空间无数据、先 owner 后 member、防 audience/role/household 置换、原会话撤销阻断”。`tests/test_homeflow_identity_links.py` 验证迁移幂等及映射不可变。每次代码/测试/部署状态变化均应同步更新唯一主日志 `PTamako/homeflow/docs/four-app-development-handoff.md`；不得创建第二份进度日志。
+
+
+## 2026-11-13 阶段 B 跨应用注销/停用联动增量（仅 Draft，未上线）
+
+HomeFlow Draft #305 新增 15 分钟的**仅服务端** `session_assertion`：与 HomeFlow 原 `sessions(token_hash)` 的外键绑定；`POST /api/oauth/session-introspect` 仅允许后端以固定 client_id、一次性授权时取得的断言校验。HomeFlow 原会话登出、账户 disabled、家庭成员关系失效后，下次校验直接返回 401；不采用每分钟/每五分钟轮询，普通读取不写 D1 审计。HomeFlow [CI #43402025579](https://github.com/PTamako/homeflow/actions/runs/43402025579) 已 success，迁移 0053 **尚未执行**。
+
+文书助手的未执行新 `migrations/0022_homeflow_session_proofs.sql` 在既有 `sessions` 添加 `auth_source`，旧行默认 `legacy`；新 HomeFlow Session 必须存 `homeflow`，与在服务器 AES-GCM 加密的断言 1:1 关联。所有私人 GET 和写请求经 `worker/index.js::requireSession` 检查一次 HomeFlow 当前用户/role/household/昵称和已连接本地 ID，不满足立刻 401；失去 proof 严禁降级为旧身份认证。新 OAuth 交换返回的 assertion 仅保存在服务端加密表，**不放入浏览器 Cookie/URL/localStorage**。iPhone 端保留 15 分钟 cookie 的上限，实际上线前仍需确认 iOS 跨 PWA 真机行为。
+
+已新增自动测试：双重绑定、无 Cookie Safari 回传、HomeFlow 源会话撤销、role/household 冒用、防重放、无 proof 不能回退 legacy、旧 owner 私人文书及 Google OAuth 不变。文书助手 [Pre-merge CI #43402597451](https://github.com/PTamako/jp-document-assistant/actions/runs/43402597451) success（Node/Python/D1 测试、Vue build）；该结果仍**不代表生产或设备验收**。
+
+**生产保护**：新 0022/原 0020/0021 迁移、HomeFlow 0053/0054、功能开关均未运行/启用。备份由用户在电脑上自行完成；在其确认加密持久备份及隔离恢复结果前不合并/上线。跨 App 真机登录、session 切换和角色失效需阶段 F 人工核验。
