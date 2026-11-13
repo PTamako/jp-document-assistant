@@ -172,7 +172,8 @@ async function generate(env,provider,source){
  try{
   response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent',{
    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':env.GEMINI_API_KEY},
-   body:JSON.stringify({contents:[{role:'user',parts:[{text:content}]}],
+   signal:AbortSignal.timeout(20000),
+    body:JSON.stringify({contents:[{role:'user',parts:[{text:content}]}],
     generationConfig:geminiGenerationConfig()})
   });
  }catch{
@@ -235,7 +236,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
   }
   const delta=Date.now()-Date.parse(old.updated_at);
   if(Number.isFinite(delta)&&delta<3600000&&provider!=='gemini'&&old.prompt_version===PROMPT)return {ai_status:old.state==='pending'?'in_progress':'cooldown'};
-  if(old.state==='pending')return {ai_status:'stale_needs_review'};
+  if(old.state==='pending'&&Number.isFinite(delta)&&delta<120000)return {ai_status:'in_progress'};
   if(provider==='gemini'){
    const retry_after_seconds=geminiRetryCooldown(old);
    if(retry_after_seconds)return {ai_status:'gemini_retry_cooldown',retry_after_seconds};
@@ -243,8 +244,8 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  }
  const now=isoNow();
  const claim=old?
-  await run(env.DB,"UPDATE document_ai_analyses SET provider=?,source_sha=?,model_id=?,prompt_version=?,state='pending',result_json=NULL,updated_at=? WHERE document_id=? AND updated_at=? AND state!='pending'",
-   provider,sourceHash,model,PROMPT,now,doc.id,old.updated_at):
+  await run(env.DB,"UPDATE document_ai_analyses SET provider=?,source_sha=?,model_id=?,prompt_version=?,state='pending',result_json=NULL,updated_at=? WHERE document_id=? AND updated_at=? AND (state!='pending' OR updated_at<?)",
+   provider,sourceHash,model,PROMPT,now,doc.id,old.updated_at,new Date(Date.now()-120000).toISOString()):
   await run(env.DB,"INSERT OR IGNORE INTO document_ai_analyses(document_id,provider,source_sha,model_id,prompt_version,state,updated_at) VALUES(?,?,?,?,?,'pending',?)",
    doc.id,provider,sourceHash,model,PROMPT,now);
  if(claim.meta?.changes!==1)return {ai_status:'in_progress'};
