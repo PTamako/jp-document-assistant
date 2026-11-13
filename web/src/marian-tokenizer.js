@@ -60,10 +60,15 @@ function readPiece(bytes){
  return {piece,score,type};
 }
 function trainerModelType(bytes){
- const at={i:0};let modelType=1; // default UNIGRAM
+ const at={i:0};let modelType=1,found=false; // default UNIGRAM
+ // Only TrainerSpec.model_type matters at inference time. Some real Marian
+ // trainer blobs contain extension/group data that a minimal reader cannot
+ // fully walk; do not reject a valid model after the required enum was read.
  while(at.i<bytes.length){
   const tag=varint(bytes,at,bytes.length),field=Math.floor(tag/8),wire=tag%8;
-  if(field===3&&wire===0)modelType=varint(bytes,at,bytes.length);
+  if(field===3&&wire===0){
+   modelType=varint(bytes,at,bytes.length);found=true;
+  }else if(wire===4&&found)break; // trainer metadata after model_type
   else skip(bytes,at,bytes.length,wire);
  }
  return modelType;
