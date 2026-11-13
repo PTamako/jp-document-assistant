@@ -20,7 +20,7 @@ function d1(){
  const sqlite=new DatabaseSync(':memory:');
  for(const path of ['0001_init.sql','0003_password_auth.sql',
     '0013_google_oauth_grants.sql','0020_homeflow_identity_links.sql',
-    '0021_homeflow_sso_pending.sql'])
+    '0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql'])
    sqlite.exec(readFileSync(new URL('migrations/'+path,repo),'utf8'));
  const prepare=statement=>({
    bind(...params){
@@ -70,7 +70,7 @@ async function setup(){
  };
  const state={hfUser:ownerId,hfRole:'owner',nickname:'小白',
    household:'primary',audience:'jp-document-assistant',
-   codeVerifier:null,challenge:null,serviceCalls:0};
+   codeVerifier:null,challenge:null,serviceCalls:0,homeflowActive:true};
  env.HOMEFLOW_BRIDGE_SERVICE={
   async fetch(request){
    state.serviceCalls++;
@@ -90,11 +90,21 @@ async function setup(){
      const b64=btoa(String.fromCharCode(...digest))
        .replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
      assert.equal(b64,state.challenge);
-     return Response.json({access_token:'e'.repeat(64),token_type:'Bearer',expires_in:180});
+     return Response.json({access_token:'e'.repeat(64),token_type:'Bearer',expires_in:180,
+       session_assertion:'d'.repeat(64),session_assertion_expires_in:900});
    }
    if(url.pathname==='/api/oauth/userinfo'){
      assert.equal(request.headers.get('Authorization'),'Bearer '+'e'.repeat(64));
      return Response.json({sub:state.hfUser,user_id:state.hfUser,
+       household_id:state.household,role:state.hfRole,
+       nickname:state.nickname,audience:state.audience});
+   }
+   if(url.pathname==='/api/oauth/session-introspect'){
+     const body=new URLSearchParams(await request.text());
+     assert.equal(body.get('client_id'),'jp-document-assistant');
+     assert.equal(body.get('session_assertion'),'d'.repeat(64));
+     if(!state.homeflowActive)return Response.json({error:'invalid_assertion'},{status:401});
+     return Response.json({active:true,sub:state.hfUser,user_id:state.hfUser,
        household_id:state.household,role:state.hfRole,
        nickname:state.nickname,audience:state.audience});
    }
@@ -370,5 +380,49 @@ test('finish rejects wrong origin, changed PWA user, or pre-callback claim',asyn
   assert.equal(await call({Origin:app}),403);
   assert.equal(f.state.serviceCalls,0);
   assert.equal(await call({Origin:app,Cookie:'__Host-da_session='+oldCookie}),200);
+ }finally{f.sql.close();}
+});
+
+test('SSO session requires live HomeFlow proof on every private GET; never legacy fallback',async()=>{
+ const f=await setup();
+ try{
+  const flow=await f.start({oldSession:true});
+  const logged=await f.finish(flow);
+  assert.equal(logged.status,200);
+  const cookie=logged.headers.getSetCookie().find(x=>x.startsWith('__Host-da_session=')).split(';')[0];
+  const get=()=>worker.fetch(new Request(app+'/api/me',{headers:{Cookie:cookie}}),f.env,{});
+  const first=await get();
+  assert.equal(first.status,200);
+  const me=await first.json();
+  assert.equal(me.user.display_name,'小白');
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM sessions WHERE auth_source='homeflow'").get().n,1);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM homeflow_session_proofs').get().n,1);
+  f.state.homeflowActive=false;
+  assert.equal((await get()).status,401,'HomeFlow logout invalidates the next app request');
+  f.state.homeflowActive=true;f.state.hfRole='member';
+  assert.equal((await get()).status,401,'role changes cannot reuse old session');
+  f.state.hfRole='owner';
+  f.sql.prepare('DELETE FROM homeflow_session_proofs').run();
+  assert.equal((await get()).status,401,'missing proof never becomes legacy auth');
+  const existing=await worker.fetch(new Request(app+'/api/me',{
+    headers:{Cookie:'__Host-da_session='+oldCookie}
+  }),f.env,{});
+  assert.equal(existing.status,200,'legacy owner session remains valid until stage F');
+ }finally{f.sql.close();}
+});
+test('HomeFlow identity mismatch cannot read private document list',async()=>{
+ const f=await setup();
+ try{
+  const flow=await f.start({oldSession:true});
+  const logged=await f.finish(flow);
+  assert.equal(logged.status,200);
+  const cookie=logged.headers.getSetCookie().find(x=>x.startsWith('__Host-da_session=')).split(';')[0];
+  f.state.household='other-household';
+  const reply=await worker.fetch(new Request(app+'/api/documents?limit=5',{
+    headers:{Cookie:cookie}
+  }),f.env,{});
+  assert.equal(reply.status,401);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM documents').get().n,1);
+  assert.equal(f.sql.prepare('SELECT owner_id FROM documents').get().owner_id,'local-owner');
  }finally{f.sql.close();}
 });
