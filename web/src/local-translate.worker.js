@@ -138,7 +138,8 @@ function nextId(tensor){
  const data=tensor.data,start=data.length-width;
  let best=-Infinity,bestId=0;
  for(let id=0;id<width;id++){
-  const val=tensor.type==='float16'?f16(data[start+id]):Number(data[start+id]);
+  const value=data[start+id];
+  const val=tensor.type==='float16'&&data instanceof Uint16Array?f16(value):Number(value);
   if(val>best){best=val;bestId=id;}
  }
  return bestId;
