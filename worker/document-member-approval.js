@@ -9,12 +9,13 @@ const idPattern=/^[a-f0-9]{32}$/;
 const hashPattern=/^[a-f0-9]{64}$/;
 // Unlike the document-assistant's legacy UTF-8 bridge secrets, HomeFlow
 // approval secrets are 32 raw bytes encoded as 64 hex characters.
-async function approvalSignature(secret,stamp,raw){
+async function approvalSignature(secret,stamp,raw,purpose='submit'){
  const bytes=Uint8Array.from(secret.match(/.{2}/g),x=>parseInt(x,16));
  const key=await crypto.subtle.importKey('raw',bytes,
   {name:'HMAC',hash:'SHA-256'},false,['sign']);
  const signed=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(
-  'jp-document-assistant\n'+stamp+'\n'+raw));
+  (purpose==='status'?'jp-document-assistant:status':'jp-document-assistant')+
+  '\n'+stamp+'\n'+raw));
  return Array.from(new Uint8Array(signed),b=>b.toString(16).padStart(2,'0')).join('');
 }
 const kinds={
@@ -79,10 +80,60 @@ export async function documentMemberApprovalStatus(env,p,id){
   return json({ok:false,code:'DOCUMENT_APPROVAL_DISABLED',applied:false},503);
  const item=await candidate(env,p,id);
  const row=await dbFirst(env.DB,'SELECT * FROM document_member_sync_intents WHERE candidate_id=?',id);
- return json(row&&row.local_user_id===p.user_id&&
-  row.homeflow_user_id===p.homeflow_user_id?
-  publicStatus(row):{ok:true,candidate_id:item.id,approval_submitted:false,
-   approval_status:'not_submitted',approval_id:null,applied:false,target_changed:false});
+ if(!row)return json({ok:true,candidate_id:item.id,
+  approval_submitted:false,approval_status:'not_submitted',approval_id:null,
+  applied:false,target_changed:false});
+ if(row.local_user_id!==p.user_id||row.homeflow_user_id!==p.homeflow_user_id||
+  row.homeflow_household_id!==p.homeflow_household_id||
+  row.document_id!==item.document_id||row.candidate_kind!==item.candidate_kind||
+  row.target_app!==kinds[item.candidate_kind].target)
+  bad('审批申请不属于当前账号','APPROVAL_IDENTITY_CHANGED',403);
+ if(row.status!=='submitted')return json({...publicStatus(row),
+  approval_prepared:true,target_changed:false});
+ if(typeof row.approval_id!=='string'||
+    !/^[a-f0-9-]{36}$/i.test(row.approval_id))
+  return failure('APPROVAL_STATUS_UNCONFIRMED','审批编号不完整，无法确认远端状态',503);
+ // Private backend-to-backend, explicitly requested once by the user.
+ // Re-introspected HomeFlow SSO on every request in worker/index.js.
+ const wire={approval_id:row.approval_id,
+  household_id:p.homeflow_household_id,
+  requester_user_id:p.homeflow_user_id,
+  resource_id:id,payload_sha256:row.payload_sha256,
+  target_app:row.target_app};
+ const raw=JSON.stringify(wire),stamp=String(Date.now());
+ const sig=await approvalSignature(env.DOCUMENT_APPROVAL_SUBMISSION_SECRET,stamp,raw,'status');
+ let response,remote;
+ try{
+  response=await env.HOMEFLOW_BRIDGE_SERVICE.fetch(new Request(
+   'https://homeflow.internal/api/internal/approvals/document-status',{
+    method:'POST',redirect:'manual',
+    headers:{'Content-Type':'application/json','Accept':'application/json',
+     'X-Approval-Client':'jp-document-assistant',
+     'X-Approval-Timestamp':stamp,'X-Approval-Signature':sig},
+    body:raw
+   }));
+  const answer=await response.text();
+  if(answer.length>1800)throw Error('response too long');
+  remote=JSON.parse(answer);
+ }catch{
+  return failure('APPROVAL_STATUS_UNAVAILABLE',
+   '当前无法从 HomeFlow 获取可信审批状态，目标应用状态仍未确认',503);
+ }
+ if(response.status!==200||remote?.ok!==true||
+  remote.approval_id!==row.approval_id||
+  remote.household_id!==p.homeflow_household_id||
+  remote.requester_user_id!==p.homeflow_user_id||
+  remote.resource_id!==id||remote.target_app!==row.target_app||
+  remote.payload_sha256!==row.payload_sha256||
+  !['pending','approved','rejected','cancelled','expired','failed_final','conflict'].includes(remote.status)||
+  !Number.isSafeInteger(remote.version)||remote.version<1||
+  remote.applied!==false||remote.target_changed!==false)
+  return failure('APPROVAL_STATUS_UNCONFIRMED',
+   'HomeFlow 未返回可验证的审批状态，不能视作批准或同步成功',503);
+ return json({...publicStatus(row,remote.status),
+  approval_prepared:false,approval_checked:true,
+  homeflow_version:remote.version,
+  reviewed_at:remote.reviewed_at??null,applied:false,target_changed:false});
 }
 export async function requestDocumentMemberApproval(request,env,p,id){
  checkedMember(p);
