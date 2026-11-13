@@ -235,7 +235,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
    return {ai_status:'cached',result,added_fields};
   }
   const delta=Date.now()-Date.parse(old.updated_at);
-  if(Number.isFinite(delta)&&delta<3600000&&provider!=='gemini'&&old.prompt_version===PROMPT)return {ai_status:old.state==='pending'?'in_progress':'cooldown'};
+  if(Number.isFinite(delta)&&delta<3600000&&provider!=='gemini'&&old.prompt_version===PROMPT&&old.state==='failed')return {ai_status:'cooldown'};
   if(old.state==='pending'&&Number.isFinite(delta)&&delta<120000)return {ai_status:'in_progress'};
   if(provider==='gemini'){
    const retry_after_seconds=geminiRetryCooldown(old);
