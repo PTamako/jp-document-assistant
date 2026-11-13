@@ -69,7 +69,7 @@ function publicStatus(row,approvalStatus=null){
  return {ok:true,candidate_id:row.candidate_id,
   approval_id:row.approval_id||null,approval_submitted:row.status==='submitted',
   approval_status:approvalStatus||(
-   row.status==='submitted'?'submitted_status_unknown':'not_submitted'),
+   row.status==='submitted'?'submitted_status_unknown':'prepared_unconfirmed'),
   payload_sha256:row.payload_sha256,
   applied:false,target_changed:false};
 }
@@ -91,29 +91,54 @@ export async function requestDocumentMemberApproval(request,env,p,id){
  const item=await candidate(env,p,id);
  const body=await readJson(request,4500);
  if(!body||typeof body!=='object'||Array.isArray(body)||
-  Object.keys(body).some(k=>!allowedInput.has(k))||
   body.confirm!==kinds[item.candidate_kind].confirm)
   bad('需要明确确认审批内容','CONFIRM_REQUIRED',409);
- const target=kinds[item.candidate_kind].target;
- const approved=await fields(env,item.document_id);
- // Same business verification as owner confirmation, but no target call.
- const payload=validatedPayload(
-  target==='it-study-platform'?'zhixue':target,item,approved,body);
- const envelope={source_document_id:item.document_id,source_candidate_id:id,
-  source_document_version:item.document_version,
-  candidate_updated_at:item.updated_at,candidate_kind:item.candidate_kind,
-  homeflow_user_id:p.homeflow_user_id,
-  homeflow_household_id:p.homeflow_household_id,target_app:target,payload};
- const snapshot=JSON.stringify(envelope),digest=await hashString(snapshot),now=isoNow();
- await dbRun(env.DB,`INSERT INTO document_member_sync_intents
-  (candidate_id,document_id,local_user_id,homeflow_user_id,
-   homeflow_household_id,target_app,candidate_kind,document_version,
-   candidate_updated_at,payload_sha256,payload_json,status,created_at,updated_at)
-  VALUES(?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)
-  ON CONFLICT(candidate_id) DO NOTHING`,
-  id,item.document_id,p.user_id,p.homeflow_user_id,p.homeflow_household_id,
-  target,item.candidate_kind,item.document_version,item.updated_at,
-  digest,snapshot,now,now);
+ const target=kinds[item.candidate_kind].target,now=isoNow();
+ const resume=body.resume_existing===true;
+ let digest,snapshot;
+ if(resume){
+  // Only an explicit original-intent recovery is allowed. We do NOT infer
+  // a new snapshot from altered form fields or replay another user's data.
+  if(Object.keys(body).length!==2||
+     Object.keys(body).some(k=>!['confirm','resume_existing'].includes(k)))
+   bad('重试申请格式无效','INVALID_RETRY',400);
+  const original=await dbFirst(env.DB,
+   'SELECT * FROM document_member_sync_intents WHERE candidate_id=?',id);
+  if(!original||original.local_user_id!==p.user_id||
+    original.homeflow_user_id!==p.homeflow_user_id||
+    original.homeflow_household_id!==p.homeflow_household_id||
+    original.document_id!==item.document_id||
+    original.document_version!==item.document_version||
+    original.candidate_updated_at!==item.updated_at||
+    original.candidate_kind!==item.candidate_kind||
+    original.target_app!==target)
+   bad('申请原始版本已变化，不能重试','APPROVAL_RETRY_CONFLICT',409);
+  digest=original.payload_sha256;snapshot=original.payload_json;
+  if(!hashPattern.test(digest)||await hashString(snapshot)!==digest)
+   bad('申请快照完整性不符','APPROVAL_SNAPSHOT_INVALID',409);
+ }else{
+  if(Object.keys(body).some(k=>!allowedInput.has(k)))
+   bad('不支持的审批字段','INVALID_APPROVAL_FIELDS',400);
+  const approved=await fields(env,item.document_id);
+  // Same business verification as owner confirmation, but no target call.
+  const payload=validatedPayload(
+   target==='it-study-platform'?'zhixue':target,item,approved,body);
+  const envelope={source_document_id:item.document_id,source_candidate_id:id,
+   source_document_version:item.document_version,
+   candidate_updated_at:item.updated_at,candidate_kind:item.candidate_kind,
+   homeflow_user_id:p.homeflow_user_id,
+   homeflow_household_id:p.homeflow_household_id,target_app:target,payload};
+  snapshot=JSON.stringify(envelope);digest=await hashString(snapshot);
+  await dbRun(env.DB,`INSERT INTO document_member_sync_intents
+   (candidate_id,document_id,local_user_id,homeflow_user_id,
+    homeflow_household_id,target_app,candidate_kind,document_version,
+    candidate_updated_at,payload_sha256,payload_json,status,created_at,updated_at)
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)
+   ON CONFLICT(candidate_id) DO NOTHING`,
+   id,item.document_id,p.user_id,p.homeflow_user_id,p.homeflow_household_id,
+   target,item.candidate_kind,item.document_version,item.updated_at,
+   digest,snapshot,now,now);
+ }
  const stored=await dbFirst(env.DB,
   'SELECT * FROM document_member_sync_intents WHERE candidate_id=?',id);
  if(!stored||stored.local_user_id!==p.user_id||
