@@ -131,7 +131,11 @@ async function verifyHomeFlow(env,code,verifier){
  if(!token||token.token_type!=='Bearer'||
     typeof token.access_token!=='string'||
     !/^[a-f0-9]{64}$/.test(token.access_token)||
-    Number(token.expires_in)>180||Number(token.expires_in)<=0)return null;
+    Number(token.expires_in)>180||Number(token.expires_in)<=0||
+    !/^[a-f0-9]{64}$/.test(token.session_assertion||'')||
+    !Number.isInteger(token.session_assertion_expires_in)||
+    token.session_assertion_expires_in<1||
+    token.session_assertion_expires_in>900)return null;
  const infoReq=new Request(new URL('/api/oauth/userinfo',env.HOMEFLOW_OAUTH_ORIGIN),{
    method:'GET',redirect:'manual',
    headers:{Authorization:'Bearer '+token.access_token,Accept:'application/json'}
@@ -151,7 +155,9 @@ async function verifyHomeFlow(env,code,verifier){
     info.nickname.length>80)return null;
  return {homeflowUserId:info.user_id,
    homeflowHouseholdId:info.household_id,
-   role:info.role,nickname:info.nickname.trim().slice(0,50)};
+   role:info.role,nickname:info.nickname.trim().slice(0,50),
+    sessionAssertion:token.session_assertion,
+    sessionAssertionSeconds:token.session_assertion_expires_in};
 }
 
 async function resolveLocalIdentity(env,pending,hf){
@@ -308,12 +314,21 @@ export async function completeHomeFlowSso(request,env,url){
      'UPDATE users SET display_name=?,updated_at=? WHERE id=? AND status=? AND role=?',
      hf.nickname,isoNow(),local.localUserId,'active',hf.role);
    const cookieValue=randomToken(32),now=isoNow();
+   const sessionId=randomToken(16);
+   const proof=await sealVerifier(env,stateHash,hf.sessionAssertion);
+   const proofExpires=nowPlus(Math.min(SESSION_MS,
+     hf.sessionAssertionSeconds*1000));
    await env.DB.batch([
      env.DB.prepare(`INSERT INTO sessions
        (id,user_id,secret_hash,expires_at,created_at)
        VALUES(?,?,?,?,?)`)
-       .bind(randomToken(16),local.localUserId,await hashString(cookieValue),
-         nowPlus(SESSION_MS),now),
+       .bind(sessionId,local.localUserId,await hashString(cookieValue),
+         proofExpires,now),
+     env.DB.prepare(`INSERT INTO homeflow_session_proofs
+       (session_id,homeflow_user_id,state_hash,proof_cipher,proof_iv,expires_at,created_at)
+       VALUES(?,?,?,?,?,?,?)`)
+       .bind(sessionId,hf.homeflowUserId,stateHash,
+         proof.cipher,proof.iv,proofExpires,now),
      env.DB.prepare(`UPDATE homeflow_oauth_pending
        SET status='consumed',completed_at=?,code_cipher=NULL,code_iv=NULL
        WHERE state_hash=? AND status='processing'`).bind(now,stateHash)
@@ -323,4 +338,40 @@ export async function completeHomeFlowSso(request,env,url){
      'Cache-Control':'no-store','Referrer-Policy':'no-referrer'
    });
  }catch{return fail('SSO_LINK_FAILED');}
+}
+
+// Called by every authenticated Document Assistant route for SSO sessions.
+// No cache and no browser bearer token: a HomeFlow logout/disable must
+// invalidate read and write access at the NEXT request. Legacy sessions are
+// handled separately until the F-stage retirement.
+export async function verifyHomeFlowSession(env,proof){
+ if(!proof || !homeflowSsoEnabled(env,new URL(env.DA_PUBLIC_ORIGIN)))
+   return null;
+ if(!proof.state_hash || !proof.proof_cipher || !proof.proof_iv||
+    !proof.expires_at || Date.parse(proof.expires_at)<=Date.now())
+   return null;
+ let secret;
+ try{
+  secret=await openVerifier(env,proof.state_hash,{
+    verifier_cipher:proof.proof_cipher,verifier_iv:proof.proof_iv
+  });
+ }catch{return null;}
+ if(!/^[a-f0-9]{64}$/.test(secret||''))return null;
+ const request=new Request(new URL('/api/oauth/session-introspect',env.HOMEFLOW_OAUTH_ORIGIN),{
+  method:'POST',redirect:'manual',
+  headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'},
+  body:new URLSearchParams({client_id:CLIENT_ID,session_assertion:secret}).toString()
+ });
+ let result;
+ try{result=await env.HOMEFLOW_BRIDGE_SERVICE.fetch(request);}catch{return null;}
+ if(result?.status!==200||!result.ok||result.headers.get('location'))return null;
+ const info=await result.json().catch(()=>null);
+ if(info?.active!==true||info.audience!==CLIENT_ID||info.sub!==info.user_id||
+   info.user_id!==proof.homeflow_user_id||
+   info.household_id!==proof.homeflow_household_id||
+   info.role!==proof.role||!['owner','member'].includes(info.role)||
+   typeof info.nickname!=='string'||!info.nickname.trim()||info.nickname.length>80)
+   return null;
+ return {userId:info.user_id,householdId:info.household_id,role:info.role,
+   nickname:info.nickname.trim().slice(0,50)};
 }
