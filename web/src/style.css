@@ -811,3 +811,105 @@ input[type="date"],input[type="month"],input[type="datetime-local"]{
 @media(prefers-reduced-transparency:reduce){
   .google-source-header,.google-source-list{background:var(--panel)}
 }
+
+/* My: one consistent inset-grouped settings system. No full-width loose rows. */
+.mine-page{padding-bottom:12px}
+.mine-page .profile-card{
+  border-radius:21px;margin:10px 0 21px;padding:15px 16px;
+  min-width:0;box-shadow:var(--glass-shadow);
+}
+.mine-page .profile-card .avatar{
+  width:48px;height:48px;border-radius:16px;font-size:21px;
+}
+.mine-page .profile-card h3{font-size:16px;line-height:1.4}
+.mine-page .profile-card p{
+  margin:0;font-size:12px;line-height:1.45;
+  overflow-wrap:anywhere;
+}
+.mine-section{margin:0 0 22px;min-width:0}
+.mine-section-heading,
+.mine-section-heading-row .mine-section-heading{
+  margin:0 0 9px 12px;font-size:13px;font-weight:720;
+  letter-spacing:.015em;color:var(--secondary);line-height:1.45;
+}
+.mine-section-heading-row{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:10px;margin-bottom:6px;padding-right:4px;
+}
+.mine-section-heading-row .mine-section-heading{margin-bottom:0}
+.mine-group-card,
+.mine-page .usage-dashboard{
+  margin:0;padding:0;border:1px solid var(--glass-outline);
+  border-radius:21px;background:var(--glass-card);
+  box-shadow:var(--glass-shadow);
+  -webkit-backdrop-filter:var(--glass-blur);
+  backdrop-filter:var(--glass-blur);
+  overflow:hidden;min-width:0;
+}
+.mine-group-card>.settings-line{
+  min-height:54px;display:flex;align-items:center;
+  font-size:14px;font-weight:620;line-height:1.4;
+  margin:0;padding:14px 15px;border:0;border-radius:0;
+  text-align:left;
+}
+.mine-group-card>.settings-line + .settings-line{
+  border-top:1px solid color-mix(in srgb,var(--line) 65%,transparent);
+}
+.mine-group-card>.settings-line:active{
+  background:var(--glass-blue);
+}
+.mine-group-card>.settings-line>.ui-icon{
+  flex:none;color:var(--secondary);
+}
+.mine-group-card>.settings-line:focus-visible{
+  outline-offset:-3px;border-radius:10px;
+}
+.mine-usage-refresh{
+  display:flex;align-items:center;justify-content:center;
+  width:38px;height:38px;flex:none;margin:-6px 0 -3px;
+  border-radius:12px;color:var(--secondary);
+  -webkit-tap-highlight-color:transparent;
+}
+.mine-usage-refresh:active{background:var(--glass-blue);color:var(--blue)}
+.mine-usage-refresh:disabled{opacity:.45}
+.mine-page .usage-dashboard{padding:13px 15px 12px;gap:0}
+.mine-page .usage-dashboard-header{padding:0 1px 3px}
+.mine-page .usage-translation{
+  padding:8px 2px 14px;background:transparent;
+  border:none;border-radius:0;box-shadow:none;
+}
+.mine-page .usage-translation-count{margin:8px 0 11px}
+.mine-page .usage-translation-meter{height:5px}
+.mine-page .usage-metrics{
+  margin-top:7px;gap:0;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+}
+.mine-page .usage-metric{
+  min-height:84px;margin:0;padding:13px 8px 11px 2px;
+  background:transparent;border:0;border-top:1px solid var(--glass-outline);
+  border-radius:0;box-shadow:none;
+}
+.mine-page .usage-metric:nth-child(even){padding-left:13px}
+.mine-page .usage-metric:nth-child(odd){border-right:1px solid var(--glass-outline)}
+.mine-page .usage-metric>strong{font-size:21px}
+.mine-page .usage-dashboard-note{
+  margin:7px 0 0;padding:9px 2px 0;
+  border-top:1px solid var(--glass-outline);font-size:11px;
+}
+.mine-usage-placeholder{
+  padding:18px 15px;color:var(--secondary);font-size:13px;
+}
+.mine-footnote{
+  color:var(--secondary);font-size:11px;line-height:1.55;
+  margin:3px 12px 18px;
+}
+@media(max-width:360px){
+  .mine-group-card>.settings-line{padding-inline:12px}
+  .mine-page .usage-dashboard{padding:12px}
+  .mine-page .usage-metric:nth-child(even){padding-left:9px}
+}
+@media(prefers-reduced-transparency:reduce){
+  .mine-group-card,.mine-page .usage-dashboard,.mine-page .profile-card{
+    -webkit-backdrop-filter:none;backdrop-filter:none;background:var(--panel)
+  }
+}
