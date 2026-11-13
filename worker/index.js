@@ -727,7 +727,7 @@ ELSE 'unreviewed' END review_status,
     const aiUsage=await dbFirst(env.DB,'SELECT calls FROM ai_analysis_daily WHERE day_utc=?',dayUtc);
     const analysisLimitRaw=Number(env.AI_ANALYSIS_DAILY_LIMIT??2);
     const analysisLimit=Number.isSafeInteger(analysisLimitRaw)?Math.max(0,Math.min(5,analysisLimitRaw)):0;
-    const [geminiUsage,translationUsage]=await Promise.all([geminiQuotaUsage(env.DB),documentTranslationBudgetUsage(env.DB)]);
+    const [geminiUsage,translationUsage]=await Promise.all([geminiQuotaUsage(env.DB),documentTranslationBudgetUsage(env.DB).catch(()=>null)]);
     return json({local_today:usage||{ai_calls:0,imported_files:0},
       app_utc_day:{day_utc:dayUtc,calls:summary?.calls||0,reserved:summary?.reserved||0,limit:appLimit},
       document_ai_utc_day:{day_utc:dayUtc,calls:aiUsage?.calls||0,limit:analysisLimit},
