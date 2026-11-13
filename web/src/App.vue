@@ -1403,7 +1403,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <h3>服务用量</h3>
             <span class="usage-dashboard-period">今日 · 日本时间</span>
           </div>
-          <div class="usage-translation">
+          <div class="usage-translation" v-if="usage.translation_jst_day">
             <div class="usage-translation-head">
               <div class="usage-translation-title">
                 <strong>Google 全文翻译</strong>
@@ -1417,6 +1417,10 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
               :aria-valuenow="usage.translation_jst_day?.calls??0">
               <span :style="{width:translationUsagePercent+'%'}"></span>
             </div>
+          </div>
+          <div v-else class="usage-translation usage-translation-unavailable">
+            <strong>Google 全文翻译</strong>
+            <span>今日用量暂无法读取</span>
           </div>
           <div class="usage-metrics">
             <div class="usage-metric">
