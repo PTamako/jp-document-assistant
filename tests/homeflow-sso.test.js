@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
 import {webcrypto} from 'node:crypto';
-import {startHomeFlowSso,callbackHomeFlowSso} from '../worker/homeflow-sso.js';
+import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso} from '../worker/homeflow-sso.js';
 import worker from '../worker/index.js';
 import {hashString} from '../worker/security.js';
 
@@ -119,11 +119,18 @@ async function setup(){
      state:callback?.searchParams.get('state'),
      cookie:response.headers.get('set-cookie')?.split(';')[0]};
  };
- const finish=async(flow,{cookie=flow.cookie,stateParam=flow.state,code='f'.repeat(64)}={})=>{
+ const finish=async(flow,{cookie=flow.cookie,stateParam=flow.state,code='f'.repeat(64),
+   resumeSecret=flow.body.resume_secret}={})=>{
    const q=new URLSearchParams({state:stateParam||'',code});
-   return callbackHomeFlowSso(new Request(callbackUrl+'?'+q,{
-     method:'GET',headers:{Cookie:cookie||''}
-   }),env,new URL(callbackUrl+'?'+q));
+   // External Safari callback has NO access to the original PWA's Cookie.
+   const cb=await callbackHomeFlowSso(new Request(callbackUrl+'?'+q,
+     {method:'GET'}),env,new URL(callbackUrl+'?'+q));
+   if(cb.status!==200)return cb;
+   return completeHomeFlowSso(new Request(app+'/api/homeflow-sso/complete',{
+     method:'POST',headers:{Origin:app,'Content-Type':'application/json',
+       ...(cookie?{Cookie:cookie}:{})},
+     body:JSON.stringify({state:stateParam,resume_secret:resumeSecret})
+   }),env,new URL(app+'/api/homeflow-sso/complete'));
  };
  return {db,sql,env,state,start,finish};
 }
@@ -165,19 +172,24 @@ test('SSO endpoints default closed and bad origins fail before D1 write',async()
   assert.equal((await f.start()).response.status,503);
  }finally{f.sql.close();}
 });
-test('callback is bound to original browser and state is not consumed by a mismatch',async()=>{
+test('Safari callback parks code; only original PWA proof can complete without browser Cookie',async()=>{
  const f=await setup();
  try{
   const s=await f.start({oldSession:true});
   assert.equal(s.response.status,200);
   assert.match(s.cookie,/^__Host-da_homeflow_state=/);
   assert.match(s.response.headers.get('set-cookie'),/SameSite=Lax/);
-  const failed=await f.finish(s,{cookie:'__Host-da_homeflow_state='+'0'.repeat(64)});
+  const failed=await f.finish(s,{resumeSecret:'0'.repeat(64)});
   assert.equal(failed.status,403);
   assert.equal(f.state.serviceCalls,0);
   assert.equal(f.sql.prepare('SELECT status FROM homeflow_oauth_pending').get().status,'pending');
-  const success=await f.finish(s);
-  assert.equal(success.status,303);
+  // Callback was parked; finish must be attempted from the original PWA only.
+  const success=await completeHomeFlowSso(new Request(app+'/api/homeflow-sso/complete',{
+    method:'POST',headers:{Origin:app,'Content-Type':'application/json',
+      Cookie:'__Host-da_session='+oldCookie},
+    body:JSON.stringify({state:s.state,resume_secret:s.body.resume_secret})
+  }),f.env,new URL(app+'/api/homeflow-sso/complete'));
+  assert.equal(success.status,200);
   assert.equal(f.state.serviceCalls,2);
   assert.equal(f.sql.prepare('SELECT status FROM homeflow_oauth_pending').get().status,'consumed');
   const replay=await f.finish(s);
@@ -201,12 +213,11 @@ test('owner dual proof links ONLY existing user, preserves legacy document/Googl
  try{
   const flow=await f.start({oldSession:true});
   const resp=await f.finish(flow);
-  assert.equal(resp.status,303);
-  assert.equal(resp.headers.get('location'),app+'/?homeflow_sso=connected');
+  assert.equal(resp.status,200);
+  assert.deepEqual(await resp.json(),{ok:true,role:'owner',nickname:'小白'});
   const cookies=resp.headers.getSetCookie();
-  assert.equal(cookies.length,2);
+  assert.equal(cookies.length,1);
   assert.ok(cookies.some(s=>s.startsWith('__Host-da_session=')&&s.includes('HttpOnly')));
-  assert.ok(cookies.some(s=>s.startsWith('__Host-da_homeflow_state=;')));
   const link=f.sql.prepare('SELECT * FROM homeflow_identity_links').get();
   assert.equal(link.homeflow_user_id,ownerId);
   assert.equal(link.homeflow_household_id,'primary');
@@ -223,12 +234,12 @@ test('member provisions into new EMPTY private space after owner link, no copied
  const f=await setup();
  try{
   const owner=await f.start({oldSession:true});
-  assert.equal((await f.finish(owner)).status,303);
+  assert.equal((await f.finish(owner)).status,200);
   f.state.hfUser=memberId;
   f.state.hfRole='member';
   f.state.nickname='鸡毛';
   const member=await f.start();
-  assert.equal((await f.finish(member)).status,303);
+  assert.equal((await f.finish(member)).status,200);
   const people=f.sql.prepare('SELECT id,role,display_name FROM users ORDER BY role').all();
   assert.equal(people.length,2);
   const husband=people.find(x=>x.role==='member');
@@ -242,7 +253,7 @@ test('member provisions into new EMPTY private space after owner link, no copied
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM homeflow_identity_links').get().n,2);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM audit_events').get().n,2);
   const relogin=await f.start();
-  assert.equal((await f.finish(relogin)).status,303);
+  assert.equal((await f.finish(relogin)).status,200);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM users').get().n,2);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM homeflow_identity_links').get().n,2);
  }finally{f.sql.close();}
@@ -261,7 +272,7 @@ test('changed audience, HomeFlow household or role cannot take over prior local 
  const f=await setup();
  try{
   const owner=await f.start({oldSession:true});
-  assert.equal((await f.finish(owner)).status,303);
+  assert.equal((await f.finish(owner)).status,200);
   f.state.audience='other-app';
   assert.equal((await f.finish(await f.start())).status,403);
   f.state.audience='jp-document-assistant';
@@ -287,7 +298,7 @@ test('PKCE verifier and state are sealed/hashed at rest; SSO local cookie expire
    assert.ok(row.verifier_iv.length>=16);
    assert.ok(new Date(row.expires_at).getTime()>Date.now());
    const response=await f.finish(flow);
-   assert.equal(response.status,303);
+   assert.equal(response.status,200);
    const session=f.sql.prepare('SELECT expires_at,created_at FROM sessions ORDER BY created_at DESC LIMIT 1').get();
    assert.ok(session);
    const lifetime=f.sql.prepare('SELECT expires_at,created_at FROM sessions WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get('local-owner');
@@ -304,5 +315,59 @@ test('owner logs out of legacy app during SSO: cannot use revoked owner proof',a
   const response=await f.finish(flow);
   assert.equal(response.status,403);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM homeflow_identity_links').get().n,0);
+ }finally{f.sql.close();}
+});
+
+test('a stolen OAuth state/callback cannot mint a PWA session without resume proof',async()=>{
+ const f=await setup();
+ try{
+  const flow=await f.start({oldSession:true});
+  assert.match(flow.body.resume_secret,/^[a-f0-9]{64}$/);
+  assert.equal(new URL(flow.body.authorization_url).searchParams.has('resume_secret'),false);
+  const url=new URL(callbackUrl+'?'+new URLSearchParams({state:flow.state,
+    code:'f'.repeat(64)}));
+  const received=await callbackHomeFlowSso(new Request(url),f.env,url);
+  assert.equal(received.status,200);
+  assert.match(await received.text(),/返回原来的文书助手 App/);
+  assert.equal(received.headers.get('set-cookie'),null);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM sessions').get().n,1);
+  const r=f.sql.prepare('SELECT code_cipher,resume_secret_hash FROM homeflow_oauth_pending').get();
+  assert.ok(r.code_cipher&&!r.code_cipher.includes('f'.repeat(64)));
+  assert.notEqual(r.resume_secret_hash,flow.body.resume_secret);
+  const attacker=await completeHomeFlowSso(new Request(app+'/api/homeflow-sso/complete',{
+    method:'POST',headers:{Origin:app,'Content-Type':'application/json'},
+    body:JSON.stringify({state:flow.state,resume_secret:'0'.repeat(64)})
+  }),f.env,new URL(app+'/api/homeflow-sso/complete'));
+  assert.equal(attacker.status,403);
+  assert.equal(f.state.serviceCalls,0);
+  const legit=await completeHomeFlowSso(new Request(app+'/api/homeflow-sso/complete',{
+    method:'POST',headers:{Origin:app,'Content-Type':'application/json',
+      Cookie:'__Host-da_session='+oldCookie},
+    body:JSON.stringify({state:flow.state,resume_secret:flow.body.resume_secret})
+  }),f.env,new URL(app+'/api/homeflow-sso/complete'));
+  assert.equal(legit.status,200);
+  assert.equal(f.sql.prepare('SELECT code_cipher FROM homeflow_oauth_pending').get().code_cipher,null);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM sessions').get().n,2);
+ }finally{f.sql.close();}
+});
+test('finish rejects wrong origin, changed PWA user, or pre-callback claim',async()=>{
+ const f=await setup();
+ try{
+  const flow=await f.start({oldSession:true});
+  const call=async(headers)=>{
+    const r=await completeHomeFlowSso(new Request(app+'/api/homeflow-sso/complete',{
+      method:'POST',headers:{'Content-Type':'application/json',...headers},
+      body:JSON.stringify({state:flow.state,resume_secret:flow.body.resume_secret})
+    }),f.env,new URL(app+'/api/homeflow-sso/complete'));
+    return r.status;
+  };
+  assert.equal(await call({Origin:app,Cookie:'__Host-da_session='+oldCookie}),403);
+  const url=new URL(callbackUrl+'?'+new URLSearchParams({state:flow.state,code:'f'.repeat(64)}));
+  assert.equal((await callbackHomeFlowSso(new Request(url),f.env,url)).status,200);
+  assert.equal(await call({Origin:'https://attacker.example.test',
+    Cookie:'__Host-da_session='+oldCookie}),403);
+  assert.equal(await call({Origin:app}),403);
+  assert.equal(f.state.serviceCalls,0);
+  assert.equal(await call({Origin:app,Cookie:'__Host-da_session='+oldCookie}),200);
  }finally{f.sql.close();}
 });
