@@ -60,3 +60,8 @@ test('every native date and month control is responsive and independently cleara
   assert.match(css,/\.date-control \.date-clear\{[^}]*44px/);
   assert.match(css,/\.date-control\{[^}]*width:100%;min-width:0/);
 });
+
+test('date controls do not duplicate the Vue confirm-deadline conditional during rebases',()=>{
+  assert.equal((app.match(/<template v-else-if="sheet==='confirmDeadline'">/g)||[]).length,1);
+  assert.equal((app.match(/class="date-clear"/g)||[]).length,4);
+});
