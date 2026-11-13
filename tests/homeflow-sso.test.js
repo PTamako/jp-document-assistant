@@ -20,7 +20,8 @@ function d1(){
  const sqlite=new DatabaseSync(':memory:');
  for(const path of ['0001_init.sql','0003_password_auth.sql',
     '0013_google_oauth_grants.sql','0020_homeflow_identity_links.sql',
-    '0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql'])
+    '0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql',
+    '0023_document_member_sync_intents.sql'])
    sqlite.exec(readFileSync(new URL('migrations/'+path,repo),'utf8'));
  const prepare=statement=>({
    bind(...params){
