@@ -432,13 +432,16 @@ async function updateDoc(request,env,p,doc){
   updates.push('updated_at=?','version=version+1');
   const at=isoNow();
   values.push(at,doc.id,p.user_id,p.household_id,doc.version);
-  const result=await dbRun(env.DB,`UPDATE documents SET ${updates.join(',')}
-    WHERE id=? AND (owner_id=? OR (household_id=? AND visibility='shared'))
-    AND version=? AND lifecycle='active'`,...values);
-  if(result.meta?.changes!==1)bad('编辑冲突或已失去共享编辑权限','VERSION_CONFLICT',409);
-  await dbRun(env.DB,`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
-    VALUES(?,?,?,'document',?,?)`,
-    randomToken(16),p.user_id,'document_metadata_updated',doc.id,at);
+  const output=await batch(env.DB,[
+    [`UPDATE documents SET ${updates.join(',')}
+      WHERE id=? AND (owner_id=? OR (household_id=? AND visibility='shared'))
+      AND version=? AND lifecycle='active'`,...values],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'document',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'document_metadata_updated',doc.id,at]
+  ]);
+  if(output[0]?.meta?.changes!==1||output[1]?.meta?.changes!==1)
+    bad('编辑冲突或已失去共享编辑权限','VERSION_CONFLICT',409);
   return json({ok:true});
 }
 async function updateField(request,env,p,fieldId){
@@ -468,20 +471,23 @@ async function updateField(request,env,p,fieldId){
   const now=isoNow();
   // The same SQL statement rechecks edit authority; do not trust a prior
   // document-detail read if visibility was revoked on another device.
-  const updated=await dbRun(env.DB,`UPDATE document_fields SET
-    normalized_value=?,review_state=?,reviewed_by=?,updated_at=?
-    WHERE id=? AND document_id=? AND EXISTS(
-      SELECT 1 FROM documents d WHERE d.id=document_fields.document_id
-      AND d.lifecycle='active'
-      AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))
-    )`,normalized,data.review_state,p.user_id,now,fieldId,field.document_id,
-    p.user_id,p.household_id);
-  if(updated.meta?.changes!==1)bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
-  await batch(env.DB,[
-    ['UPDATE documents SET updated_at=?,version=version+1 WHERE id=?',now,field.document_id],
-    ['INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at) VALUES(?,?,?,\'document_field\',?,?)',
+  const output=await batch(env.DB,[
+    [`UPDATE document_fields SET normalized_value=?,review_state=?,
+      reviewed_by=?,updated_at=?
+      WHERE id=? AND document_id=? AND EXISTS(
+        SELECT 1 FROM documents d WHERE d.id=document_fields.document_id
+        AND d.lifecycle='active'
+        AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+      normalized,data.review_state,p.user_id,now,fieldId,field.document_id,
+      p.user_id,p.household_id],
+    [`UPDATE documents SET updated_at=?,version=version+1
+      WHERE id=? AND lifecycle='active' AND changes()=1`,now,field.document_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'document_field',?,? WHERE changes()=1`,
       randomToken(16),p.user_id,'field_reviewed',fieldId,now]
   ]);
+  if(output.some(x=>x.meta?.changes!==1))
+    bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
   return json({ok:true,linked_records_unchanged:remoteLinks.length>0,linked_targets:[...new Set(remoteLinks.map(x=>x.target))]});
 }
 async function candidatesForDoc(env,p,id){
@@ -495,14 +501,18 @@ async function candidatesForDoc(env,p,id){
 async function moveToTrash(env,p,id){
   const doc=await manageableDocument(env.DB,id,p,'active');
   const now=isoNow();
-  const result=await dbRun(env.DB,`UPDATE documents
-    SET lifecycle='trashed',trashed_at=?,trashed_by=?,updated_at=?,version=version+1
-    WHERE id=? AND lifecycle='active' AND
-    (owner_id=? OR (household_id=? AND visibility='shared'))`,
-    now,p.user_id,now,id,p.user_id,p.household_id);
-  if(result.meta?.changes!==1)bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
-  await dbRun(env.DB,`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
-    VALUES(?,?,?,'document',?,?)`,randomToken(16),p.user_id,'document_trashed',id,now);
+  const output=await batch(env.DB,[
+    [`UPDATE documents SET lifecycle='trashed',trashed_at=?,trashed_by=?,
+      updated_at=?,version=version+1
+      WHERE id=? AND lifecycle='active' AND
+      (owner_id=? OR (household_id=? AND visibility='shared'))`,
+      now,p.user_id,now,id,p.user_id,p.household_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'document',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'document_trashed',id,now]
+  ]);
+  if(output.some(x=>x.meta?.changes!==1))
+    bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
   return json({ok:true,document_id:id,r2_deleted:false,message:'已移入回收站，R2 原件仍保留以供恢复'});
 }
 async function restoreDoc(env,p,id){
@@ -511,14 +521,18 @@ async function restoreDoc(env,p,id){
   let missing=[];
   for(const ref of refs){if(!env.DOCUMENTS||!(await env.DOCUMENTS.head(ref.object_key)))missing.push(ref.id);}
   const at=isoNow();
-  const result=await dbRun(env.DB,`UPDATE documents SET lifecycle='active',
-    trashed_at=NULL,trashed_by=NULL,updated_at=?,version=version+1
-    WHERE id=? AND lifecycle='trashed' AND
+  const output=await batch(env.DB,[
+    [`UPDATE documents SET lifecycle='active',trashed_at=NULL,
+      trashed_by=NULL,updated_at=?,version=version+1
+      WHERE id=? AND lifecycle='trashed' AND
       (owner_id=? OR (household_id=? AND visibility='shared'))`,
-    at,id,p.user_id,p.household_id);
-  if(result.meta?.changes!==1)bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
-  await dbRun(env.DB,`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
-    VALUES(?,?,?,'document',?,?)`,randomToken(16),p.user_id,'document_restored',id,at);
+      at,id,p.user_id,p.household_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'document',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'document_restored',id,at]
+  ]);
+  if(output.some(x=>x.meta?.changes!==1))
+    bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
   return json({ok:true,document_id:id,missing_attachments:missing,
     warning:missing.length?'部分原件缺失，已恢复摘要和可用记录':null});
 }
