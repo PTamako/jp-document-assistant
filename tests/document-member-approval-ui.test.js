@@ -69,7 +69,7 @@ test('manual approval status is verified through a purpose-separated HMAC and ne
   intent.indexOf('export async function requestDocumentMemberApproval(',intent.indexOf('export async function documentMemberApprovalStatus(')));
  assert.match(worker,/checkedMember\(p\)/);
  assert.match(worker,/row\.homeflow_household_id!==p\.homeflow_household_id/);
- assert.match(worker,/jp-document-assistant:status/);
+ assert.match(worker,/approvalSignature\(env\.DOCUMENT_APPROVAL_SUBMISSION_SECRET,stamp,raw,'status'\)/);
  assert.match(worker,/remote\.payload_sha256!==row\.payload_sha256/);
  assert.match(worker,/remote\.applied!==false\|\|remote\.target_changed!==false/);
  assert.match(worker,/APPROVAL_STATUS_UNCONFIRMED/);
