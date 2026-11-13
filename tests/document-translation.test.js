@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHmac} from 'node:crypto';
-import {splitJapaneseDocument,handleDocumentTranslation,MAX_GOOGLE_CALLS_PER_JST_DAY} from '../worker/document-translation.js';
+import {splitJapaneseDocument,handleDocumentTranslation,documentTranslationBudgetUsage,MAX_GOOGLE_CALLS_PER_JST_DAY} from '../worker/document-translation.js';
 
 class FakeDb{
  constructor(){this.cache=new Map();this.budget=new Map();this.docs=new Map();}
  prepare(sql){const db=this;return {bind(...args){return {
   async first(){
    if(sql.includes('FROM document_translations'))return db.cache.get(args[0])||null;
+   if(sql.includes('FROM document_translation_daily_budget'))return db.budget.has(args[0])?{calls:db.budget.get(args[0])}:null;
    throw Error('unknown SQL read '+sql);
   },
   async run(){
@@ -128,4 +129,37 @@ test('stale text changed mid-request never writes or displays incorrect translat
  const response=await handleDocumentTranslation(post(),env,doc);
  assert.equal(response.status,409);
  assert.equal(db.cache.size,0);
+});
+
+test('reopening a translated document after quota exhaustion reuses persistent cache for zero Google calls',async()=>{
+ const {db,calls,env}=create();
+ const first=await handleDocumentTranslation(post(),env,doc);
+ assert.equal((await first.json()).cached,false);
+ const day=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+ db.budget.set(day,MAX_GOOGLE_CALLS_PER_JST_DAY);
+ // Two independent subsequent requests after a PWA restart: no in-memory
+ // translation state is assumed, only the stored private D1 record.
+ const reopened=await handleDocumentTranslation(get(),env,{...doc});
+ assert.deepEqual(await reopened.json(),{
+  ok:true,cached:true,translation:'中文译文',provider:'zhixue_gas'
+ });
+ const repeated=await handleDocumentTranslation(post(),env,{...doc});
+ assert.equal((await repeated.json()).cached,true);
+ assert.equal(calls.length,1,'Google should be called exactly once even at the daily limit');
+ assert.equal(db.budget.get(day),MAX_GOOGLE_CALLS_PER_JST_DAY,'cached read does not consume quota');
+});
+test('JST daily quota endpoint reports the authoritative reserved budget, not Google account balance',async()=>{
+ const {db}=create();
+ const beforeMidnight=Date.parse('2026-11-13T14:59:59Z');
+ const afterMidnight=Date.parse('2026-11-13T15:00:01Z');
+ db.budget.set('2026-11-13',7);
+ const before=await documentTranslationBudgetUsage(db,beforeMidnight);
+ assert.deepEqual(before,{
+  japan_day:'2026-11-13',calls:7,limit:80,remaining:73,
+  count_type:'reserved_chunks',scope:'document_assistant_only'
+ });
+ const after=await documentTranslationBudgetUsage(db,afterMidnight);
+ assert.equal(after.japan_day,'2026-11-14');
+ assert.equal(after.calls,0);
+ assert.equal(after.remaining,80);
 });

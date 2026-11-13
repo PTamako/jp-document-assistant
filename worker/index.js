@@ -20,7 +20,7 @@ import {enqueueDocumentAi,processDocumentAiJob,getDocumentAiJob,runDueDocumentAi
 import { calendarStatus,createCalendarSubscription,revokeCalendarSubscription,serveCalendar } from './calendar.js';
 import { attachPage,cleanupOrphans } from './upload.js';
 import { validateOfficeBytes } from '../web/src/document-text.js';
-import {handleDocumentTranslation} from './document-translation.js';
+import {handleDocumentTranslation,documentTranslationBudgetUsage} from './document-translation.js';
 
 // One production Worker. No R2 LIST, no browser-owned R2 credentials.
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -727,11 +727,12 @@ ELSE 'unreviewed' END review_status,
     const aiUsage=await dbFirst(env.DB,'SELECT calls FROM ai_analysis_daily WHERE day_utc=?',dayUtc);
     const analysisLimitRaw=Number(env.AI_ANALYSIS_DAILY_LIMIT??2);
     const analysisLimit=Number.isSafeInteger(analysisLimitRaw)?Math.max(0,Math.min(5,analysisLimitRaw)):0;
-    const geminiUsage=await geminiQuotaUsage(env.DB);
+    const [geminiUsage,translationUsage]=await Promise.all([geminiQuotaUsage(env.DB),documentTranslationBudgetUsage(env.DB).catch(()=>null)]);
     return json({local_today:usage||{ai_calls:0,imported_files:0},
       app_utc_day:{day_utc:dayUtc,calls:summary?.calls||0,reserved:summary?.reserved||0,limit:appLimit},
       document_ai_utc_day:{day_utc:dayUtc,calls:aiUsage?.calls||0,limit:analysisLimit},
       gemini_daily:geminiUsage,
+      translation_jst_day:translationUsage,
       ocr_space_utc_day:{day_utc:dayUtc,calls:ocrSpaceUsage?.calls||0,limit:spaceLimit},
       cloudflare_account_remaining:null,cloudflare_account_remaining_status:'unknown',
       note:'文书助手内的用量，不含 Google 项目的其他 API 调用'});
