@@ -1385,7 +1385,11 @@ async function checkCandidateApprovalStatus(){
    candidateApprovalChecked.value=false;
    problem(e);
   }
- }finally{if(stillCurrent())busy.value=false;}
+ }finally{
+  // The old request no longer owns the visible approval fields after
+  // closing/switching documents, but it must release this same-account lock.
+  if(accountEpoch.isCurrent(account))busy.value=false;
+ }
 }
 
 async function verifyLedgerStatus(item){
@@ -1405,8 +1409,13 @@ async function commitApprovedCandidate(){
  }
  busy.value=true;
  const account=accountEpoch.snapshot();
- const stillCurrent=()=>{try{accountEpoch.assertCurrent(account);return true;}catch{return false;}};
- const id=candidateDraft.id,docId=current.value.id;
+ const id=candidateDraft.id,docId=current.value.id,detailSerial=detailOpenSerial;
+ // Keep a request tied to the document and candidate that initiated it.
+ // Closing its sheet or navigating elsewhere must invalidate late UI replies.
+ const stillCurrent=()=>accountEpoch.isCurrent(account)&&
+  detailOpenSerial===detailSerial&&current.value?.id===docId&&
+  candidateDraft.id===id&&sheet.value==='candidate';
+ const release=()=>{if(accountEpoch.isCurrent(account))busy.value=false;};
  const resumeApproval=memberApproval&&candidateApprovalPrepared.value;
  const body=resumeApproval?{confirm:candidateDraft.confirm,resume_existing:true}:
   {...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',
@@ -1434,7 +1443,7 @@ async function commitApprovedCandidate(){
   const path=memberApproval?'request-approval':'commit';
   const d=await api(`/api/candidates/${id}/${path}`,{method:'POST',body,
    ...(memberApproval?{}:{idempotencyKey:`jda-${id}`})});
-  if(!stillCurrent())return;
+  if(!stillCurrent()){release();return;}
   if(memberApproval){
    if(d.approval_submitted!==true||d.applied!==false||d.target_changed!==false)
     throw new Error('审批回执状态异常，没有确认目标应用写入');
@@ -1452,7 +1461,7 @@ async function commitApprovedCandidate(){
   }
   confirmed=true;pendingCandidateRetry.value=null;
  }catch(e){
-  if(!stillCurrent())return;
+  if(!stillCurrent()){release();return;}
   // An ambiguous HomeFlow reply never becomes a success toast. The same
   // candidate/snapshot may be retried, without creating a new approval ID.
   if(memberApproval){problem(e);busy.value=false;return;}
@@ -1462,13 +1471,15 @@ async function commitApprovedCandidate(){
   pendingCandidateRetry.value={id,body};
   feedback='同步未成功：'+(e?.message||'请核对目标 App');
  }
- if(!stillCurrent())return;
+ if(!stillCurrent()){release();return;}
  sheet.value='';
  refreshDocumentViews();
- try{await openDoc(docId);}catch{}
- if(!stillCurrent())return;
+ const refresh=openDoc(docId),refreshSerial=detailOpenSerial;
+ try{await refresh;}catch{}
+ if(!accountEpoch.isCurrent(account)||detailOpenSerial!==refreshSerial||
+    current.value?.id!==docId){release();return;}
  if(confirmed)flash(feedback);else problem(new Error(feedback));
- busy.value=false;
+ release();
 }
 
 async function restore(id){busy.value=true;try{
