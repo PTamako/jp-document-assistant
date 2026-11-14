@@ -10,6 +10,7 @@ import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus,integrationStatus } from './bridge.js';
 import {requestDocumentMemberApproval,documentMemberApprovalStatus} from './document-member-approval.js';
 import {documentExecutionRoute} from './document-execution.js';
+import {documentTaskSourceRoute} from './document-task-source.js';
 import {listDocumentFinanceAccounts} from './document-finance-account.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
@@ -647,6 +648,8 @@ async function route(request,env,ctx){
   if(method==='GET'&&path==='/api/google/oauth/callback')return oauthCallback(request,env,url);
   const internalDocument=path.match(/^\/api\/internal\/document-actions\/(execute|receipt|source-check)$/);
   if(internalDocument)return documentExecutionRoute(request,env,internalDocument[1]);
+   const internalTask=path.match(/^\/api\/internal\/document-task\/(prepare|receipt)$/);
+   if(internalTask)return documentTaskSourceRoute(request,env,internalTask[1]);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
   if(method==='GET'&&path==='/api/integrations/kakeibo/stable-accounts')
