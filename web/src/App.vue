@@ -102,6 +102,7 @@ const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',f
 const current=ref(null),detailTab=ref('original'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 // Ignore stale document responses after another document opens, the detail closes or the account changes.
 let detailOpenSerial=0;
+let candidatePreviewSerial=0; // Only the newest preview of the current document may open the sheet.
 const localTranslation=ref(''),translationSource=ref(''),translationVisible=ref(false),
  translationBusy=ref(false),translationProgress=ref(''),translationError=ref(''),
  translationConsent=ref(false);
@@ -495,6 +496,7 @@ function accountApi(snapshot){
 }
 function clearPrivateWorkspace(){
   detailOpenSerial++;
+  candidatePreviewSerial++;
   detailTab.value='original';
   stopTranslation({clear:true});
   accountEpoch.invalidate(); // Reject responses from the previous account.
@@ -1303,7 +1305,22 @@ async function selectBackup(event){
 }
 async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(accountApi(accountEpoch.snapshot()),restoreArchive.value,true);sheet.value='';backupFile.value=null;restoreArchive.value=null;restorePreview.value=[];for(const page of Object.values(pages))page.loaded=false;flash(`已恢复 ${r.metadata_restored} 份资料、${r.originals_restored} 个原件；失败 ${r.failures.length} 件`);}catch(e){problem(e);}finally{busy.value=false;}}
 async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
-async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
+async function prepareCandidate(item){
+ if(busy.value||!current.value||!item?.id||
+    !detailCandidates.value.some(c=>c.id===item.id))return;
+ const account=accountEpoch.snapshot(),documentId=current.value.id;
+ const detailSerial=detailOpenSerial,previewSerial=++candidatePreviewSerial;
+ const initialSheet=sheet.value,candidateId=item.id;
+ const stillCurrent=()=>accountEpoch.isCurrent(account)&&
+  detailOpenSerial===detailSerial&&candidatePreviewSerial===previewSerial&&
+  current.value?.id===documentId&&sheet.value===initialSheet&&
+  detailCandidates.value.some(c=>c.id===candidateId);
+ try{
+ const d=await api(`/api/candidates/${candidateId}/preview`);
+ // Source user/document/candidate and sheet must remain the same after the
+ // delayed service response. A late preview must not open someone else's
+ // approval form after logout or a new document selection.
+ if(!stillCurrent())return;
  candidateApprovalRequired.value=d.approval_required===true;
  candidateApprovalReady.value=d.approval_action_enabled===true;
  candidateApprovalSubmitted.value=d.approval_submitted===true;
@@ -1339,7 +1356,8 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  sheet.value='candidate';integrationConfigured.value=!candidateApprovalRequired.value&&d.available&&
    (item.candidate_kind!=='finance'||(ledgerOptions.value.categories.length>0&&ledgerOptions.value.paymentSources.length>0))&&
    (item.candidate_kind!=='homeflow_task'||homeflowMemberChoices.value.some(x=>x.self===true));
- }catch(e){problem(e);}}
+ }catch(e){if(stillCurrent())problem(e);}
+}
 async function checkCandidateApprovalStatus(){
  if(busy.value||!candidateApprovalRequired.value||
     (!candidateApprovalSubmitted.value&&!candidateApprovalPrepared.value)||
