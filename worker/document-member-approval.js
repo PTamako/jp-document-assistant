@@ -5,6 +5,7 @@ import {randomToken,hashString,isoNow} from './security.js';
 import {json,bad,readJson,failure} from './http.js';
 import {validatedPayload} from './bridge.js';
 import {documentIntentKeyReady,sealDocumentIntent,openDocumentIntent} from './document-intent-crypto.js';
+import {verifiedDocumentFinanceAccount} from './document-finance-account.js';
 
 const idPattern=/^[a-f0-9]{32}$/;
 const hashPattern=/^[a-f0-9]{64}$/;
@@ -25,7 +26,7 @@ const kinds={
  vocabulary:{target:'it-study-platform',confirm:'CONFIRM_STUDY'},
  sentence:{target:'it-study-platform',confirm:'CONFIRM_STUDY'}
 };
-const allowedInput=new Set(['confirm','payment_confirmed','date','transfer_date',
+const allowedInput=new Set(['confirm','payment_confirmed','date','transfer_date','account_id',
  'category','payment_source','note','visibility','title','assignee',
  'bonus_points','remindEnabled','task_share_confirmed',
  'privacy_confirmed','redacted_sentence','redacted_term']);
@@ -191,6 +192,13 @@ export async function requestDocumentMemberApproval(request,env,p,id){
   // Same business verification as owner confirmation, but no target call.
   const payload=validatedPayload(
    target==='it-study-platform'?'zhixue':target,item,approved,body);
+  if(target==='kakebo'){
+   const account=await verifiedDocumentFinanceAccount(env,p,body.account_id,
+    payload.type,payload.paymentSource);
+   // Freeze the TARGET-authoritative account ID and version with the source
+   // AES-GCM snapshot, so the eventual executor cannot infer via display name.
+   Object.assign(payload,account);
+  }
   const envelope={source_document_id:item.document_id,source_candidate_id:id,
    source_document_version:item.document_version,
    candidate_updated_at:item.updated_at,candidate_kind:item.candidate_kind,
