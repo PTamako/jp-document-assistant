@@ -209,7 +209,7 @@ const shape=(b,r)=>({ok:true,applied:true,status:'applied',approval_id:b.request
  requester_user_id:b.requester_user_id,payload_sha256:b.payload_sha256,
  entry_id:r.entry_id,applied_at:r.applied_at,already_applied:r.already_applied===true});
 export async function documentExecutionRoute(request,env,mode){
- if(env.DOCUMENT_EXECUTION_ENABLED!=='true'||!hex.test(env.HOMEFLOW_DOCUMENT_EXECUTION_SECRET||'')||
+ if(env.APP_ENV!=='production'||env.DOCUMENT_EXECUTION_ENABLED!=='true'||!hex.test(env.HOMEFLOW_DOCUMENT_EXECUTION_SECRET||'')||
   !hex.test(env.DOCUMENT_APPROVAL_VERIFICATION_SECRET||'')||
   !hex.test(env.DOCUMENT_FINANCE_TARGET_SECRET||'')||
   !hex.test(env.DOCUMENT_INTENT_ENCRYPTION_KEY||'')||
