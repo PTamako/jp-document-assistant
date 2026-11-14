@@ -140,15 +140,39 @@ export async function documentMemberApprovalStatus(env,p,id){
   remote.requester_user_id!==p.homeflow_user_id||
   remote.resource_id!==id||remote.target_app!==row.target_app||
   remote.payload_sha256!==row.payload_sha256||
-  !['pending','approved','rejected','cancelled','expired','failed_final','conflict'].includes(remote.status)||
+  !(row.target_app==='kakebo'&&row.candidate_kind==='finance'?
+    ['pending','approved','executing','applied','failed_retryable','rejected','cancelled','expired','failed_final','conflict']:
+    ['pending','approved','rejected','cancelled','expired','failed_final','conflict']).includes(remote.status)||
   !Number.isSafeInteger(remote.version)||remote.version<1||
-  remote.applied!==false||remote.target_changed!==false)
+  remote.applied!==(remote.status==='applied')||
+  remote.target_changed!==(remote.status==='applied'))
   return failure('APPROVAL_STATUS_UNCONFIRMED',
    'HomeFlow 未返回可验证的审批状态，不能视作批准或同步成功',503);
+ const applied=remote.status==='applied';
+ if(applied){
+  // Never claim applied on approval alone: both the target and source
+  // persisted identical ID/account digest receipts before HomeFlow applied.
+  const proof=await dbFirst(env.DB,
+   'SELECT * FROM document_member_execution_reservations WHERE candidate_id=?',id);
+  if(!proof||proof.status!=='applied'||
+     proof.approval_id!==row.approval_id||proof.candidate_id!==id||
+     proof.document_id!==row.document_id||
+     proof.requester_user_id!==p.homeflow_user_id||
+     proof.household_id!==p.homeflow_household_id||
+     proof.payload_sha256!==row.payload_sha256||
+     !Number.isSafeInteger(proof.target_entry_id)||proof.target_entry_id<1||
+     String(proof.target_entry_id)!==String(remote.remote_id)||
+     !Number.isSafeInteger(proof.applied_at)||proof.applied_at<1||
+     !proof.approver_user_id||proof.approver_user_id===p.homeflow_user_id)
+    return failure('APPROVAL_RECEIPT_UNCONFIRMED',
+     '目标回执与文书源记录尚未对账，不能显示已生效',503);
+ }
  return json({...publicStatus(row,remote.status),
   approval_prepared:false,approval_checked:true,
   homeflow_version:remote.version,
-  reviewed_at:remote.reviewed_at??null,applied:false,target_changed:false});
+  reviewed_at:remote.reviewed_at??null,
+  ...(applied?{entry_id:Number(remote.remote_id)}:{}),
+  applied,target_changed:applied});
 }
 export async function requestDocumentMemberApproval(request,env,p,id){
  checkedMember(p);
