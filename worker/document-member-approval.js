@@ -88,6 +88,16 @@ export async function documentMemberApprovalStatus(env,p,id){
   row.document_id!==item.document_id||row.candidate_kind!==item.candidate_kind||
   row.target_app!==kinds[item.candidate_kind].target)
   bad('审批申请不属于当前账号','APPROVAL_IDENTITY_CHANGED',403);
+ // An approval authorizes the exact frozen document/candidate version,
+ // never a newly edited source that happens to reuse its candidate ID.
+ // Recheck locally BEFORE asking HomeFlow for a status or issuing a new receipt.
+ if(row.document_version!==item.document_version||
+    row.candidate_updated_at!==item.updated_at)
+  bad('文书或同步候选已修改，旧审批不能代表当前内容','APPROVAL_SOURCE_CHANGED',409);
+ if(!hashPattern.test(row.payload_sha256)||
+    typeof row.payload_json!=='string'||
+    await hashString(row.payload_json)!==row.payload_sha256)
+  bad('审批快照完整性校验失败','APPROVAL_SNAPSHOT_INVALID',409);
  if(row.status!=='submitted')return json({...publicStatus(row),
   approval_prepared:true,target_changed:false});
  if(typeof row.approval_id!=='string'||
@@ -198,6 +208,9 @@ export async function requestDocumentMemberApproval(request,env,p,id){
   stored.target_app!==target||stored.payload_sha256!==digest||
   stored.payload_json!==snapshot)
   bad('申请内容与已有候选快照不同，请先核对原申请','APPROVAL_INTENT_CONFLICT',409);
+ if(stored.document_version!==item.document_version||
+    stored.candidate_updated_at!==item.updated_at)
+  bad('文书或同步候选已修改，不能重放旧审批','APPROVAL_SOURCE_CHANGED',409);
  // Confirmation is frozen in private D1 before HomeFlow sees the digest.
  // If the response is lost, repeat the same signed hash and candidate ID;
  // HomeFlow will return its original immutable request instead of duplicating.
