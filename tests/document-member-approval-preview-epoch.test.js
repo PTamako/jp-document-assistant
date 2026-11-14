@@ -31,6 +31,7 @@ function queue(){
   candidateApprovalId:ref(''),candidateApprovalStatus:ref('not_submitted'),
   candidateApprovalChecked:ref(false),
   candidateDraft:{},ledgerOptions:ref({}),ledgerOptionsError:ref(''),
+  financeStableAccounts:ref([]),financeStableAccountsError:ref(''),
   homeflowMembersError:ref(''),homeflowMemberChoices:ref([]),
   ledgerAttempted:ref(false),ledgerMappingChangeConfirmed:ref(false),
   candidateMerchant:ref(''),pendingCandidateRetry:ref(null),
