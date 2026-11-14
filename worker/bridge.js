@@ -274,7 +274,9 @@ export async function candidatePreview(request,env,p,id){
     env.HOMEFLOW_SSO_ENABLED==='true'&&
     env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED==='true'&&
     typeof env.DOCUMENT_APPROVAL_SUBMISSION_SECRET==='string'&&
-    /^[a-f0-9]{64}$/.test(env.DOCUMENT_APPROVAL_SUBMISSION_SECRET)&&
+    /^[a-f0-9]{64}$/i.test(env.DOCUMENT_APPROVAL_SUBMISSION_SECRET)&&
+    typeof env.DOCUMENT_INTENT_ENCRYPTION_KEY==='string'&&
+    /^[a-f0-9]{64}$/i.test(env.DOCUMENT_INTENT_ENCRYPTION_KEY)&&
     typeof env.HOMEFLOW_BRIDGE_SERVICE?.fetch==='function';
   const preparedApproval=approvalActionEnabled?
     await first(env.DB,'SELECT status,approval_id FROM document_member_sync_intents WHERE candidate_id=?',id):null;

@@ -6,6 +6,7 @@ import {webcrypto,createHmac} from 'node:crypto';
 import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso} from '../worker/homeflow-sso.js';
 import worker from '../worker/index.js';
 import {hashString} from '../worker/security.js';
+import {openDocumentIntent} from '../worker/document-intent-crypto.js';
 
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
 const repo=new URL('../',import.meta.url);
@@ -454,6 +455,7 @@ test('member document review requests retain an immutable private payload and cr
     JSON.stringify({term:'確認',reading:'かくにん',meaning_zh:'确认'}),now(),now());
   f.env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED='true';
   f.env.DOCUMENT_APPROVAL_SUBMISSION_SECRET='d'.repeat(64);
+  f.env.DOCUMENT_INTENT_ENCRYPTION_KEY='e'.repeat(64);
   const original=f.env.HOMEFLOW_BRIDGE_SERVICE;
   let submissions=0,lastWire=null,bridgeCalls=0,loseOnceFor=null,liveStatus='pending',statusCalls=0,statusOffline=false,statusTamper=false;
   f.env.HOMEFLOW_BRIDGE_SERVICE={fetch:async(request)=>{
@@ -518,6 +520,11 @@ test('member document review requests retain an immutable private payload and cr
     method:'POST',headers:{Origin:app,Cookie:cookie,'X-CSRF-Token':csrf,
      'Content-Type':'application/json'},body:JSON.stringify(payload)
    }),f.env,{});
+  delete f.env.DOCUMENT_INTENT_ENCRYPTION_KEY;
+  assert.equal((await post()).status,503,'no encryption key must fail before snapshot or remote submission');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,0);
+  assert.equal(submissions,0);
+  f.env.DOCUMENT_INTENT_ENCRYPTION_KEY='e'.repeat(64);
   const first=await post();
   assert.equal(first.status,200,await first.clone().text());
   const created=await first.json();
@@ -531,7 +538,11 @@ test('member document review requests retain an immutable private payload and cr
   assert.equal(row.homeflow_household_id,'primary');
   assert.equal(row.target_app,'it-study-platform');
   assert.equal(row.payload_sha256,lastWire.payload_sha256);
-  assert.ok(row.payload_json.includes('確認'),'private snapshot stored in source D1');
+  assert.ok(!JSON.stringify(row).includes('確認'),'snapshot plaintext is not persisted');
+  assert.ok((await openDocumentIntent(f.env,row)).includes('確認'));
+  await assert.rejects(openDocumentIntent({...f.env,DOCUMENT_INTENT_ENCRYPTION_KEY:'f'.repeat(64)},row));
+  await assert.rejects(openDocumentIntent(f.env,{...row,homeflow_user_id:ownerId}));
+  await assert.rejects(openDocumentIntent(f.env,{...row,payload_cipher:row.payload_cipher.slice(0,-4)+'AAAA'}));
   assert.equal(row.approval_id,created.approval_id);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,1);
@@ -605,6 +616,7 @@ test('member document review requests retain an immutable private payload and cr
   assert.equal((await firstLost.json()).code,'APPROVAL_SUBMISSION_UNCONFIRMED');
   const frozen=f.sql.prepare('SELECT * FROM document_member_sync_intents WHERE candidate_id=?').get(second);
   assert.equal(frozen.status,'prepared');
+  assert.notEqual(frozen.payload_iv,row.payload_iv,'each intent has its own random nonce');
   assert.equal(frozen.approval_id,null);
   const recovery=await post({confirm:'CONFIRM_STUDY',resume_existing:true},second);
   assert.equal(recovery.status,200,await recovery.clone().text());
@@ -612,8 +624,8 @@ test('member document review requests retain an immutable private payload and cr
   assert.equal(recovered.approval_submitted,true);
   assert.equal(recovered.applied,false);
   assert.equal(recovered.target_changed,false);
-  assert.equal(f.sql.prepare('SELECT payload_json FROM document_member_sync_intents WHERE candidate_id=?').get(second).payload_json,
-   frozen.payload_json);
+  assert.equal(f.sql.prepare('SELECT payload_cipher FROM document_member_sync_intents WHERE candidate_id=?').get(second).payload_cipher,
+   frozen.payload_cipher);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,2);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
   assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM audit_events WHERE kind='document_sync_approval_submitted'").get().n,2);

@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS document_member_sync_intents (
  document_version INTEGER NOT NULL CHECK(document_version>=1),
  candidate_updated_at TEXT NOT NULL,
  payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256)=64),
- payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+ payload_cipher TEXT NOT NULL,
+ payload_iv TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'prepared' CHECK(status IN('prepared','submitted')),
  approval_id TEXT UNIQUE,
  created_at TEXT NOT NULL,
@@ -26,7 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_document_member_sync_actor
 CREATE TRIGGER IF NOT EXISTS trg_document_member_sync_identity_immutable
  BEFORE UPDATE OF candidate_id,document_id,local_user_id,homeflow_user_id,
  homeflow_household_id,target_app,candidate_kind,document_version,
- candidate_updated_at,payload_sha256,payload_json,created_at
+ candidate_updated_at,payload_sha256,payload_cipher,payload_iv,created_at
  ON document_member_sync_intents
  BEGIN SELECT RAISE(ABORT,'DOCUMENT_APPROVAL_INTENT_IMMUTABLE'); END;
 CREATE TRIGGER IF NOT EXISTS trg_document_member_sync_submitted_final

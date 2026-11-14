@@ -4,6 +4,7 @@
 import {randomToken,hashString,isoNow} from './security.js';
 import {json,bad,readJson,failure} from './http.js';
 import {validatedPayload} from './bridge.js';
+import {documentIntentKeyReady,sealDocumentIntent,openDocumentIntent} from './document-intent-crypto.js';
 
 const idPattern=/^[a-f0-9]{32}$/;
 const hashPattern=/^[a-f0-9]{64}$/;
@@ -35,6 +36,7 @@ export function documentMemberApprovalReady(env){
   env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED==='true'&&
   typeof env.DOCUMENT_APPROVAL_SUBMISSION_SECRET==='string'&&
   hashPattern.test(env.DOCUMENT_APPROVAL_SUBMISSION_SECRET)&&
+  documentIntentKeyReady(env)&&
   typeof env.HOMEFLOW_BRIDGE_SERVICE?.fetch==='function'&&
   typeof env.DB?.prepare==='function';
 }
@@ -94,9 +96,11 @@ export async function documentMemberApprovalStatus(env,p,id){
  if(row.document_version!==item.document_version||
     row.candidate_updated_at!==item.updated_at)
   bad('文书或同步候选已修改，旧审批不能代表当前内容','APPROVAL_SOURCE_CHANGED',409);
- if(!hashPattern.test(row.payload_sha256)||
-    typeof row.payload_json!=='string'||
-    await hashString(row.payload_json)!==row.payload_sha256)
+ let snapshot;
+ try{snapshot=await openDocumentIntent(env,row);}catch{
+  bad('审批快照完整性校验失败','APPROVAL_SNAPSHOT_INVALID',409);
+ }
+ if(!hashPattern.test(row.payload_sha256)||await hashString(snapshot)!==row.payload_sha256)
   bad('审批快照完整性校验失败','APPROVAL_SNAPSHOT_INVALID',409);
  if(row.status!=='submitted')return json({...publicStatus(row),
   approval_prepared:true,target_changed:false});
@@ -174,7 +178,10 @@ export async function requestDocumentMemberApproval(request,env,p,id){
     original.candidate_kind!==item.candidate_kind||
     original.target_app!==target)
    bad('申请原始版本已变化，不能重试','APPROVAL_RETRY_CONFLICT',409);
-  digest=original.payload_sha256;snapshot=original.payload_json;
+  digest=original.payload_sha256;
+  try{snapshot=await openDocumentIntent(env,original);}catch{
+   bad('申请快照完整性不符','APPROVAL_SNAPSHOT_INVALID',409);
+  }
   if(!hashPattern.test(digest)||await hashString(snapshot)!==digest)
    bad('申请快照完整性不符','APPROVAL_SNAPSHOT_INVALID',409);
  }else{
@@ -190,15 +197,20 @@ export async function requestDocumentMemberApproval(request,env,p,id){
    homeflow_user_id:p.homeflow_user_id,
    homeflow_household_id:p.homeflow_household_id,target_app:target,payload};
   snapshot=JSON.stringify(envelope);digest=await hashString(snapshot);
+  const identity={candidate_id:id,document_id:item.document_id,local_user_id:p.user_id,
+   homeflow_user_id:p.homeflow_user_id,homeflow_household_id:p.homeflow_household_id,
+   target_app:target,candidate_kind:item.candidate_kind,document_version:item.document_version,
+   candidate_updated_at:item.updated_at,payload_sha256:digest};
+  const sealed=await sealDocumentIntent(env,identity,snapshot);
   await dbRun(env.DB,`INSERT INTO document_member_sync_intents
    (candidate_id,document_id,local_user_id,homeflow_user_id,
     homeflow_household_id,target_app,candidate_kind,document_version,
-    candidate_updated_at,payload_sha256,payload_json,status,created_at,updated_at)
-   VALUES(?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)
+    candidate_updated_at,payload_sha256,payload_cipher,payload_iv,status,created_at,updated_at)
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)
    ON CONFLICT(candidate_id) DO NOTHING`,
    id,item.document_id,p.user_id,p.homeflow_user_id,p.homeflow_household_id,
    target,item.candidate_kind,item.document_version,item.updated_at,
-   digest,snapshot,now,now);
+   digest,sealed.payload_cipher,sealed.payload_iv,now,now);
  }
  const stored=await dbFirst(env.DB,
   'SELECT * FROM document_member_sync_intents WHERE candidate_id=?',id);
@@ -213,7 +225,11 @@ export async function requestDocumentMemberApproval(request,env,p,id){
  if(stored.document_version!==item.document_version||
     stored.candidate_updated_at!==item.updated_at)
   bad('文书或同步候选已修改，不能重放旧审批','APPROVAL_SOURCE_CHANGED',409);
- if(stored.payload_sha256!==digest||stored.payload_json!==snapshot)
+ let storedSnapshot;
+ try{storedSnapshot=await openDocumentIntent(env,stored);}catch{
+  bad('申请快照完整性不符','APPROVAL_SNAPSHOT_INVALID',409);
+ }
+ if(stored.payload_sha256!==digest||storedSnapshot!==snapshot)
   bad('申请内容与已有候选快照不同，请先核对原申请','APPROVAL_INTENT_CONFLICT',409);
  // Confirmation is frozen in private D1 before HomeFlow sees the digest.
  // If the response is lost, repeat the same signed hash and candidate ID;
