@@ -91,7 +91,7 @@ function ledgerEntryType(x,merchant=x.merchant){
   if(['expense','transfer'].includes(x.kind)&&inferSbiInvestmentKind(merchant))return 'transfer';
   return x.kind;
 }
-function validatedPayload(target,item,approved,body){
+export function validatedPayload(target,item,approved,body){
   const x=JSON.parse(item.payload_json);
   if(target==='kakebo'){
     const amountText=approved.get(x.kind==='income'?'net_salary':'amount_jpy');
@@ -265,20 +265,59 @@ export async function candidatePreview(request,env,p,id){
   const payload=JSON.parse(item.payload_json);
   const verifiedMerchant=fields.get('merchant')||payload.merchant;
   const entryType=target==='kakebo'?ledgerEntryType(payload,verifiedMerchant):null;
-  const picker=target==='kakebo'?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
-  const members=target==='homeflow'?await homeflowMemberOptions(env,p.user_id,id):null;
+  // Member-initiated writes require a separately verified HomeFlow approval.
+  // Until that executor is implemented, never look up private target accounts
+  // or expose an enabled "sync" button merely because a bridge is configured.
+  const approvalRequired=p.role!=='owner';
+  const approvalActionEnabled=approvalRequired&&p.auth_source==='homeflow'&&
+    !!p.homeflow_user_id&&!!p.homeflow_household_id&&
+    env.HOMEFLOW_SSO_ENABLED==='true'&&
+    env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED==='true'&&
+    typeof env.DOCUMENT_APPROVAL_SUBMISSION_SECRET==='string'&&
+    /^[a-f0-9]{64}$/i.test(env.DOCUMENT_APPROVAL_SUBMISSION_SECRET)&&
+    typeof env.DOCUMENT_INTENT_ENCRYPTION_KEY==='string'&&
+    /^[a-f0-9]{64}$/i.test(env.DOCUMENT_INTENT_ENCRYPTION_KEY)&&
+    typeof env.HOMEFLOW_BRIDGE_SERVICE?.fetch==='function';
+  const preparedApproval=approvalActionEnabled?
+    await first(env.DB,'SELECT status,approval_id FROM document_member_sync_intents WHERE candidate_id=?',id):null;
+  const picker=!approvalRequired&&target==='kakebo'
+    ?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
+  const members=!approvalRequired&&target==='homeflow'
+    ?await homeflowMemberOptions(env,p.user_id,id):null;
   return json({candidate_id:id,target,kind:item.candidate_kind,payload,entry_type:entryType,ledger_options:picker?.data||null,
     ledger_options_error:picker?.error||null,
     homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
-    integration:link||null,available:!!config(env,target),
-    account_mapping_ready:!!authorizedMapping(env,p.user_id,target),
-    note:'请对照原文及目标 App 的账号完成二次确认。生词和句子必须先脱敏，财务内容不能直接视为已付款。'});
+    integration:link||null,available:!approvalRequired&&!!config(env,target),
+    approval_required:approvalRequired,approval_action_enabled:approvalActionEnabled,
+    approval_submitted:preparedApproval?.status==='submitted',
+    approval_prepared:preparedApproval?.status==='prepared',
+    approval_id:preparedApproval?.approval_id||null,
+    approval_status:preparedApproval?.status==='submitted'?'submitted_status_unknown':
+      preparedApproval?.status==='prepared'?'prepared_unconfirmed':'not_submitted',
+    applied:false,
+    account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p.user_id,target),
+    note:approvalRequired
+      ?preparedApproval?.status==='submitted'
+        ?'已提交 HomeFlow 审批；尚未同步到目标应用，审批结果请到 HomeFlow 查看。'
+        :preparedApproval?.status==='prepared'
+          ?'上次提交结果未确认；可重试原申请，使用原始快照，不会创建第二份，也未写入目标应用。'
+          :approvalActionEnabled
+          ?'可以请求管理员审批。提交申请不代表已经批准或同步到目标应用。'
+          :'当前成员需要 HomeFlow 管理员审批。申请入口暂未启用，未同步到目标应用。'
+      :'请对照原文及目标 App 的账号完成二次确认。生词和句子必须先脱敏，财务内容不能直接视为已付款。'});
 }
 export async function commitCandidate(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
   const target=TARGETS[item.candidate_kind];
+  // Hard server-side gate: neither a legacy member session nor a new SSO
+  // member may write household finance, tasks, or private study targets
+  // without a VERIFIED HomeFlow approval and scoped target executor.
+  // Do not create an integration_link (or claim a remote write) here.
+  if(p.role!=='owner')
+    return failure('APPROVAL_REQUIRED',
+      '普通成员跨应用同步需要 HomeFlow 审批；当前未提交申请，也未写入目标 App。',409);
   const data=await readJson(request,9000);
   if(data.confirm!==CONFIRMATIONS[item.candidate_kind])bad('需要明确二次确认','CONFIRM_REQUIRED',409);
   const supplied=request.headers.get('Idempotency-Key');

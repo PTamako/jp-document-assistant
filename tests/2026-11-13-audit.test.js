@@ -95,6 +95,6 @@ test('HomeFlow private assignment never displays both people, and paid delegated
   const ui=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
   assert.ok(!ui.includes('未指定（双方）'));
   assert.ok(ui.includes("const needsOtherAssigneeBonus=computed"));
-  assert.ok(ui.includes('needsOtherAssigneeBonus&&(!Number.isSafeInteger(candidateDraft.bonus_points)'));
+  assert.match(ui,/needsOtherAssigneeBonus\.value&&[\s\S]*?!Number\.isSafeInteger\(candidateDraft\.bonus_points\)/);
   assert.ok(ui.includes('min="1" max="10000"'));
 });

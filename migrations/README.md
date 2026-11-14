@@ -32,6 +32,8 @@ The initial schema deliberately has **no FTS virtual table** because D1 support 
 
 `0014_google_browser_redirect.sql` upgrades existing encrypted grants for Gmail + Drive and adds user-bound short-lived OAuth transaction state with PKCE. Run only on document assistant D1 after verifying Time Travel bookmark; do not create Preview resources.
 
+`0023_document_member_sync_intents.sql` is an unexecuted Draft migration. Frozen member approval snapshots require a dedicated 256-bit hex `DOCUMENT_INTENT_ENCRYPTION_KEY` Worker Secret and are AES-GCM sealed with immutable identity and digest as authenticated data. Missing or incorrect key fails closed; preserve the key for recovery. Do not enable the feature or run this migration in production without the separately approved deployment.
+
 
 ## Gemini 3.6 Flash shared request cap (0016)
 

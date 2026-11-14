@@ -20,6 +20,74 @@ import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const initialized=ref(null);
+// HomeFlow SSO is invisible until the backend explicitly opts in.
+// The 5-minute resume proof stays only in the original PWA session.
+const homeflowSsoAvailable=ref(false),homeflowSsoPending=ref(false),homeflowSsoBusy=ref(false);
+const SSO_PENDING_KEY='da-homeflow-sso-pending';
+function readHomeflowSsoPending(){
+ try{
+  const raw=sessionStorage.getItem(SSO_PENDING_KEY);
+  if(!raw)return null;
+  const data=JSON.parse(raw);
+  if(!/^[a-f0-9]{64}$/.test(data?.state||'')||
+     !/^[a-f0-9]{64}$/.test(data?.resume_secret||'')||
+     !Number.isFinite(data?.until)||Date.now()>data.until){
+   sessionStorage.removeItem(SSO_PENDING_KEY);return null;
+  }
+  return data;
+ }catch{return null;}
+}
+function clearHomeflowSsoPending(){
+ try{sessionStorage.removeItem(SSO_PENDING_KEY);}catch{}
+ homeflowSsoPending.value=false;
+}
+async function refreshHomeflowSsoAvailability(){
+ try{
+  const r=await fetch('/api/homeflow-sso/status',{credentials:'same-origin',cache:'no-store'});
+  homeflowSsoAvailable.value=r.ok&&(await r.json()).enabled===true;
+ }catch{homeflowSsoAvailable.value=false;}
+ homeflowSsoPending.value=homeflowSsoAvailable.value&&!!readHomeflowSsoPending();
+}
+async function beginHomeflowSso(){
+ if(!homeflowSsoAvailable.value||homeflowSsoBusy.value)return;
+ homeflowSsoBusy.value=true;error.value='';
+ try{
+  const r=await fetch('/api/homeflow-sso/start',{method:'POST',credentials:'same-origin',
+   cache:'no-store',headers:{'Content-Type':'application/json'},body:'{}'});
+  const data=await r.json();
+  if(!r.ok||!data.ok)throw Error(data.code||'无法开始 HomeFlow 授权');
+  const url=new URL(data.authorization_url);
+  if(url.protocol!=='https:'||!/^[a-f0-9]{64}$/.test(data.state||'')||
+     !/^[a-f0-9]{64}$/.test(data.resume_secret||''))
+   throw Error('登录请求无效');
+  sessionStorage.setItem(SSO_PENDING_KEY,JSON.stringify({
+   state:data.state,resume_secret:data.resume_secret,until:Date.now()+300000
+  }));
+  homeflowSsoPending.value=true;
+  window.location.assign(url.href);
+ }catch(e){problem(e);homeflowSsoBusy.value=false;}
+}
+async function completeHomeflowSso(){
+ const p=readHomeflowSsoPending();
+ if(!p){clearHomeflowSsoPending();problem('登录已过期，请重新授权');return;}
+ if(homeflowSsoBusy.value)return;
+ homeflowSsoBusy.value=true;error.value='';
+ try{
+  const r=await fetch('/api/homeflow-sso/complete',{method:'POST',
+   credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({state:p.state,resume_secret:p.resume_secret})});
+  const data=await r.json();
+  if(!r.ok||!data.ok)throw Error(data.code||'登录尚未完成');
+  clearHomeflowSsoPending();
+  clearPrivateWorkspace();
+  await boot();
+  flash('HomeFlow 登录成功');
+ }catch(e){
+  problem(e);
+  if(['SSO_INVALID_PROOF','SSO_INVALID_STATE'].includes(e.message))
+   clearHomeflowSsoPending();
+ }finally{homeflowSsoBusy.value=false;}
+}
 const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
 const passwordDraft=reactive({current_password:'',new_password:'',confirm_password:''});
 const calendarLink=ref(''),calendarStatusInfo=ref(null),calendarShowTitle=ref(false);
@@ -34,6 +102,7 @@ const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',f
 const current=ref(null),detailTab=ref('original'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
 // Ignore stale document responses after another document opens, the detail closes or the account changes.
 let detailOpenSerial=0;
+let candidatePreviewSerial=0; // Only the newest preview of the current document may open the sheet.
 const localTranslation=ref(''),translationSource=ref(''),translationVisible=ref(false),
  translationBusy=ref(false),translationProgress=ref(''),translationError=ref(''),
  translationConsent=ref(false);
@@ -212,11 +281,63 @@ let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
-const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
+const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
+const candidateApprovalRequired=ref(false);
+const financeStableAccounts=ref([]),financeStableAccountsError=ref('');
+function chooseFinanceStableAccount(){
+ const selected=financeStableAccounts.value.find(x=>x.account_id===candidateDraft.account_id);
+ candidateDraft.payment_source=selected?.label||'';
+}
+const candidateApprovalReady=ref(false),candidateApprovalSubmitted=ref(false),candidateApprovalPrepared=ref(false),candidateApprovalId=ref('');
+const candidateApprovalStatus=ref('not_submitted'),candidateApprovalChecked=ref(false);
+const candidateApprovalMessage=computed(()=>{
+ if(!candidateApprovalSubmitted.value)return '';
+ if(!candidateApprovalChecked.value)return '申请已提交，尚未查询到最新审批状态；目标应用没有同步。';
+ const labels={
+  pending:'HomeFlow 管理员尚未审批，目标应用没有同步。',
+  approved:candidateDraft.kind==='finance'?'管理员已批准，等待管理员执行入账。':'管理员已批准，目标执行器尚未接通。',
+  executing:'管理员正在执行，目标回执尚待确认。',
+  failed_retryable:'回执尚不明确，将使用原审批 ID 安全对账。',
+  applied:'已验证目标回执，账目已生效。',
+  rejected:'管理员已拒绝该申请，目标应用没有同步。',
+  cancelled:'审批申请已取消，目标应用没有同步。',
+  expired:'审批申请已过期，目标应用没有同步。',
+  failed_final:'审批已终止，目标应用没有同步。',
+  conflict:'审批发生冲突，目标应用没有同步。'
+ };
+ return labels[candidateApprovalStatus.value]||'审批状态尚未确认，目标应用没有同步。';
+});
 const needsOtherAssigneeBonus=computed(()=>
   candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
   !!candidateDraft.assignee&&!homeflowMemberChoices.value.some(x=>x.value===candidateDraft.assignee&&x.self===true));
+const candidateActionDisabled=computed(()=>{
+ if(busy.value)return true;
+ if(candidateApprovalRequired.value?!candidateApprovalReady.value:!integrationConfigured.value)return true;
+ if(candidateApprovalRequired.value&&candidateApprovalPrepared.value)return false;
+ if(candidateDraft.kind==='finance'){
+  if(!candidateDraft.date||
+   (candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date))return true;
+  if(candidateApprovalRequired.value){
+   if(candidateDraft.entry_type==='transfer'||
+      !financeStableAccounts.value.some(x=>x.account_id===candidateDraft.account_id&&
+       x.label===candidateDraft.payment_source)||
+      !String(candidateDraft.category||'').trim()||
+      !String(candidateDraft.payment_source||'').trim())return true;
+  }else{
+   if(!ledgerOptions.value.categories.some(x=>x.value===candidateDraft.category)||
+      !ledgerOptions.value.paymentSources.some(x=>x.value===candidateDraft.payment_source)||
+      (ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value))return true;
+  }
+ }
+ if(candidateDraft.kind==='homeflow_task'&&current.value?.visibility==='private'&&
+    candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)return true;
+ if(needsOtherAssigneeBonus.value&&
+    (!Number.isSafeInteger(candidateDraft.bonus_points)||
+     candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))return true;
+ return false;
+});
+
 // Selection belongs to THIS import only; never stored as a global/device default.
 const aiProvider=ref(''),geminiConsent=ref(false),docAiProvider=ref('none'),docGeminiConsent=ref(false);
 const sessions=ref([]),sessionsNext=ref(null);
@@ -386,6 +507,7 @@ function accountApi(snapshot){
 }
 function clearPrivateWorkspace(){
   detailOpenSerial++;
+  candidatePreviewSerial++;
   detailTab.value='original';
   stopTranslation({clear:true});
   accountEpoch.invalidate(); // Reject responses from the previous account.
@@ -396,6 +518,7 @@ function clearPrivateWorkspace(){
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usageLoadSerial++;usageRefreshing.value=false;
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
+  candidateApprovalRequired.value=false;candidateApprovalReady.value=false;candidateApprovalSubmitted.value=false;candidateApprovalPrepared.value=false;candidateApprovalId.value='';candidateApprovalStatus.value='not_submitted';candidateApprovalChecked.value=false;
   ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;candidateMerchant.value='';pendingCandidateRetry.value=null;
   homeflowMemberChoices.value=[{value:'',label:'未指定'}];homeflowMembersError.value='';
   for(const key of Object.keys(financeTargetStatus))delete financeTargetStatus[key];
@@ -680,7 +803,7 @@ async function changePassword(){
 }
 async function logout(){
   try{await api('/api/auth/logout',{method:'POST'});}catch{}
-  clearPrivateWorkspace();auth.password='';
+  clearHomeflowSsoPending();clearPrivateWorkspace();auth.password='';
 }
 async function loadTab(tab,append=false){
   const page=pages[tab];if(!page)return;
@@ -1193,7 +1316,29 @@ async function selectBackup(event){
 }
 async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(accountApi(accountEpoch.snapshot()),restoreArchive.value,true);sheet.value='';backupFile.value=null;restoreArchive.value=null;restorePreview.value=[];for(const page of Object.values(pages))page.loaded=false;flash(`已恢复 ${r.metadata_restored} 份资料、${r.originals_restored} 个原件；失败 ${r.failures.length} 件`);}catch(e){problem(e);}finally{busy.value=false;}}
 async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
-async function prepareCandidate(item){try{const d=await api(`/api/candidates/${item.id}/preview`);
+async function prepareCandidate(item){
+ if(busy.value||!current.value||!item?.id||
+    !detailCandidates.value.some(c=>c.id===item.id))return;
+ const account=accountEpoch.snapshot(),documentId=current.value.id;
+ const detailSerial=detailOpenSerial,previewSerial=++candidatePreviewSerial;
+ const initialSheet=sheet.value,candidateId=item.id;
+ const stillCurrent=()=>accountEpoch.isCurrent(account)&&
+  detailOpenSerial===detailSerial&&candidatePreviewSerial===previewSerial&&
+  current.value?.id===documentId&&sheet.value===initialSheet&&
+  detailCandidates.value.some(c=>c.id===candidateId);
+ try{
+ const d=await api(`/api/candidates/${candidateId}/preview`);
+ // Source user/document/candidate and sheet must remain the same after the
+ // delayed service response. A late preview must not open someone else's
+ // approval form after logout or a new document selection.
+ if(!stillCurrent())return;
+ candidateApprovalRequired.value=d.approval_required===true;
+ candidateApprovalReady.value=d.approval_action_enabled===true;
+ candidateApprovalSubmitted.value=d.approval_submitted===true;
+ candidateApprovalPrepared.value=d.approval_prepared===true;
+ candidateApprovalId.value=d.approval_id||'';
+ candidateApprovalStatus.value=d.approval_status||'not_submitted';
+ candidateApprovalChecked.value=false;
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
  candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';
  const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
@@ -1206,8 +1351,10 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  ledgerAttempted.value=Number(d.integration?.attempt_count||0)>0&&d.integration?.state==='failed';ledgerMappingChangeConfirmed.value=false;
  // Suggestions are calculated by Kakebo against its real D1 merchant rules
  // and user-configured defaults. The user can always override either picker.
- candidateDraft.category=ledgerOptions.value.suggested?.category||'';
+ candidateDraft.category=ledgerOptions.value.suggested?.category||
+  (candidateApprovalRequired.value&&candidateDraft.entry_type==='transfer'?'投資・資産移動':'');
  candidateDraft.payment_source=ledgerOptions.value.suggested?.payment_source||'';
+ financeStableAccounts.value=[];financeStableAccountsError.value='';candidateDraft.account_id='';
  // Explanatory warnings are not a real transaction memo. Leave the
  // accounting note blank for card purchase; the user can add their own.
  candidateDraft.note=current.value.category==='card_spend'?'':(item.payload?.note||'');
@@ -1218,10 +1365,56 @@ async function prepareCandidate(item){try{const d=await api(`/api/candidates/${i
  // A failed network attempt must reopen with precisely its previously
  // authorized scope and fields, or immutable idempotency rejects the retry.
  if(pendingCandidateRetry.value?.id===item.id)Object.assign(candidateDraft,pendingCandidateRetry.value.body);
- sheet.value='candidate';integrationConfigured.value=d.available&&
+ if(candidateApprovalRequired.value&&item.candidate_kind==='finance'&&candidateDraft.entry_type!=='transfer'){
+  try{
+   const options=await api('/api/integrations/kakeibo/stable-accounts');
+   if(!stillCurrent())return;
+   financeStableAccounts.value=Array.isArray(options?.accounts)?options.accounts:[];
+  }catch(e){
+   if(!stillCurrent())return;
+   financeStableAccountsError.value='家計簿账户无法验证，请检查本人账户设置';
+  }
+ }
+ sheet.value='candidate';integrationConfigured.value=!candidateApprovalRequired.value&&d.available&&
    (item.candidate_kind!=='finance'||(ledgerOptions.value.categories.length>0&&ledgerOptions.value.paymentSources.length>0))&&
    (item.candidate_kind!=='homeflow_task'||homeflowMemberChoices.value.some(x=>x.self===true));
- }catch(e){problem(e);}}
+ }catch(e){if(stillCurrent())problem(e);}
+}
+async function checkCandidateApprovalStatus(){
+ if(busy.value||!candidateApprovalRequired.value||
+    (!candidateApprovalSubmitted.value&&!candidateApprovalPrepared.value)||
+    !current.value||!candidateDraft.id)return;
+ const account=accountEpoch.snapshot(),candidateId=candidateDraft.id,docId=current.value.id;
+ busy.value=true;
+ const stillCurrent=()=>{
+  try{accountEpoch.assertCurrent(account);
+   return candidateDraft.id===candidateId&&current.value?.id===docId&&sheet.value==='candidate';
+  }catch{return false;}
+ };
+ try{
+  const result=await api(`/api/candidates/${candidateId}/approval`);
+  if(!stillCurrent())return;
+  const applied=result?.approval_status==='applied';
+  if(result?.applied!==applied||result.target_changed!==applied||
+     typeof result.approval_status!=='string')
+   throw new Error('审批状态校验失败，不能判断目标应用是否生效');
+  candidateApprovalStatus.value=result.approval_status;
+  candidateApprovalSubmitted.value=result.approval_submitted===true;
+  candidateApprovalPrepared.value=result.approval_prepared===true;
+  candidateApprovalId.value=result.approval_id||'';
+  candidateApprovalChecked.value=result.approval_checked===true;
+ }catch(e){
+  if(stillCurrent()){
+   candidateApprovalChecked.value=false;
+   problem(e);
+  }
+ }finally{
+  // The old request no longer owns the visible approval fields after
+  // closing/switching documents, but it must release this same-account lock.
+  if(accountEpoch.isCurrent(account))busy.value=false;
+ }
+}
+
 async function verifyLedgerStatus(item){
  if(busy.value)return;
  busy.value=true;
@@ -1233,35 +1426,85 @@ async function verifyLedgerStatus(item){
 }
 async function commitApprovedCandidate(){
  if(busy.value||!current.value)return;
+ const memberApproval=candidateApprovalRequired.value;
+ if(memberApproval&&!candidateApprovalReady.value){
+  problem(new Error('HomeFlow 审批申请暂不可用，尚未写入任何目标应用'));return;
+ }
  busy.value=true;
- const id=candidateDraft.id,docId=current.value.id;
- const body={...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value};
- if(body.kind==='finance'&&ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value){
+ const account=accountEpoch.snapshot();
+ const id=candidateDraft.id,docId=current.value.id,detailSerial=detailOpenSerial;
+ // Keep a request tied to the document and candidate that initiated it.
+ // Closing its sheet or navigating elsewhere must invalidate late UI replies.
+ const stillCurrent=()=>accountEpoch.isCurrent(account)&&
+  detailOpenSerial===detailSerial&&current.value?.id===docId&&
+  candidateDraft.id===id&&sheet.value==='candidate';
+ const release=()=>{if(accountEpoch.isCurrent(account))busy.value=false;};
+ const resumeApproval=memberApproval&&candidateApprovalPrepared.value;
+ const body=resumeApproval?{confirm:candidateDraft.confirm,resume_existing:true}:
+  {...candidateDraft,payment_confirmed:candidateDraft.kind==='finance',
+   confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value};
+ if(!resumeApproval&&body.kind==='finance'&&!memberApproval&&ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value){
   problem(new Error('这笔消费有历史失败记录，请先勾选核对原记录后再提交'));
   busy.value=false;return;
  }
- if(body.kind==='finance'&&body.entry_type==='transfer'&&!body.transfer_date){problem(new Error('请选择 SBI 资金实际生效日'));busy.value=false;return;}
- if(body.kind==='finance'&&(!ledgerOptions.value.categories.some(x=>x.value===body.category)||
-   !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){problem(new Error('请从家計簿同步的分类和支付方式中选择'));busy.value=false;return;}
+ if(!resumeApproval&&body.kind==='finance'&&body.entry_type==='transfer'&&!body.transfer_date){
+  problem(new Error('请选择 SBI 资金实际生效日'));busy.value=false;return;
+ }
+ if(!resumeApproval&&body.kind==='finance'&&memberApproval&&
+   (!String(body.category||'').trim()||
+     !financeStableAccounts.value.some(x=>x.account_id===body.account_id&&
+      x.label===body.payment_source))){
+  problem(new Error('请选择经过家計簿验证的本人金融账户与分类，不能只填写名称'));
+  busy.value=false;return;
+ }
+ if(!resumeApproval&&body.kind==='finance'&&!memberApproval&&
+   (!ledgerOptions.value.categories.some(x=>x.value===body.category)||
+    !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){
+  problem(new Error('请从家計簿同步的分类和支付方式中选择'));
+  busy.value=false;return;
+ }
  let confirmed=false,feedback='';
  try{
-  const d=await api(`/api/candidates/${id}/commit`,{method:'POST',body,idempotencyKey:`jda-${id}`});
+  const path=memberApproval?'request-approval':'commit';
+  const d=await api(`/api/candidates/${id}/${path}`,{method:'POST',body,
+   ...(memberApproval?{}:{idempotencyKey:`jda-${id}`})});
+  if(!stillCurrent()){release();return;}
+  if(memberApproval){
+   if(d.approval_submitted!==true||d.applied!==false||d.target_changed!==false)
+    throw new Error('审批回执状态异常，没有确认目标应用写入');
+   candidateApprovalSubmitted.value=true;
+   candidateApprovalPrepared.value=false;
+   candidateApprovalId.value=d.approval_id||'';
+   candidateApprovalStatus.value=d.approval_status||'submitted_status_unknown';
+   candidateApprovalChecked.value=false;
+   feedback=d.approval_status==='pending'
+    ?'已提交 HomeFlow 待审批，尚未同步到目标应用'
+    :'原审批申请已存在，请在 HomeFlow 查看状态；目标应用尚未写入';
+  }else{
+   feedback=d.recovered_prior?'家計簿已有该候选的旧记账；未重复写入，请核对分类':
+    d.already_synced?'已关联已有记录，不重复记账':'目标 App 已确认同步成功';
+  }
   confirmed=true;pendingCandidateRetry.value=null;
-  feedback=d.recovered_prior?'家計簿已有该候选的旧记账；未重复写入，请核对分类':d.already_synced?'已关联已有记录，不重复记账':'目标 App 已确认同步成功';
  }catch(e){
-  // Validation problems remain editable. A completed remote attempt closes
-  // this sheet while preserving its exact retry fields and failure state.
+  if(!stillCurrent()){release();return;}
+  // An ambiguous HomeFlow reply never becomes a success toast. The same
+  // candidate/snapshot may be retried, without creating a new approval ID.
+  if(memberApproval){problem(e);busy.value=false;return;}
   const attempted=String(e?.code||'').startsWith('TARGET_')||
    ['BRIDGE_UNCONFIRMED','LINK_CONFLICT','SENDING','RETRY_PAYLOAD_CHANGED'].includes(e?.code);
   if(!attempted){problem(e);busy.value=false;return;}
   pendingCandidateRetry.value={id,body};
   feedback='同步未成功：'+(e?.message||'请核对目标 App');
  }
+ if(!stillCurrent()){release();return;}
  sheet.value='';
  refreshDocumentViews();
- try{await openDoc(docId);}catch{}
+ const refresh=openDoc(docId),refreshSerial=detailOpenSerial;
+ try{await refresh;}catch{}
+ if(!accountEpoch.isCurrent(account)||detailOpenSerial!==refreshSerial||
+    current.value?.id!==docId){release();return;}
  if(confirmed)flash(feedback);else problem(new Error(feedback));
- busy.value=false;
+ release();
 }
 
 async function restore(id){busy.value=true;try{
@@ -1345,7 +1588,8 @@ onMounted(async()=>{
   document.addEventListener('visibilitychange',onGoogleVisibility);
   window.addEventListener('pageshow',onAppPageShow);
   window.addEventListener('focus',onAppPageShow);
-  await boot();if(!user.value)await refreshInitStatus();
+  await Promise.all([boot(),refreshHomeflowSsoAvailability()]);
+  if(!user.value)await refreshInitStatus();
 });
 onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',onAppPageShow);window.removeEventListener('focus',onAppPageShow);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
@@ -1358,6 +1602,16 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <p class="eyebrow">私人家庭空间</p>
       <h1>日本生活文书助手</h1>
       <p class="muted auth-intro">读懂日本生活文书，重要事项不错过。</p>
+      <div v-if="homeflowSsoAvailable" class="auth-panel stack">
+        <button v-if="homeflowSsoPending" type="button" class="primary action-large"
+          :disabled="homeflowSsoBusy" @click="completeHomeflowSso">
+          {{homeflowSsoBusy?'核验中…':'完成 HomeFlow 登录'}}
+        </button>
+        <button type="button" class="secondary action-large"
+          :disabled="homeflowSsoBusy" @click="beginHomeflowSso">
+          {{homeflowSsoPending?'重新授权':'使用 HomeFlow 登录'}}
+        </button>
+      </div>
       <div class="auth-panel">
         <div class="segments"><button v-for="m in [{id:'login',name:'登录'},{id:'bootstrap',name:'首次设置'},{id:'join',name:'接受邀请'}]" :key="m.id" :class="{selected:authMode===m.id}" @click="authMode=m.id;error=''">{{m.name}}</button></div>
         <p v-if="initialized===false" class="fine-print">家庭尚未初始化。请使用「首次设置」，输入 Cloudflare 中完整的初始化令牌。设置完成后再使用「登录」。</p>
@@ -1417,6 +1671,14 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <section class="mine-section" aria-labelledby="mine-account-heading">
           <h3 class="mine-section-heading" id="mine-account-heading">账户与安全</h3>
           <div class="mine-group-card">
+            <button v-if="homeflowSsoAvailable && homeflowSsoPending" class="settings-line"
+              :disabled="homeflowSsoBusy" @click="completeHomeflowSso">
+              完成 HomeFlow 关联 <UiIcon name="chevron-right" :size="18"/>
+            </button>
+            <button v-if="homeflowSsoAvailable" class="settings-line"
+              :disabled="homeflowSsoBusy" @click="beginHomeflowSso">
+              使用 HomeFlow 登录 / 关联 <UiIcon name="chevron-right" :size="18"/>
+            </button>
             <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
             <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
             <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
@@ -1871,8 +2133,12 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
-        <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
-        <div v-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">申请分类（管理员批准后仍需账本核验）<input v-model="candidateDraft.category" maxlength="80" placeholder="填写家計簿分类" /></label>
+        <div v-else-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">本人金融账户（稳定账户 ID）<select v-model="candidateDraft.account_id" :disabled="candidateApprovalPrepared||candidateApprovalSubmitted||candidateDraft.entry_type==='transfer'" @change="chooseFinanceStableAccount"><option value="">请选择已验证账户</option><option v-for="account in financeStableAccounts" :key="account.account_id" :value="account.account_id">{{account.label}} · {{account.account_id.slice(-6)}}</option></select></label>
+         <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&financeStableAccountsError" class="fine-print" role="status">{{financeStableAccountsError}}</p>
+         <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&candidateDraft.entry_type==='transfer'" class="fine-print">SBI 等非现金业务需要独立审批执行器，不能使用现金账目代替。</p>
+        <div v-else-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
         <label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>已尝试同步，同意核对旧记录并防止重复记账</label>
         <label v-if="candidateDraft.kind==='finance'" class="form-label">备注<input v-model="candidateDraft.note" /></label>
@@ -1885,8 +2151,13 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
-        <p v-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!integrationConfigured||(candidateDraft.kind==='finance'&&(!candidateDraft.date||(candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date)||!ledgerOptions.categories.some(x=>x.value===candidateDraft.category)||!ledgerOptions.paymentSources.some(x=>x.value===candidateDraft.payment_source)||(ledgerAttempted&&!ledgerMappingChangeConfirmed)))||(candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)||(needsOtherAssigneeBonus&&(!Number.isSafeInteger(candidateDraft.bonus_points)||candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))" @click="commitApprovedCandidate">{{ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
+        <p v-if="candidateApprovalRequired&&candidateApprovalSubmitted" class="info-note" role="status">{{candidateApprovalMessage}}</p>
+        <button v-if="candidateApprovalRequired&&(candidateApprovalSubmitted||candidateApprovalPrepared)" type="button" class="secondary" :disabled="busy||!candidateApprovalReady" @click="checkCandidateApprovalStatus">查询 HomeFlow 审批状态</button>
+        <p v-else-if="candidateApprovalRequired&&candidateApprovalPrepared" class="info-note" role="status">上次提交结果不确定。重试时使用首次保存的申请内容，忽略此处后续改动；不会重复创建申请或写入目标应用。</p>
+        <p v-else-if="candidateApprovalRequired&&candidateApprovalReady" class="info-note" role="status">将请求家庭管理员审批。这里只提交申请，不直接记账、建任务或保存生词。</p>
+        <p v-else-if="candidateApprovalRequired" class="info-note" role="status">HomeFlow 管理员审批入口暂未启用，没有提交申请或写入目标应用。</p>
+        <p v-else-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':candidateApprovalPrepared?'重试原申请':'提交 HomeFlow 审批'):ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
     </section>
   </div>

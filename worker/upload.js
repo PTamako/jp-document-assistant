@@ -16,8 +16,13 @@ export function validSignature(m,b){
 export async function attachPage(request,env,p,id){
   if(!env.DOCUMENTS)bad('私有 R2 未配置','NOT_CONFIGURED',503);
   if(Number(request.headers.get('Content-Length')||0)>limit+10000)bad('上传大小超过单文件 8MB','FILE_TOO_LARGE',413);
-  const doc=await first(env.DB,"SELECT id FROM documents WHERE id=? AND owner_id=? AND lifecycle='active'",id,p.user_id);
+  const doc=await first(env.DB,
+    "SELECT id,owner_id,household_id,visibility,version FROM documents "+
+    "WHERE id=? AND lifecycle='active' AND "+
+    "(owner_id=? OR (household_id=? AND visibility='shared'))",
+    id,p.user_id,p.household_id);
   if(!doc)bad('文书不存在','NOT_FOUND',404);
+  const collaborator=doc.owner_id!==p.user_id;
   const form=await request.formData(),file=form.get('file');
   if(form.get('retention')!=='original')bad('明确选择保留原件后方可上传');
   if(!file||typeof file.arrayBuffer!=='function'||file.size<1||file.size>limit)bad('请选择不超过8MB的图片或 PDF');
@@ -39,8 +44,11 @@ export async function attachPage(request,env,p,id){
     }catch{bad('R2 原件缺失或补传失败，未确认附件复用成功','R2_REPAIR_FAILED',503);}
     return json({ok:true,reused:true,attachment_id:prior.id});
   }
-  const quality='web-upload-v1';
-  let obj=await first(env.DB,"SELECT id,object_key FROM storage_objects WHERE owner_id=? AND sha256=? AND mime=? AND quality_profile=? AND state='ready'",p.user_id,digest,mime,quality);
+  // Shared editors must not query the original owner's private/global SHA
+  // dedup bucket. They can only reuse an attachment within THIS document.
+  const quality=collaborator?'web-shared-doc:'+doc.id:'web-upload-v1';
+  let obj=await first(env.DB,"SELECT id,object_key FROM storage_objects WHERE owner_id=? AND sha256=? AND mime=? AND quality_profile=? AND state='ready'",
+    doc.owner_id,digest,mime,quality);
   const now=isoNow();
   if(obj){
     try{
@@ -49,8 +57,10 @@ export async function attachPage(request,env,p,id){
     }catch{bad('旧扫描页原件丢失且补传失败，未创建新附件','R2_REPAIR_FAILED',503);}
   }
   if(!obj){
-    const oid=randomToken(16),key=`${p.user_id}/${randomToken(20)}`;
-    try{await run(env.DB,'INSERT INTO storage_objects(id,owner_id,bucket,object_key,sha256,bytes,mime,quality_profile,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',oid,p.user_id,env.R2_BUCKET_NAME||'private',key,digest,bytes.length,mime,quality,'uploading',now,now);}
+    const oid=randomToken(16),key=`${doc.owner_id}/${randomToken(20)}`;
+    // Ownership is the ORIGINAL document owner, never the acting editor.
+    try{await run(env.DB,'INSERT INTO storage_objects(id,owner_id,bucket,object_key,sha256,bytes,mime,quality_profile,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+      oid,doc.owner_id,env.R2_BUCKET_NAME||'private',key,digest,bytes.length,mime,quality,'uploading',now,now);}
     catch{bad('该文件正在另一个上传过程中；请稍后重试','UPLOAD_CONFLICT',409);}
     try{await env.DOCUMENTS.put(key,bytes,{httpMetadata:{contentType:mime}});
       await run(env.DB,"UPDATE storage_objects SET state='ready',updated_at=? WHERE id=?",isoNow(),oid);
@@ -60,10 +70,25 @@ export async function attachPage(request,env,p,id){
   const count=await first(env.DB,'SELECT COUNT(*) n FROM attachments WHERE document_id=?',id);
   if(count.n>=30)bad('每份文书最多30个附件','ATTACHMENT_LIMIT',413);
   const aid=randomToken(16);
-  try{await batch(env.DB,[
-    ['INSERT INTO attachments(id,document_id,object_id,file_label,page_no,sort_order,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',aid,id,obj.id,label,count.n+1,count.n,digest,now,now],
-    ['UPDATE documents SET import_mode=?,updated_at=?,version=version+1 WHERE id=?','original',now,id]
-  ]);}catch{return failure('METADATA_FAILED','文件可能已存到 R2，附件索引保存失败；请重试',503);}
+  try{
+    const changed=await batch(env.DB,[
+      ["UPDATE documents SET import_mode=?,updated_at=?,version=version+1 "+
+        "WHERE id=? AND version=? AND lifecycle='active' "+
+        "AND (owner_id=? OR (household_id=? AND visibility='shared')) "+
+        "AND (SELECT COUNT(*) FROM attachments WHERE document_id=?)<30",
+        'original',now,id,doc.version,p.user_id,p.household_id,id],
+      ["INSERT INTO attachments(id,document_id,object_id,file_label,page_no,"+
+        "sort_order,sha256,created_at,updated_at) "+
+        "SELECT ?,?,?,?,?,?,?,?,? WHERE changes()=1",
+        aid,id,obj.id,label,count.n+1,count.n,digest,now,now],
+      ["INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at) "+
+        "SELECT ?,?,'attachment_uploaded','attachment',?,? WHERE changes()=1",
+        randomToken(16),p.user_id,aid,now]
+    ]);
+    if(changed.some(x=>x.meta?.changes!==1))
+      return failure('SHARE_OR_VERSION_CHANGED',
+       '共享权限或附件列表已变化；原件可能等待补偿清理，请刷新核对',409);
+  }catch{return failure('METADATA_FAILED','附件索引未能确认保存；可能有待补偿 R2 对象，请重试',503);}
   return json({ok:true,attachment_id:aid,reused:false,ocr_status:'not_verified'},201);
 }
 // Explicit small-batch compensation. Never R2 LIST/HEAD, never a new Cron or Worker.
