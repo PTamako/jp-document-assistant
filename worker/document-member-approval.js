@@ -205,12 +205,16 @@ export async function requestDocumentMemberApproval(request,env,p,id){
  if(!stored||stored.local_user_id!==p.user_id||
   stored.homeflow_user_id!==p.homeflow_user_id||
   stored.homeflow_household_id!==p.homeflow_household_id||
-  stored.target_app!==target||stored.payload_sha256!==digest||
-  stored.payload_json!==snapshot)
+  stored.target_app!==target)
   bad('申请内容与已有候选快照不同，请先核对原申请','APPROVAL_INTENT_CONFLICT',409);
+ // Report a changed source before comparing the newly computed digest: that
+ // digest already includes candidate_updated_at and would otherwise mask a
+ // true version conflict as an ordinary payload conflict.
  if(stored.document_version!==item.document_version||
     stored.candidate_updated_at!==item.updated_at)
   bad('文书或同步候选已修改，不能重放旧审批','APPROVAL_SOURCE_CHANGED',409);
+ if(stored.payload_sha256!==digest||stored.payload_json!==snapshot)
+  bad('申请内容与已有候选快照不同，请先核对原申请','APPROVAL_INTENT_CONFLICT',409);
  // Confirmation is frozen in private D1 before HomeFlow sees the digest.
  // If the response is lost, repeat the same signed hash and candidate ID;
  // HomeFlow will return its original immutable request instead of duplicating.
