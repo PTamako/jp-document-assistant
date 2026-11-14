@@ -140,7 +140,8 @@ export async function documentMemberApprovalStatus(env,p,id){
   remote.requester_user_id!==p.homeflow_user_id||
   remote.resource_id!==id||remote.target_app!==row.target_app||
   remote.payload_sha256!==row.payload_sha256||
-  !(row.target_app==='kakebo'&&row.candidate_kind==='finance'?
+  !((row.target_app==='kakebo'&&row.candidate_kind==='finance')||
+   (row.target_app==='homeflow'&&row.candidate_kind==='homeflow_task')?
     ['pending','approved','executing','applied','failed_retryable','rejected','cancelled','expired','failed_final','conflict']:
     ['pending','approved','rejected','cancelled','expired','failed_final','conflict']).includes(remote.status)||
   !Number.isSafeInteger(remote.version)||remote.version<1||
@@ -152,6 +153,21 @@ export async function documentMemberApprovalStatus(env,p,id){
  if(applied){
   // Never claim applied on approval alone: both the target and source
   // persisted identical ID/account digest receipts before HomeFlow applied.
+  if(row.target_app==='homeflow'&&row.candidate_kind==='homeflow_task'){
+   const task=await dbFirst(env.DB,
+    'SELECT * FROM document_task_execution_reservations WHERE candidate_id=?',id);
+   if(!task||task.status!=='applied'||task.approval_id!==row.approval_id||
+    task.candidate_id!==id||task.document_id!==row.document_id||
+    task.requester_user_id!==p.homeflow_user_id||
+    task.household_id!==p.homeflow_household_id||
+    task.payload_sha256!==row.payload_sha256||
+    !/^[a-f0-9-]{36}$/i.test(task.task_id||'')||
+    task.task_id!==remote.remote_id||!task.approver_user_id||
+    task.approver_user_id===p.homeflow_user_id||
+    !Number.isSafeInteger(task.applied_at)||task.applied_at<1)
+    return failure('APPROVAL_RECEIPT_UNCONFIRMED',
+     '任务执行回执尚未与 HomeFlow 对账，不能显示已生效',503);
+  }else{
   const proof=await dbFirst(env.DB,
    'SELECT * FROM document_member_execution_reservations WHERE candidate_id=?',id);
   if(!proof||proof.status!=='applied'||
@@ -166,12 +182,14 @@ export async function documentMemberApprovalStatus(env,p,id){
      !proof.approver_user_id||proof.approver_user_id===p.homeflow_user_id)
     return failure('APPROVAL_RECEIPT_UNCONFIRMED',
      '目标回执与文书源记录尚未对账，不能显示已生效',503);
+  }
  }
  return json({...publicStatus(row,remote.status),
   approval_prepared:false,approval_checked:true,
   homeflow_version:remote.version,
   reviewed_at:remote.reviewed_at??null,
-  ...(applied?{entry_id:Number(remote.remote_id)}:{}),
+  ...(applied?(row.target_app==='homeflow'?{task_id:remote.remote_id}:
+    {entry_id:Number(remote.remote_id)}):{}),
   applied,target_changed:applied});
 }
 export async function requestDocumentMemberApproval(request,env,p,id){
