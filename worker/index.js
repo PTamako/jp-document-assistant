@@ -9,6 +9,7 @@ import { planBackup, exportBackup, previewImport, confirmImport } from './backup
 import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus,integrationStatus } from './bridge.js';
 import {requestDocumentMemberApproval,documentMemberApprovalStatus} from './document-member-approval.js';
+import {documentExecutionRoute} from './document-execution.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
@@ -643,6 +644,8 @@ async function route(request,env,ctx){
   if(path==='/api/homeflow-sso/complete')return completeHomeFlowSso(request,env,url);
   // The callback deliberately needs no browser cookie: one-time state binds it to the PWA user.
   if(method==='GET'&&path==='/api/google/oauth/callback')return oauthCallback(request,env,url);
+  const internalDocument=path.match(/^\/api\/internal\/document-actions\/(execute|receipt|source-check)$/);
+  if(internalDocument)return documentExecutionRoute(request,env,internalDocument[1]);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
   if(path.startsWith('/api/google/oauth/')||path.startsWith('/api/google/drive/'))return handleBrowserGoogle(request,env,p,url);
