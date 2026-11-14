@@ -123,6 +123,9 @@ async function fixture(){
   assert.equal(b.merchant,'セブン-イレブン');
   assert.equal(b.amount_jpy,1420);
   assert.equal(b.execution_nonce,nonce);
+  // The real Kakeibo executor looks up its immutable target journal BEFORE
+  // requesting a new source-check. A repeated approval never executes again.
+  if(persisted)return Response.json({...persisted,already_applied:true});
   const proof={request_id:requestId,resource_id:candidate,household_id:hh,
     requester_user_id:actor,payload_sha256:digest,operation_sha256:b.operation_sha256};
   const srcRaw=JSON.stringify(proof),srcStamp=String(Date.now());
@@ -172,7 +175,7 @@ test('approved document finance source executes frozen AES-GCM snapshot, persist
   assert.equal(replay.data.already_applied,true);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM audit_events').get().n,1);
   assert.equal(f.counters.target,2);
-  assert.equal(f.counters.sourceCheck,2);
+  assert.equal(f.counters.sourceCheck,1,'target journal replay bypasses a new source execution');
   assert.equal((await f.make({origin:'https://attacker.invalid'})).status,403);
   assert.equal(f.counters.target,2);
  }finally{f.sql.close()}
