@@ -141,7 +141,9 @@ export async function documentMemberApprovalStatus(env,p,id){
   remote.resource_id!==id||remote.target_app!==row.target_app||
   remote.payload_sha256!==row.payload_sha256||
   !((row.target_app==='kakebo'&&row.candidate_kind==='finance')||
-   (row.target_app==='homeflow'&&row.candidate_kind==='homeflow_task')?
+   (row.target_app==='homeflow'&&row.candidate_kind==='homeflow_task')||
+   (row.target_app==='it-study-platform'&&
+    ['sentence','vocabulary'].includes(row.candidate_kind))?
     ['pending','approved','executing','applied','failed_retryable','rejected','cancelled','expired','failed_final','conflict']:
     ['pending','approved','rejected','cancelled','expired','failed_final','conflict']).includes(remote.status)||
   !Number.isSafeInteger(remote.version)||remote.version<1||
@@ -167,6 +169,22 @@ export async function documentMemberApprovalStatus(env,p,id){
     !Number.isSafeInteger(task.applied_at)||task.applied_at<1)
     return failure('APPROVAL_RECEIPT_UNCONFIRMED',
      '任务执行回执尚未与 HomeFlow 对账，不能显示已生效',503);
+  }else if(row.target_app==='it-study-platform'){
+   // The opaque candidate ID is all HomeFlow can retain. Never export
+   // private vocabulary, reading, translations or sentence content.
+   const study=await dbFirst(env.DB,
+    'SELECT * FROM document_study_execution_reservations WHERE candidate_id=?',id);
+   if(!study||study.status!=='applied'||study.approval_id!==row.approval_id||
+    study.candidate_id!==id||study.document_id!==row.document_id||
+    study.requester_user_id!==p.homeflow_user_id||
+    study.household_id!==p.homeflow_household_id||
+    study.payload_sha256!==row.payload_sha256||
+    study.candidate_kind!==row.candidate_kind||
+    remote.remote_id!==id||!study.target_remote_id||
+    !study.approver_user_id||study.approver_user_id===p.homeflow_user_id||
+    !Number.isSafeInteger(study.applied_at)||study.applied_at!==remote.executed_at)
+    return failure('APPROVAL_RECEIPT_UNCONFIRMED',
+     '知学持久回执尚未与 HomeFlow 对账，不能显示已同步',503);
   }else{
   const proof=await dbFirst(env.DB,
    'SELECT * FROM document_member_execution_reservations WHERE candidate_id=?',id);
@@ -189,6 +207,7 @@ export async function documentMemberApprovalStatus(env,p,id){
   homeflow_version:remote.version,
   reviewed_at:remote.reviewed_at??null,
   ...(applied?(row.target_app==='homeflow'?{task_id:remote.remote_id}:
+    row.target_app==='it-study-platform'?{study_candidate_id:remote.remote_id}:
     {entry_id:Number(remote.remote_id)}):{}),
   applied,target_changed:applied});
 }
