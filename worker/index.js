@@ -10,6 +10,7 @@ import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus,integrationStatus } from './bridge.js';
 import {requestDocumentMemberApproval,documentMemberApprovalStatus} from './document-member-approval.js';
 import {documentExecutionRoute} from './document-execution.js';
+import {listDocumentFinanceAccounts} from './document-finance-account.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
@@ -648,6 +649,8 @@ async function route(request,env,ctx){
   if(internalDocument)return documentExecutionRoute(request,env,internalDocument[1]);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
+  if(method==='GET'&&path==='/api/integrations/kakeibo/stable-accounts')
+    return listDocumentFinanceAccounts(env,p);
   if(path.startsWith('/api/google/oauth/')||path.startsWith('/api/google/drive/'))return handleBrowserGoogle(request,env,p,url);
   if(path.startsWith('/api/google/gmail/'))return handleGoogleGmail(request,env,p,path,url);
   if(method==='GET'&&path==='/api/calendar/status')return calendarStatus(env,p);

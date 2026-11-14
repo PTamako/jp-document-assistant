@@ -60,3 +60,31 @@ test('document finance never guesses from same-name or non-executable type',asyn
  await assert.rejects(verifiedDocumentFinanceAccount(f.env,principal,id,'expense','现金'),
    x=>x.code==='ACCOUNT_PROOF_UNAVAILABLE');
 });
+
+test('signed stable account list keeps duplicate labels distinct and rejects owner access',async()=>{
+ const {listDocumentFinanceAccounts}=await import('../worker/document-finance-account.js');
+ const p={auth_source:'homeflow',role:'member',homeflow_user_id:member,
+  homeflow_household_id:'primary'};
+ const env={DOCUMENT_ACCOUNT_VERIFY_ENABLED:'true',
+  DOCUMENT_ACCOUNT_VERIFICATION_SECRET:'b'.repeat(64),
+  KAKEIBO_DOCUMENT_ACCOUNT_SERVICE:{async fetch(req){
+   assert.equal(req.headers.get('origin'),null);
+   const raw=await req.text(),stamp=req.headers.get('x-approval-timestamp');
+   assert.equal(req.headers.get('x-approval-signature'),
+    createHmac('sha256',Buffer.from('b'.repeat(64),'hex'))
+     .update('jpda:finance-account\n'+stamp+'\n'+raw).digest('hex'));
+   assert.deepEqual(JSON.parse(raw),{household_id:'primary',requester_user_id:member});
+   return Response.json({ok:true,verified:true,applied:false,accounts:[
+    {account_id:'a'.repeat(32),label:'现金',account_kind:'cash',account_version:1},
+    {account_id:'d'.repeat(32),label:'现金',account_kind:'cash',account_version:2}]});
+  }}
+ };
+ const res=await listDocumentFinanceAccounts(env,p);
+ assert.equal(res.status,200);
+ const rows=(await res.json()).accounts;
+ assert.equal(rows.length,2);
+ assert.equal(rows[0].label,rows[1].label);
+ assert.notEqual(rows[0].account_id,rows[1].account_id);
+ await assert.rejects(listDocumentFinanceAccounts(env,{...p,role:'owner'}),
+  e=>e.code==='HOMEFLOW_MEMBER_REQUIRED');
+});

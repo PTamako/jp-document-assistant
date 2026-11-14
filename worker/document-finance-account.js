@@ -1,6 +1,6 @@
 // Finance approvals must reference a stable account actually owned by the
 // originating HomeFlow member. Never map a display name to an account ID.
-import {bad} from './http.js';
+import {bad,json} from './http.js';
 const hex64=/^[0-9a-f]{64}$/i;
 const hex32=/^[0-9a-f]{32}$/i;
 async function mac(secret,stamp,raw){
@@ -59,4 +59,45 @@ export async function verifiedDocumentFinanceAccount(env,principal,accountId,ent
       'ACCOUNT_PROOF_MISMATCH',409);
   return {account_id:proof.account_id,account_version:proof.account_version,
     account_kind:proof.account_kind};
+}
+
+export async function listDocumentFinanceAccounts(env,p){
+ if(p?.auth_source!=='homeflow'||p.role!=='member'||
+   !p.homeflow_user_id||!p.homeflow_household_id)
+  bad('请先使用 HomeFlow 成员身份登录','HOMEFLOW_MEMBER_REQUIRED',403);
+ if(env.DOCUMENT_ACCOUNT_VERIFY_ENABLED!=='true'||
+  !hex64.test(env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET||'')||
+  typeof env.KAKEIBO_DOCUMENT_ACCOUNT_SERVICE?.fetch!=='function')
+  bad('家計簿账户选项不可用','ACCOUNT_PROOF_UNAVAILABLE',503);
+ const wire={household_id:p.homeflow_household_id,
+  requester_user_id:p.homeflow_user_id},stamp=String(Date.now()),raw=JSON.stringify(wire);
+ let result;
+ try{
+  const res=await env.KAKEIBO_DOCUMENT_ACCOUNT_SERVICE.fetch(new Request(
+   'https://kakeibo.internal/api/internal/document-accounts/list',{
+    method:'POST',redirect:'manual',headers:{'content-type':'application/json',
+    'x-approval-client':'jp-document-assistant','x-approval-timestamp':stamp,
+    'x-approval-signature':await mac(env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET,stamp,raw)},
+    body:raw}));
+  if(res.status!==200||res.headers.has('location'))
+   bad('尚未验证本人金融账户','ACCOUNT_SELECTION_UNAVAILABLE',409);
+  const rawResult=await res.text();
+  if(rawResult.length>14000)throw Error('oversized response');
+  result=JSON.parse(rawResult);
+ }catch(err){
+  if(err?.code==='ACCOUNT_SELECTION_UNAVAILABLE')throw err;
+  bad('无法读取家計簿本人金融账户','ACCOUNT_PROOF_UNAVAILABLE',503);
+ }
+ const rows=result?.accounts;
+ if(result?.ok!==true||result.verified!==true||result.applied!==false||
+  !Array.isArray(rows)||rows.length>100||
+  rows.some(a=>!a||!hex32.test(a.account_id||'')||
+   typeof a.label!=='string'||!a.label||a.label.length>80||
+   a.account_kind!=='cash'||!Number.isSafeInteger(a.account_version)||
+   a.account_version<1)||
+  new Set(rows.map(a=>a.account_id)).size!==rows.length)
+  bad('家計簿账户身份验证结果异常','ACCOUNT_PROOF_MISMATCH',409);
+ return json({ok:true,accounts:rows.map(a=>({
+  account_id:a.account_id,label:a.label,account_version:a.account_version,
+  account_kind:'cash'}))});
 }
