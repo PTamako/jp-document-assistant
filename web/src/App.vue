@@ -296,7 +296,10 @@ const candidateApprovalMessage=computed(()=>{
  if(!candidateApprovalChecked.value)return '申请已提交，尚未查询到最新审批状态；目标应用没有同步。';
  const labels={
   pending:'HomeFlow 管理员尚未审批，目标应用没有同步。',
-  approved:'管理员已批准，但目前尚无此操作的安全执行器，目标应用没有同步。',
+  approved:candidateDraft.kind==='finance'?'管理员已批准，等待管理员执行入账。':'管理员已批准，目标执行器尚未接通。',
+  executing:'管理员正在执行，目标回执尚待确认。',
+  failed_retryable:'回执尚不明确，将使用原审批 ID 安全对账。',
+  applied:'已验证目标回执，账目已生效。',
   rejected:'管理员已拒绝该申请，目标应用没有同步。',
   cancelled:'审批申请已取消，目标应用没有同步。',
   expired:'审批申请已过期，目标应用没有同步。',
@@ -1391,7 +1394,8 @@ async function checkCandidateApprovalStatus(){
  try{
   const result=await api(`/api/candidates/${candidateId}/approval`);
   if(!stillCurrent())return;
-  if(result?.applied!==false||result.target_changed!==false||
+  const applied=result?.approval_status==='applied';
+  if(result?.applied!==applied||result.target_changed!==applied||
      typeof result.approval_status!=='string')
    throw new Error('审批状态校验失败，不能判断目标应用是否生效');
   candidateApprovalStatus.value=result.approval_status;
