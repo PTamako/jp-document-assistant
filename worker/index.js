@@ -11,6 +11,7 @@ import { commitCandidate,candidatePreview,getBridgeStatus,integrationStatus } fr
 import {requestDocumentMemberApproval,documentMemberApprovalStatus} from './document-member-approval.js';
 import {documentExecutionRoute} from './document-execution.js';
 import {documentTaskSourceRoute} from './document-task-source.js';
+import {documentStudySourceRoute} from './document-study-source.js';
 import {listDocumentFinanceAccounts} from './document-finance-account.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
@@ -650,6 +651,8 @@ async function route(request,env,ctx){
   if(internalDocument)return documentExecutionRoute(request,env,internalDocument[1]);
    const internalTask=path.match(/^\/api\/internal\/document-task\/(prepare|receipt)$/);
    if(internalTask)return documentTaskSourceRoute(request,env,internalTask[1]);
+   const internalStudy=path.match(/^\/api\/internal\/(?:document-study\/(execute|receipt)|document-actions\/(study-source-check))$/);
+   if(internalStudy)return documentStudySourceRoute(request,env,internalStudy[1]||internalStudy[2]);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
   if(method==='GET'&&path==='/api/integrations/kakeibo/stable-accounts')
