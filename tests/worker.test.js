@@ -2967,6 +2967,126 @@ test('SBI investment card notice is always a transfer, including pre-existing ex
 });
 
 
+
+test('shared collaborator upload keeps original R2 ownership and prevents private SHA probing',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const invite=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
+  data:{invitee_email:'shared-uploader@example.invalid'}});
+ const joined=await req(env,'/api/household/join',{method:'POST',data:{
+  invite_token:invite.data.invite_token,email:'shared-uploader@example.invalid',
+  password:'member-long-password-123',display_name:'成员'}});
+ assert.equal(joined.response.status,201);
+ const member={cookie:joined.response.headers.get('set-cookie').split(';')[0],
+  csrf:joined.data.csrf_token};
+ const byteA=new Uint8Array([255,216,255,224,12,13,14,15]);
+ const byteB=new Uint8Array([255,216,255,224,22,23,24,25]);
+ const form=bytes=>{
+  const f=new FormData();
+  f.append('file',new File([bytes],'receipt.jpg',{type:'image/jpeg'}));
+  f.append('retention','original');return f;
+ };
+ const sharedUp=await req(env,'/api/documents/import/file',{
+  method:'POST',...auth(owner),form:form(byteA)});
+ const privateUp=await req(env,'/api/documents/import/file',{
+  method:'POST',...auth(owner),form:form(byteB)});
+ assert.equal(sharedUp.response.status,201);
+ assert.equal(privateUp.response.status,201);
+ const id=sharedUp.data.document_id,privateId=privateUp.data.document_id;
+ assert.notEqual(id,privateId);
+ const before=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const blocked=await req(env,'/api/documents/'+id+'/attachments',{
+  method:'POST',...auth(member),form:form(byteB)});
+ assert.equal(blocked.response.status,404,'private owner document is opaque');
+ assert.equal(env._blobs.size,2);
+ const share=await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+  data:{visibility:'shared',version:before.version,confirm_sensitive_share:true}});
+ assert.equal(share.response.status,200);
+ const added=await req(env,'/api/documents/'+id+'/attachments',{
+  method:'POST',...auth(member),form:form(byteB)});
+ assert.equal(added.response.status,201,JSON.stringify(added.data));
+ assert.equal(added.data.reused,false);
+ assert.equal(env._blobs.size,3,
+  'shared editor cannot probe or reuse owner private content via hash lookup');
+ const linked=env.DB.sql.prepare("SELECT a.id,a.object_id,o.owner_id,o.quality_profile,o.object_key "+
+  "FROM attachments a JOIN storage_objects o ON o.id=a.object_id WHERE a.id=?")
+  .get(added.data.attachment_id);
+ assert.equal(linked.owner_id,owner.user.id);
+ assert.equal(linked.quality_profile,'web-shared-doc:'+id);
+ assert.ok(linked.object_key.startsWith(owner.user.id+'/'));
+ const privateObject=env.DB.sql.prepare(
+  'SELECT object_id FROM attachments WHERE document_id=? LIMIT 1').get(privateId).object_id;
+ assert.notEqual(linked.object_id,privateObject);
+ const audit=env.DB.sql.prepare(
+  "SELECT actor_user_id,kind FROM audit_events WHERE entity_id=? AND kind='attachment_uploaded'")
+  .get(linked.id);
+ assert.equal(audit.actor_user_id,joined.data.user.id);
+ const reused=await req(env,'/api/documents/'+id+'/attachments',{
+  method:'POST',...auth(member),form:form(byteB)});
+ assert.equal(reused.response.status,200);
+ assert.equal(reused.data.reused,true);
+ assert.equal(reused.data.attachment_id,linked.id);
+ assert.equal(env._blobs.size,3);
+ const visible=await req(env,'/api/documents/'+id,auth(owner));
+ assert.ok(visible.data.document.attachments.some(x=>x.id===linked.id));
+ assert.equal((await req(env,'/api/documents/'+privateId+'/attachments',{
+  method:'POST',...auth(member),form:form(byteB)})).response.status,404);
+ assert.equal((await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+  data:{visibility:'private',version:visible.data.document.version}})).response.status,200);
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments',{
+  method:'POST',...auth(member),form:form(byteA)})).response.status,404);
+ assert.equal(env._blobs.size,3);
+});
+
+test('shared collaborator upload revocation during R2 PUT leaves no new attachment or false audit',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const inv=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
+  data:{invitee_email:'shared-upload-race@example.invalid'}});
+ const joined=await req(env,'/api/household/join',{method:'POST',data:{
+  invite_token:inv.data.invite_token,email:'shared-upload-race@example.invalid',
+  password:'member-long-password-123',display_name:'成员'}});
+ const member={cookie:joined.response.headers.get('set-cookie').split(';')[0],
+  csrf:joined.data.csrf_token};
+ const form=bytes=>{
+  const f=new FormData();
+  f.append('file',new File([bytes],'receipt.jpg',{type:'image/jpeg'}));
+  f.append('retention','original');return f;
+ };
+ const uploaded=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),
+  form:form(new Uint8Array([255,216,255,224,1,2,3,4]))});
+ assert.equal(uploaded.response.status,201);
+ const id=uploaded.data.document_id;
+ const previous=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal((await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),
+  data:{visibility:'shared',version:previous.version,confirm_sensitive_share:true}})).response.status,200);
+ const oldPut=env.DOCUMENTS.put;
+ let revoked=false;
+ env.DOCUMENTS.put=async(key,bytes,options)=>{
+  await oldPut(key,bytes,options);
+  if(!revoked){
+   revoked=true;
+   env.DB.sql.prepare("UPDATE documents SET visibility='private',version=version+1 WHERE id=?").run(id);
+  }
+ };
+ const before=env.DB.sql.prepare(
+  'SELECT COUNT(*) n FROM attachments WHERE document_id=?').get(id).n;
+ const late=await req(env,'/api/documents/'+id+'/attachments',{
+  method:'POST',...auth(member),
+  form:form(new Uint8Array([255,216,255,224,9,8,7,6]))});
+ assert.equal(late.response.status,409,JSON.stringify(late.data));
+ assert.equal(late.data.code,'SHARE_OR_VERSION_CHANGED');
+ assert.equal(env.DB.sql.prepare(
+  'SELECT COUNT(*) n FROM attachments WHERE document_id=?').get(id).n,before);
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM audit_events "+
+  "WHERE actor_user_id=? AND kind='attachment_uploaded'").get(joined.data.user.id).n,0);
+ assert.equal(env.DB.sql.prepare("SELECT COUNT(*) n FROM storage_objects o "+
+  "WHERE o.quality_profile=? AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.object_id=o.id)")
+  .get('web-shared-doc:'+id).n,1,
+  'orphan remains tracked for original owner cleanup, not visible to collaborator');
+ assert.equal((await req(env,'/api/documents/'+id+'/attachments',{
+  method:'POST',...auth(member),
+  form:form(new Uint8Array([255,216,255,224,9,8,7,6]))})).response.status,404);
+});
+
 test('shared attachment editor can trash, restore and reorder; permanent deletion requires trash first',async()=>{
  const env=makeEnv(),a=await boot(env);
  const inv=await req(env,'/api/household/invites',{method:'POST',...auth(a),
