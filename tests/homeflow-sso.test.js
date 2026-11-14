@@ -577,6 +577,20 @@ test('member document review requests retain an immutable private payload and cr
   statusOffline=false;liveStatus='pending';
   assert.equal(statusCalls,5);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+  // The immutable approval refers to the old source version. Editing the
+  // candidate must not show an old approval as valid for the new content,
+  // re-submit it, or even contact HomeFlow for a misleading status.
+  f.sql.prepare('UPDATE action_candidates SET updated_at=? WHERE id=?')
+   .run('2099-01-01T00:00:00.000Z',candidate);
+  const stale=await getStatus();
+  assert.equal(stale.status,409);
+  assert.equal((await stale.json()).code,'APPROVAL_SOURCE_CHANGED');
+  assert.equal(statusCalls,5,'stale approval never reaches the remote status bridge');
+  const staleResubmit=await post();
+  assert.equal(staleResubmit.status,409);
+  assert.equal((await staleResubmit.json()).code,'APPROVAL_SOURCE_CHANGED');
+  assert.equal(submissions,2,'changed source does not replay old HomeFlow intent');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
   // Network reply loss creates a private 'prepared' record, not a second
   // approval. A deliberate resume uses exactly the original frozen snapshot.
   const second='e'.repeat(32);
