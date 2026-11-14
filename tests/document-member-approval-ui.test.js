@@ -57,12 +57,14 @@ test('manual approval status is verified through a purpose-separated HMAC and ne
  assert.match(status,/accountEpoch\.snapshot\(\)/);
  assert.match(status,/accountEpoch\.assertCurrent\(account\)/);
  assert.match(status,/candidateDraft\.id===candidateId&&current\.value\?\.id===docId/);
- assert.match(status,/result\?\.applied!==false\|\|result\.target_changed!==false/);
+ assert.match(status,/const applied=result\?\.approval_status==='applied'/);
+  assert.match(status,/result\?\.applied!==applied\|\|result\.target_changed!==applied/);
  assert.match(status,/candidateApprovalChecked\.value=result\.approval_checked===true/);
  assert.doesNotMatch(status,/setInterval|setTimeout/);
  assert.match(app,/@click="checkCandidateApprovalStatus"/);
  assert.match(app,/查询 HomeFlow 审批状态/);
- assert.match(app,/管理员已批准，但目前尚无此操作的安全执行器/);
+ assert.match(app,/管理员已批准，等待管理员执行入账/);
+  assert.match(app,/管理员已批准，目标执行器尚未接通/);
  assert.match(app,/管理员已拒绝该申请/);
  assert.match(app,/candidateApprovalStatus\.value='not_submitted';candidateApprovalChecked\.value=false/);
  const worker=intent.slice(intent.indexOf('export async function documentMemberApprovalStatus('),
@@ -71,7 +73,9 @@ test('manual approval status is verified through a purpose-separated HMAC and ne
  assert.match(worker,/row\.homeflow_household_id!==p\.homeflow_household_id/);
  assert.match(worker,/approvalSignature\(env\.DOCUMENT_APPROVAL_SUBMISSION_SECRET,stamp,raw,'status'\)/);
  assert.match(worker,/remote\.payload_sha256!==row\.payload_sha256/);
- assert.match(worker,/remote\.applied!==false\|\|remote\.target_changed!==false/);
+ assert.match(worker,/remote\.applied!==\(remote\.status==='applied'\)/);
+  assert.match(worker,/APPROVAL_RECEIPT_UNCONFIRMED/);
+  assert.match(worker,/proof\.target_entry_id/);
  assert.match(worker,/APPROVAL_STATUS_UNCONFIRMED/);
  assert.doesNotMatch(worker,/KAKEBO_BRIDGE_SERVICE|ZHIXUE_BRIDGE_SERVICE|\/\/api\/candidates\/.*commit/);
 });
