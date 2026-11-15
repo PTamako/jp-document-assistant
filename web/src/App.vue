@@ -4,7 +4,7 @@ import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
 import { isIosStandalonePwa } from './google-auth-context.js';
-import { handoffHomeflowBrowserAuthorization } from './homeflow-sso-pwa-return.js';
+import { handoffHomeflowBrowserAuthorization,validateHomeflowAuthorizationUrl } from './homeflow-sso-pwa-return.js';
 import { deleteOldLocalTranslationWeights } from './local-translation-support.js';
 import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke,gmailPayloadToDocument} from './gmail-import.js';
 import { extractDocumentText } from './document-text.js';
@@ -57,10 +57,11 @@ async function beginHomeflowSso(){
    cache:'no-store',headers:{'Content-Type':'application/json'},body:'{}'});
   const data=await r.json();
   if(!r.ok||!data.ok)throw Error(data.code||'无法开始 HomeFlow 授权');
-  const url=new URL(data.authorization_url);
-  if(url.protocol!=='https:'||!/^[a-f0-9]{64}$/.test(data.state||'')||
+  if(!/^[a-f0-9]{64}$/.test(data.state||'')||
      !/^[a-f0-9]{64}$/.test(data.resume_secret||''))
    throw Error('登录请求无效');
+  const url=validateHomeflowAuthorizationUrl(data.authorization_url,data.state,
+   window.location.origin);
   sessionStorage.setItem(SSO_PENDING_KEY,JSON.stringify({
    state:data.state,resume_secret:data.resume_secret,until:Date.now()+300000
   }));
