@@ -10,6 +10,7 @@ import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIde
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
+import {verifyDocumentPwaSessionOnResume} from './pwa-session-resume.js';
 import TabIcon from './TabIcon.vue';
 import UiIcon from './UiIcon.vue';
 import { invalidateDocumentLists } from './document-list-cache.js';
@@ -21,6 +22,9 @@ import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const initialized=ref(null);
+// Never render an old account's document/OAuth/R2 preview while an iOS PWA
+// is checking its current HttpOnly session after Safari/app-switch resume.
+const resumeChecking=ref(false);
 // HomeFlow SSO is invisible until the backend explicitly opts in.
 // The 5-minute resume proof stays only in the original PWA session.
 const homeflowSsoAvailable=ref(false),homeflowSsoPending=ref(false),homeflowSsoBusy=ref(false);
@@ -508,6 +512,7 @@ function accountApi(snapshot){
   };
 }
 function clearPrivateWorkspace(){
+  resumeChecking.value=false;
   detailOpenSerial++;
   candidatePreviewSerial++;
   detailTab.value='original';
@@ -564,15 +569,35 @@ async function refreshGoogleOnReturn(){
   if(!service)return;
   try{await googleStatus(service);}catch(e){problem(e)}
 }
-function onGoogleVisibility(){
-  if(document.visibilityState==='visible'){
-    void refreshGoogleOnReturn();
-    void pollAiStatus(true);
-  }
+async function revalidatePrivatePwaResume(){
+ if(!user.value||resumeChecking.value)return false;
+ const userId=user.value.id,epoch=accountEpoch.snapshot();
+ // Synchronous privacy veil: no private documents during the network roundtrip.
+ resumeChecking.value=true;
+ const stillSame=await verifyDocumentPwaSessionOnResume(userId);
+ if(!accountEpoch.isCurrent(epoch))return false;
+ if(!stillSame){
+  clearPrivateWorkspace();
+  // Fail closed on lost/offline/revoked/switched cookies; require fresh login.
+  return false;
+ }
+ resumeChecking.value=false;
+ return true;
 }
-function onAppPageShow(){
+function onGoogleVisibility(){
+ if(document.visibilityState!=='visible')return;
+ void revalidatePrivatePwaResume().then(ok=>{
+  if(!ok)return;
   void refreshGoogleOnReturn();
   void pollAiStatus(true);
+ });
+}
+function onAppPageShow(){
+ void revalidatePrivatePwaResume().then(ok=>{
+  if(!ok)return;
+  void refreshGoogleOnReturn();
+  void pollAiStatus(true);
+ });
 }
 async function startGoogleAuthorization(service){
   if(!user.value)return problem(new Error('请先登录文书助手'));
@@ -1598,7 +1623,12 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
 
 <template>
 <div class="app-shell">
-  <template v-if="!user">
+  <template v-if="resumeChecking">
+    <section class="auth-shell" role="status" aria-live="polite">
+      <p class="muted">正在核对当前家庭身份，私人文书暂不显示…</p>
+    </section>
+  </template>
+  <template v-else-if="!user">
     <div class="auth-shell">
       <div class="auth-symbol"><UiIcon name="file-text" :size="30"/></div>
       <p class="eyebrow">私人家庭空间</p>
