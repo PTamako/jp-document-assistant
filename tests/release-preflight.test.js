@@ -23,7 +23,8 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.deepEqual(wrangler.services,[
   {binding:'KAKEBO_BRIDGE_SERVICE',service:'kakeibo-homeflow-bridge'},
   {binding:'HOMEFLOW_BRIDGE_SERVICE',service:'homeflow'},
-  {binding:'ZHIXUE_BRIDGE_SERVICE',service:'it-study-platform'}
+  {binding:'ZHIXUE_BRIDGE_SERVICE',service:'it-study-platform'},
+  {binding:'KAKEIBO_DOCUMENT_FINANCE_SERVICE',service:'kakeibo-homeflow-bridge'}
  ]);
  assert.doesNotMatch(JSON.stringify(wrangler),/JPDA_BRIDGE_ALLOWED_USER|JPDA_BRIDGE_STUDY_ACTOR_ID|BRIDGE_USER_MAP/);
  assert.equal(wrangler.vars?.R2_BUCKET_NAME,'jp-document-assistant-private');
