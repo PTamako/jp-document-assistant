@@ -26,6 +26,9 @@
   ],
   "ai": {"binding":"AI"},
   "vars": {
+    "APP_ENV":"production",
+    "HOMEFLOW_OAUTH_ORIGIN":"https://homeflow.yupan6706.workers.dev",
+    "DA_PUBLIC_ORIGIN":"https://jp-document-assistant.yupan6706.workers.dev",
     "R2_BUCKET_NAME":"jp-document-assistant-private",
     "ENABLE_EXPERIMENTAL_OCR":"true",
     "ENABLE_DOCUMENT_AI":"true",
