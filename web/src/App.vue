@@ -512,9 +512,9 @@ function accountApi(snapshot){
   };
 }
 function clearPrivateWorkspace(){
-  resumeChecking.value=false;
   detailOpenSerial++;
   candidatePreviewSerial++;
+  resumeChecking.value=false;
   detailTab.value='original';
   stopTranslation({clear:true});
   accountEpoch.invalidate(); // Reject responses from the previous account.
