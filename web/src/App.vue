@@ -4,6 +4,7 @@ import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
 import { isIosStandalonePwa } from './google-auth-context.js';
+import { handoffHomeflowBrowserAuthorization } from './homeflow-sso-pwa-return.js';
 import { deleteOldLocalTranslationWeights } from './local-translation-support.js';
 import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke,gmailPayloadToDocument} from './gmail-import.js';
 import { extractDocumentText } from './document-text.js';
@@ -64,7 +65,7 @@ async function beginHomeflowSso(){
    state:data.state,resume_secret:data.resume_secret,until:Date.now()+300000
   }));
   homeflowSsoPending.value=true;
-  window.location.assign(url.href);
+  handoffHomeflowBrowserAuthorization(window.location,url.href,homeflowSsoBusy);
  }catch(e){problem(e);homeflowSsoBusy.value=false;}
 }
 async function completeHomeflowSso(){
@@ -1603,6 +1604,9 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <h1>日本生活文书助手</h1>
       <p class="muted auth-intro">读懂日本生活文书，重要事项不错过。</p>
       <div v-if="homeflowSsoAvailable" class="auth-panel stack">
+        <p v-if="homeflowSsoPending" class="fine-print">
+          如果 iPhone 打开 Safari，请先在 Safari 完成 HomeFlow 授权，再返回原来的主屏幕文书助手，点击下方按钮。授权凭证只保留在原 App 会话中。
+        </p>
         <button v-if="homeflowSsoPending" type="button" class="primary action-large"
           :disabled="homeflowSsoBusy" @click="completeHomeflowSso">
           {{homeflowSsoBusy?'核验中…':'完成 HomeFlow 登录'}}
