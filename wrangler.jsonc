@@ -21,7 +21,8 @@
   "services": [
     {"binding":"KAKEBO_BRIDGE_SERVICE","service":"kakeibo-homeflow-bridge"},
     {"binding":"HOMEFLOW_BRIDGE_SERVICE","service":"homeflow"},
-    {"binding":"ZHIXUE_BRIDGE_SERVICE","service":"it-study-platform"}
+    {"binding":"ZHIXUE_BRIDGE_SERVICE","service":"it-study-platform"},
+    {"binding":"KAKEIBO_DOCUMENT_FINANCE_SERVICE","service":"kakeibo-homeflow-bridge"}
   ],
   "ai": {"binding":"AI"},
   "vars": {
