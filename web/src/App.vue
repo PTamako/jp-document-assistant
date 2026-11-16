@@ -22,6 +22,12 @@ import DocumentSwipeRow from './DocumentSwipeRow.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const initialized=ref(null);
+// Legacy enrollment stays available only when the central HomeFlow login is disabled.
+const authModes=computed(()=>[
+ {id:'login',name:'登录'},
+ {id:'bootstrap',name:'首次设置'},
+ ...(homeflowSsoAvailable.value?[]:[{id:'join',name:'接受邀请'}])
+]);
 // Never render an old account's document/OAuth/R2 preview while an iOS PWA
 // is checking its current HttpOnly session after Safari/app-switch resume.
 const resumeChecking=ref(false);
@@ -1645,7 +1651,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         </button>
       </div>
       <div class="auth-panel">
-        <div class="segments"><button v-for="m in [{id:'login',name:'登录'},{id:'bootstrap',name:'首次设置'},{id:'join',name:'接受邀请'}]" :key="m.id" :class="{selected:authMode===m.id}" @click="authMode=m.id;error=''">{{m.name}}</button></div>
+        <div class="segments"><button v-for="m in authModes" :key="m.id" :class="{selected:authMode===m.id}" @click="authMode=m.id;error=''">{{m.name}}</button></div>
         <p v-if="initialized===false" class="fine-print">家庭尚未初始化。请使用「首次设置」，输入 Cloudflare 中完整的初始化令牌。设置完成后再使用「登录」。</p>
         <form @submit.prevent="submitAuth" class="stack">
           <label>邮箱<input v-model.trim="auth.email" type="email" required autocomplete="username" placeholder="you@example.com" /></label>
