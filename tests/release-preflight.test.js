@@ -23,7 +23,8 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.deepEqual(wrangler.services,[
   {binding:'KAKEBO_BRIDGE_SERVICE',service:'kakeibo-homeflow-bridge'},
   {binding:'HOMEFLOW_BRIDGE_SERVICE',service:'homeflow'},
-  {binding:'ZHIXUE_BRIDGE_SERVICE',service:'it-study-platform'}
+  {binding:'ZHIXUE_BRIDGE_SERVICE',service:'it-study-platform'},
+  {binding:'KAKEIBO_DOCUMENT_FINANCE_SERVICE',service:'kakeibo-homeflow-bridge'}
  ]);
  assert.doesNotMatch(JSON.stringify(wrangler),/JPDA_BRIDGE_ALLOWED_USER|JPDA_BRIDGE_STUDY_ACTOR_ID|BRIDGE_USER_MAP/);
  assert.equal(wrangler.vars?.R2_BUCKET_NAME,'jp-document-assistant-private');
@@ -86,7 +87,7 @@ test('CI uses committed npm lockfile and avoids duplicate main pushes',()=>{
 
 test('historical financial sync requires a visible reconciliation checkbox before enabling submit',()=>{
  const ui=read('web/src/App.vue');
- assert.match(ui,/ledgerAttempted&&!ledgerMappingChangeConfirmed/);
+ assert.match(ui,/ledgerAttempted\.value&&!ledgerMappingChangeConfirmed\.value/);
  assert.match(ui,/已尝试同步，同意核对旧记录并防止重复记账/);
  assert.match(ui,/confirm_mapping_change:ledgerAttempted.value&&ledgerMappingChangeConfirmed.value/);
  assert.match(ui,/current\?\.category==='card_spend'\?'交易日期'/);

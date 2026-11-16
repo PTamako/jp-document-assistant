@@ -8,10 +8,16 @@ import { attachmentTrash, attachmentRestore, attachmentDelete, attachmentList } 
 import { planBackup, exportBackup, previewImport, confirmImport } from './backup.js';
 import { restoreUpload, backupOriginal } from './restore.js';
 import { commitCandidate,candidatePreview,getBridgeStatus,integrationStatus } from './bridge.js';
+import {requestDocumentMemberApproval,documentMemberApprovalStatus} from './document-member-approval.js';
+import {documentExecutionRoute} from './document-execution.js';
+import {documentTaskSourceRoute} from './document-task-source.js';
+import {documentStudySourceRoute} from './document-study-source.js';
+import {listDocumentFinanceAccounts} from './document-finance-account.js';
 import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
 import { oauthCallback,handleBrowserGoogle } from './google-browser-oauth.js';
+import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso,homeflowSsoEnabled,verifyHomeFlowSession} from './homeflow-sso.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {workersAiImportPreview} from './ocr-import-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
@@ -62,10 +68,39 @@ async function requireSession(request,env){
   const cookie=parseCookie(request,'__Host-da_session');
   if(!cookie || !/^[a-f0-9]{64}$/.test(cookie)) bad('请先登录','UNAUTHENTICATED',401);
   const hash=await hashString(cookie);
-  const session=await dbFirst(env.DB,`SELECT s.id session_id,s.user_id,s.expires_at,u.household_id,u.role,u.display_name,u.email_norm,u.status
+  const session=await dbFirst(env.DB,`SELECT s.id session_id,s.user_id,s.expires_at,
+      s.auth_source,u.household_id,u.role,u.display_name,u.email_norm,u.status,
+      hp.state_hash,hp.proof_cipher,hp.proof_iv,hp.expires_at AS proof_expires_at,
+      hp.homeflow_user_id,l.homeflow_household_id,l.state AS homeflow_link_state,
+      u.role AS homeflow_link_role,l.local_user_id AS link_local_user_id
     FROM sessions s JOIN users u ON u.id=s.user_id
+    LEFT JOIN homeflow_session_proofs hp ON hp.session_id=s.id
+    LEFT JOIN homeflow_identity_links l ON l.homeflow_user_id=hp.homeflow_user_id
     WHERE s.secret_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND u.status='active'`,hash,isoNow());
   if(!session)bad('登录已失效，请重新登录','UNAUTHENTICATED',401);
+  if(session.auth_source==='homeflow'){
+    // Neither an absent proof nor a failed HomeFlow call can fall back to
+    // legacy login. Every private GET/write checks live HomeFlow authority.
+    if(!session.homeflow_user_id||!session.proof_cipher||
+      session.homeflow_link_state!=='active'||
+      session.link_local_user_id!==session.user_id||
+      session.homeflow_link_role!==session.role)
+      bad('HomeFlow 登录已失效，请重新登录','UNAUTHENTICATED',401);
+    const current=await verifyHomeFlowSession(env,{
+      state_hash:session.state_hash,proof_cipher:session.proof_cipher,
+      proof_iv:session.proof_iv,expires_at:session.proof_expires_at,
+      homeflow_user_id:session.homeflow_user_id,
+      homeflow_household_id:session.homeflow_household_id,
+      role:session.role
+    });
+    if(!current || current.userId!==session.homeflow_user_id ||
+      current.householdId!==session.homeflow_household_id ||
+      current.role!==session.role)
+      bad('HomeFlow 登录已失效，请重新登录','UNAUTHENTICATED',401);
+    session.display_name=current.nickname;
+  }else if(session.auth_source!=='legacy'){
+    bad('无效的登录方式','UNAUTHENTICATED',401);
+  }
   const csrf=await hmacHex(env.SESSION_HMAC_KEY,`csrf:${cookie}`);
   return {...session,csrf};
 }
@@ -147,6 +182,13 @@ async function handleAuth(request,env,url){
 async function visibleDocument(db,id,p,allowedLifecycle='active'){
   return dbFirst(db,`SELECT d.* FROM documents d WHERE d.id=? AND d.lifecycle=? AND
     (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,id,allowedLifecycle,p.user_id,p.household_id);
+}
+async function manageableDocument(db,id,p,lifecycle='active'){
+  const doc=await dbFirst(db,`SELECT d.* FROM documents d WHERE d.id=? AND d.lifecycle=?
+    AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,
+    id,lifecycle,p.user_id,p.household_id);
+  if(!doc)bad('文书不存在或没有操作权限','NOT_FOUND',404);
+  return doc;
 }
 async function ownedDocument(db,id,p,lifecycle=null){
   const doc=await dbFirst(db,`SELECT * FROM documents WHERE id=? AND owner_id=? ${lifecycle?`AND lifecycle='${lifecycle}'`:''}`,id,p.user_id);
@@ -359,8 +401,18 @@ FROM documents d WHERE d.lifecycle='active' AND (d.owner_id=? OR (d.household_id
   return json({items:rows.slice(0,limit).map(listShape),next_offset:rows.length>limit?offset+limit:null});
 }
 async function updateDoc(request,env,p,doc){
-  if(doc.owner_id!==p.user_id)bad('仅文书所有者可以修改','FORBIDDEN',403);
+  // Shared documents are truly writable to either member. Only the original
+  // owner can grant/revoke visibility, to avoid an editor silently exposing
+  // the owner's private source or locking the owner out.
+  const canManage=doc.owner_id===p.user_id ||
+    (doc.household_id===p.household_id&&doc.visibility==='shared');
+  if(!canManage)bad('文书不存在或没有操作权限','NOT_FOUND',404);
   const data=await readJson(request,10000);
+  if(data.visibility!==undefined&&doc.owner_id!==p.user_id)
+    bad('共享范围只能由原所有者修改','FORBIDDEN',403);
+  if(data.category!==undefined&&doc.owner_id!==p.user_id&&
+    requiresPrivateDefault(data.category,doc.extracted_text_ja))
+    bad('涉及敏感分类的共享变更须由原所有者确认','SENSITIVE_CHANGE_OWNER_REQUIRED',403);
   const updates=[],values=[];
   for(const [key,max] of [['title',200],['category',40]]){
     if(data[key]!==undefined){if(!validString(data[key],max))bad(`${key} 无效`);updates.push(`${key}=?`);values.push(data[key].trim());}
@@ -382,14 +434,28 @@ async function updateDoc(request,env,p,doc){
   }
   if(!updates.length)bad('没有要修改的字段');
   if(!Number.isInteger(data.version)||data.version!==doc.version)bad('文书已被其他操作修改，请刷新','VERSION_CONFLICT',409);
-  updates.push('updated_at=?','version=version+1'); values.push(isoNow(),doc.id,p.user_id,doc.version);
-  const result=await dbRun(env.DB,`UPDATE documents SET ${updates.join(',')} WHERE id=? AND owner_id=? AND version=?`,...values);
-  if(result.meta?.changes===0)bad('编辑冲突','VERSION_CONFLICT',409);
+  updates.push('updated_at=?','version=version+1');
+  const at=isoNow();
+  values.push(at,doc.id,p.user_id,p.household_id,doc.version);
+  const output=await batch(env.DB,[
+    [`UPDATE documents SET ${updates.join(',')}
+      WHERE id=? AND (owner_id=? OR (household_id=? AND visibility='shared'))
+      AND version=? AND lifecycle='active'`,...values],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'document',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'document_metadata_updated',doc.id,at]
+  ]);
+  if(output[0]?.meta?.changes!==1||output[1]?.meta?.changes!==1)
+    bad('编辑冲突或已失去共享编辑权限','VERSION_CONFLICT',409);
   return json({ok:true});
 }
 async function updateField(request,env,p,fieldId){
-  const field=await dbFirst(env.DB,`SELECT f.*,d.owner_id,d.lifecycle FROM document_fields f JOIN documents d ON d.id=f.document_id WHERE f.id=?`,fieldId);
-  if(!field||field.owner_id!==p.user_id||field.lifecycle!=='active')bad('字段不存在','NOT_FOUND',404);
+  const field=await dbFirst(env.DB,`SELECT f.*,d.owner_id,d.household_id,d.visibility,d.lifecycle
+    FROM document_fields f JOIN documents d ON d.id=f.document_id WHERE f.id=?`,fieldId);
+  if(!field||field.lifecycle!=='active'||!(
+    field.owner_id===p.user_id ||
+    (field.household_id===p.household_id&&field.visibility==='shared')
+  ))bad('字段不存在','NOT_FOUND',404);
   const data=await readJson(request,6000);
   if(!['confirmed','corrected','rejected'].includes(data.review_state))bad('审核状态无效');
   const normalized=String(data.normalized_value ?? field.normalized_value ?? '').trim();
@@ -408,31 +474,79 @@ async function updateField(request,env,p,fieldId){
       bad('该字段已联动至其他 App；修改这里不会自动改动远端记录。请确认后再保存，并到目标 App 核对。','REMOTE_RECORD_UNCHANGED',409);
   }
   const now=isoNow();
-  await dbRun(env.DB,'UPDATE document_fields SET normalized_value=?,review_state=?,reviewed_by=?,updated_at=? WHERE id=?',normalized,data.review_state,p.user_id,now,fieldId);
-  await dbRun(env.DB,'UPDATE documents SET updated_at=?,version=version+1 WHERE id=?',now,field.document_id);
+  // The same SQL statement rechecks edit authority; do not trust a prior
+  // document-detail read if visibility was revoked on another device.
+  const output=await batch(env.DB,[
+    [`UPDATE document_fields SET normalized_value=?,review_state=?,
+      reviewed_by=?,updated_at=?
+      WHERE id=? AND document_id=? AND EXISTS(
+        SELECT 1 FROM documents d WHERE d.id=document_fields.document_id
+        AND d.lifecycle='active'
+        AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+      normalized,data.review_state,p.user_id,now,fieldId,field.document_id,
+      p.user_id,p.household_id],
+    [`UPDATE documents SET updated_at=?,version=version+1
+      WHERE id=? AND lifecycle='active' AND changes()=1`,now,field.document_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'document_field',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'field_reviewed',fieldId,now]
+  ]);
+  if(output.some(x=>x.meta?.changes!==1))
+    bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
   return json({ok:true,linked_records_unchanged:remoteLinks.length>0,linked_targets:[...new Set(remoteLinks.map(x=>x.target))]});
 }
 async function candidatesForDoc(env,p,id){
   const doc=await visibleDocument(env.DB,id,p);
   if(!doc)bad('文书不存在','NOT_FOUND',404);
+  // Sharing a source document does NOT share the owner's private target
+  // accounts, approval candidates, remote ledger IDs or sync history.
+  // The collaborator may edit the shared document, but must create any
+  // personal target intent from their OWN verified account after approval
+  // workflow support is available. Avoid even loading these private rows.
+  if(doc.owner_id!==p.user_id)
+    return json({items:[],shared_document:true,integration_access:false});
   const rows=await dbAll(env.DB,`SELECT c.id,c.candidate_kind,c.payload_json,c.state,
     i.state integration_state,i.target,i.remote_id FROM action_candidates c
     LEFT JOIN integration_links i ON i.candidate_id=c.id WHERE c.document_id=? ORDER BY c.created_at ASC`,id);
   return json({items:rows.map(({payload_json,...x})=>({...x,payload:JSON.parse(payload_json)}))});
 }
 async function moveToTrash(env,p,id){
-  const doc=await ownedDocument(env.DB,id,p,'active');
+  const doc=await manageableDocument(env.DB,id,p,'active');
   const now=isoNow();
-  await dbRun(env.DB,"UPDATE documents SET lifecycle='trashed',trashed_at=?,trashed_by=?,updated_at=?,version=version+1 WHERE id=? AND owner_id=? AND lifecycle='active'",now,p.user_id,now,id,p.user_id);
+  const output=await batch(env.DB,[
+    [`UPDATE documents SET lifecycle='trashed',trashed_at=?,trashed_by=?,
+      updated_at=?,version=version+1
+      WHERE id=? AND lifecycle='active' AND
+      (owner_id=? OR (household_id=? AND visibility='shared'))`,
+      now,p.user_id,now,id,p.user_id,p.household_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'document',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'document_trashed',id,now]
+  ]);
+  if(output.some(x=>x.meta?.changes!==1))
+    bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
   return json({ok:true,document_id:id,r2_deleted:false,message:'已移入回收站，R2 原件仍保留以供恢复'});
 }
 async function restoreDoc(env,p,id){
-  const doc=await ownedDocument(env.DB,id,p,'trashed');
+  const doc=await manageableDocument(env.DB,id,p,'trashed');
   const refs=await dbAll(env.DB,`SELECT a.id,o.object_key FROM attachments a JOIN storage_objects o ON a.object_id=o.id WHERE a.document_id=? AND a.state='active'`,id);
   let missing=[];
   for(const ref of refs){if(!env.DOCUMENTS||!(await env.DOCUMENTS.head(ref.object_key)))missing.push(ref.id);}
-  await dbRun(env.DB,"UPDATE documents SET lifecycle='active',trashed_at=NULL,trashed_by=NULL,updated_at=?,version=version+1 WHERE id=?",isoNow(),id);
-  return json({ok:true,document_id:id,missing_attachments:missing,warning:missing.length?'部分原件缺失，已恢复摘要和可用记录':null});
+  const at=isoNow();
+  const output=await batch(env.DB,[
+    [`UPDATE documents SET lifecycle='active',trashed_at=NULL,
+      trashed_by=NULL,updated_at=?,version=version+1
+      WHERE id=? AND lifecycle='trashed' AND
+      (owner_id=? OR (household_id=? AND visibility='shared'))`,
+      at,id,p.user_id,p.household_id],
+    [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+      SELECT ?,?,?,'document',?,? WHERE changes()=1`,
+      randomToken(16),p.user_id,'document_restored',id,at]
+  ]);
+  if(output.some(x=>x.meta?.changes!==1))
+    bad('共享权限已经变化，请刷新','VERSION_CONFLICT',409);
+  return json({ok:true,document_id:id,missing_attachments:missing,
+    warning:missing.length?'部分原件缺失，已恢复摘要和可用记录':null});
 }
 async function permanentlyDelete(env,p,id){
   let doc=await dbFirst(env.DB,'SELECT * FROM documents WHERE id=? AND owner_id=?',id,p.user_id);
@@ -525,10 +639,24 @@ async function route(request,env,ctx){
     return json({ok:true,initialized:Number(state?.count||0)>0});
   }
   if(method==='POST'&&['/api/auth/bootstrap','/api/auth/login','/api/household/join'].includes(path))return handleAuth(request,env,url);
+  if(path==='/api/homeflow-sso/status' && request.method==='GET')
+    return new Response(JSON.stringify({enabled:homeflowSsoEnabled(env,url)}),
+      {headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
+  if(path==='/api/homeflow-sso/start')return startHomeFlowSso(request,env,url);
+  if(path==='/api/homeflow-sso/callback')return callbackHomeFlowSso(request,env,url);
+  if(path==='/api/homeflow-sso/complete')return completeHomeFlowSso(request,env,url);
   // The callback deliberately needs no browser cookie: one-time state binds it to the PWA user.
   if(method==='GET'&&path==='/api/google/oauth/callback')return oauthCallback(request,env,url);
+  const internalDocument=path.match(/^\/api\/internal\/document-actions\/(execute|receipt|source-check)$/);
+  if(internalDocument)return documentExecutionRoute(request,env,internalDocument[1]);
+   const internalTask=path.match(/^\/api\/internal\/document-task\/(prepare|receipt)$/);
+   if(internalTask)return documentTaskSourceRoute(request,env,internalTask[1]);
+   const internalStudy=path.match(/^\/api\/internal\/(?:document-study\/(execute|receipt)|document-actions\/(study-source-check))$/);
+   if(internalStudy)return documentStudySourceRoute(request,env,internalStudy[1]||internalStudy[2]);
   const p=await requireSession(request,env);
   if(!['GET','HEAD'].includes(method))requireMutation(request,p);
+  if(method==='GET'&&path==='/api/integrations/kakeibo/stable-accounts')
+    return listDocumentFinanceAccounts(env,p);
   if(path.startsWith('/api/google/oauth/')||path.startsWith('/api/google/drive/'))return handleBrowserGoogle(request,env,p,url);
   if(path.startsWith('/api/google/gmail/'))return handleGoogleGmail(request,env,p,path,url);
   if(method==='GET'&&path==='/api/calendar/status')return calendarStatus(env,p);
@@ -937,7 +1065,7 @@ ELSE 'unreviewed' END review_status,
       return permanentlyDelete(env,p,id);
     }
     if(method==='PATCH'&&rest==='attachments/order'){
-      const d=await ownedDocument(env.DB,id,p,'active');
+      const d=await manageableDocument(env.DB,id,p,'active');
       const body=await readJson(request,4000),ids=body.attachment_ids;
       if(!Number.isSafeInteger(body.version)||body.version!==d.version)
         bad('文书已由其他操作修改，请刷新后重新排序','VERSION_CONFLICT',409);
@@ -952,15 +1080,21 @@ ELSE 'unreviewed' END review_status,
       // makes the entire reorder all-or-nothing; changes() chains the write
       // gate so a lost CAS cannot reorder any of the attachments.
       const statements=[[
-        `UPDATE documents SET version=version+1,updated_at=? WHERE id=? AND owner_id=? AND version=? AND lifecycle='active'
+        `UPDATE documents SET version=version+1,updated_at=? WHERE id=? AND (owner_id=? OR (household_id=? AND visibility='shared'))
+          AND version=? AND lifecycle='active'
           AND (SELECT COUNT(*) FROM attachments WHERE document_id=? AND state='active')=?
           AND NOT EXISTS(SELECT 1 FROM attachments WHERE document_id=? AND state='active' AND id NOT IN (${params}))`,
-        now,id,p.user_id,d.version,id,ids.length,id,...ids
+        now,id,p.user_id,p.household_id,d.version,id,ids.length,id,...ids
       ]];
       ids.forEach((aid,index)=>statements.push([
         `UPDATE attachments SET sort_order=?,updated_at=? WHERE id=? AND document_id=? AND state='active' AND changes()=1`,
         index,now,aid,id
       ]));
+      statements.push([
+        `INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
+         SELECT ?,?,?,'document',?,? WHERE changes()=1`,
+        randomToken(16),p.user_id,'attachment_order_updated',id,now
+      ]);
       const output=await batch(env.DB,statements);
       if(output.some(v=>v.meta?.changes!==1))bad('附件列表已被其他设备修改，请刷新','ATTACHMENT_CONFLICT',409);
       return json({ok:true,version:d.version+1,attachment_ids:ids});
@@ -981,11 +1115,13 @@ ELSE 'unreviewed' END review_status,
   }
   const field=path.match(/^\/api\/fields\/([a-z0-9]+)$/i);
   if(method==='PATCH'&&field)return updateField(request,env,p,field[1]);
-  const candidate=path.match(/^\/api\/candidates\/([a-z0-9]+)\/(commit|preview|status)$/i);
+  const candidate=path.match(/^\/api\/candidates\/([a-z0-9]+)\/(commit|preview|status|request-approval|approval)$/i);
   if(candidate){
     if(method==='POST'&&candidate[2]==='commit')return commitCandidate(request,env,p,candidate[1]);
     if(method==='GET'&&candidate[2]==='preview')return candidatePreview(request,env,p,candidate[1]);
     if(method==='GET'&&candidate[2]==='status')return integrationStatus(env,p,candidate[1]);
+    if(method==='POST'&&candidate[2]==='request-approval')return requestDocumentMemberApproval(request,env,p,candidate[1]);
+    if(method==='GET'&&candidate[2]==='approval')return documentMemberApprovalStatus(env,p,candidate[1]);
   }
   if(method==='POST'&&['/api/auth/start','/api/auth/complete'].includes(path))return failure('AUTH_MODE_NOT_ENABLED','邮件挑战登录暂未启用，请使用密码登录',501);
   return failure('NOT_IMPLEMENTED','当前阶段尚未实现此接口',501);

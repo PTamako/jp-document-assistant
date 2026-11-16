@@ -21,10 +21,14 @@
   "services": [
     {"binding":"KAKEBO_BRIDGE_SERVICE","service":"kakeibo-homeflow-bridge"},
     {"binding":"HOMEFLOW_BRIDGE_SERVICE","service":"homeflow"},
-    {"binding":"ZHIXUE_BRIDGE_SERVICE","service":"it-study-platform"}
+    {"binding":"ZHIXUE_BRIDGE_SERVICE","service":"it-study-platform"},
+    {"binding":"KAKEIBO_DOCUMENT_FINANCE_SERVICE","service":"kakeibo-homeflow-bridge"}
   ],
   "ai": {"binding":"AI"},
   "vars": {
+    "APP_ENV":"production",
+    "HOMEFLOW_OAUTH_ORIGIN":"https://homeflow.yupan6706.workers.dev",
+    "DA_PUBLIC_ORIGIN":"https://jp-document-assistant.yupan6706.workers.dev",
     "R2_BUCKET_NAME":"jp-document-assistant-private",
     "ENABLE_EXPERIMENTAL_OCR":"true",
     "ENABLE_DOCUMENT_AI":"true",

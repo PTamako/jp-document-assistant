@@ -23,6 +23,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Source syntax
         run: npm run check:syntax
+      - name: Focused shared collaborator upload identity and R2 replay checks
+        run: node --test --test-name-pattern="shared collaborator upload" tests/worker.test.js
       - name: Unit and in-memory D1 tests
         run: npm test
       - name: Install official SentencePiece reference for verification
