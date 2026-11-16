@@ -19,10 +19,11 @@ export async function attachPage(request,env,p,id){
   const doc=await first(env.DB,
     "SELECT id,owner_id,household_id,visibility,version FROM documents "+
     "WHERE id=? AND lifecycle='active' AND "+
-    "(owner_id=? OR (household_id=? AND visibility='shared'))",
-    id,p.user_id,p.household_id);
+    "owner_id=?",
+    id,p.user_id);
   if(!doc)bad('文书不存在','NOT_FOUND',404);
-  const collaborator=doc.owner_id!==p.user_id;
+  // Shared attachments are readable by family members, but only their
+  // original document owner can add new attachments.
   const form=await request.formData(),file=form.get('file');
   if(form.get('retention')!=='original')bad('明确选择保留原件后方可上传');
   if(!file||typeof file.arrayBuffer!=='function'||file.size<1||file.size>limit)bad('请选择不超过8MB的图片或 PDF');
@@ -44,9 +45,7 @@ export async function attachPage(request,env,p,id){
     }catch{bad('R2 原件缺失或补传失败，未确认附件复用成功','R2_REPAIR_FAILED',503);}
     return json({ok:true,reused:true,attachment_id:prior.id});
   }
-  // Shared editors must not query the original owner's private/global SHA
-  // dedup bucket. They can only reuse an attachment within THIS document.
-  const quality=collaborator?'web-shared-doc:'+doc.id:'web-upload-v1';
+  const quality='web-upload-v1';
   let obj=await first(env.DB,"SELECT id,object_key FROM storage_objects WHERE owner_id=? AND sha256=? AND mime=? AND quality_profile=? AND state='ready'",
     doc.owner_id,digest,mime,quality);
   const now=isoNow();
@@ -74,9 +73,9 @@ export async function attachPage(request,env,p,id){
     const changed=await batch(env.DB,[
       ["UPDATE documents SET import_mode=?,updated_at=?,version=version+1 "+
         "WHERE id=? AND version=? AND lifecycle='active' "+
-        "AND (owner_id=? OR (household_id=? AND visibility='shared')) "+
+        "AND owner_id=? "+
         "AND (SELECT COUNT(*) FROM attachments WHERE document_id=?)<30",
-        'original',now,id,doc.version,p.user_id,p.household_id,id],
+        'original',now,id,doc.version,p.user_id,id],
       ["INSERT INTO attachments(id,document_id,object_id,file_label,page_no,"+
         "sort_order,sha256,created_at,updated_at) "+
         "SELECT ?,?,?,?,?,?,?,?,? WHERE changes()=1",
