@@ -12,8 +12,8 @@ async function ownedAttachment(env,p,documentId,attachmentId){
     FROM attachments a JOIN documents d ON d.id=a.document_id
     LEFT JOIN storage_objects o ON o.id=a.object_id
     WHERE a.id=? AND a.document_id=?
-      AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,
-    attachmentId,documentId,p.user_id,p.household_id);
+      AND d.owner_id=?`,
+    attachmentId,documentId,p.user_id);
   if(!row)bad('附件不存在或无权操作','NOT_FOUND',404);
   return row;
 }
@@ -28,8 +28,8 @@ export async function attachmentTrash(env,p,documentId,attachmentId){
       WHERE id=? AND state='active' AND EXISTS (
         SELECT 1 FROM documents d WHERE d.id=attachments.document_id
         AND d.lifecycle='active'
-        AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
-      stamp,stamp,a.id,p.user_id,p.household_id],
+        AND d.owner_id=?)`,
+      stamp,stamp,a.id,p.user_id],
     [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
       SELECT ?,?,?,'attachment',?,? WHERE changes()=1`,
       randomToken(16),p.user_id,'attachment_trashed',a.id,stamp]
@@ -54,8 +54,8 @@ export async function attachmentRestore(env,p,documentId,attachmentId){
       WHERE id=? AND state='trashed' AND EXISTS(
         SELECT 1 FROM documents d WHERE d.id=attachments.document_id
         AND d.lifecycle='active' AND
-        (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
-      stamp,a.id,p.user_id,p.household_id],
+        d.owner_id=?)`,
+      stamp,a.id,p.user_id],
     [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
       SELECT ?,?,?,'attachment',?,? WHERE changes()=1`,
       randomToken(16),p.user_id,'attachment_restored',a.id,stamp]
@@ -66,9 +66,7 @@ export async function attachmentRestore(env,p,documentId,attachmentId){
 }
 export async function attachmentDelete(env,p,documentId,attachmentId){
   const a=await ownedAttachment(env,p,documentId,attachmentId);
-  // Shared editors may request the same operation as the owner. Physical R2
-  // ownership remains the original document owner, never the acting editor.
-  // This invariant is also enforced at INSERT/UPDATE of attachment references.
+  // Only the original document owner can delete the attachment and its R2 object.
   if(a.object_id&&a.storage_owner_id!==a.owner_id)
     bad('附件原件归属异常，已停止删除','OBJECT_OWNER_MISMATCH',409);
   if(a.state==='active')bad('请先将附件移入回收站','TRASH_FIRST',409);
@@ -76,8 +74,8 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
     const marked=await run(env.DB,`UPDATE attachments SET state='deletion_pending',updated_at=?
       WHERE id=? AND document_id=? AND state='trashed' AND EXISTS(
         SELECT 1 FROM documents d WHERE d.id=attachments.document_id AND
-        (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
-      isoNow(),a.id,documentId,p.user_id,p.household_id);
+        d.owner_id=?)`,
+      isoNow(),a.id,documentId,p.user_id);
     if(marked.meta?.changes!==1)bad('附件权限或状态已变化，请刷新','VERSION_CONFLICT',409);
   }
   const now=isoNow();
@@ -89,16 +87,15 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
   }
   if(shouldDelete&&a.object_key){
     if(!env.DOCUMENTS)bad('R2 尚未绑定','NOT_CONFIGURED',503);
-    // Claim the exact original owner's object, but only while this editor
-    // still has access to the shared document. No cross-user R2 list/delete.
+    // Claim the original owner's exact object. Shared readers cannot reach this path.
     const claim=await run(env.DB,`UPDATE storage_objects SET state='deletion_pending',updated_at=?
       WHERE id=? AND owner_id=? AND state IN ('ready','delete_failed','deletion_pending')
         AND NOT EXISTS(SELECT 1 FROM attachments WHERE object_id=? AND id!=?)
         AND EXISTS (SELECT 1 FROM attachments a JOIN documents d ON d.id=a.document_id
           WHERE a.id=? AND a.document_id=? AND a.object_id=storage_objects.id
-            AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+            AND d.owner_id=?)`,
         now,a.object_id,a.owner_id,a.object_id,a.id,
-        a.id,documentId,p.user_id,p.household_id);
+        a.id,documentId,p.user_id);
     if(claim.meta?.changes!==1)
       return failure('DELETE_RETRY_NEEDED','附件权限或原件状态已变化，请刷新后重试',409);
     else{
@@ -116,11 +113,8 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
     }
   }
 
-  // Authorization was acquired when the attachment entered deletion_pending,
-  // and re-checked at the R2 deletion claim. Do NOT block metadata cleanup
-  // if the owner revokes sharing *after* R2.delete succeeds: that would leave
-  // a still-referenced attachment pointing at already deleted bytes.
-  // An initial call made after revocation still fails in ownedAttachment().
+  // Owner access is checked before deletion_pending and again for the R2 claim.
+  // After R2 deletion succeeds, finish metadata cleanup even if state changes.
   const cleanup=[[`DELETE FROM attachments WHERE id=? AND document_id=?
     AND state='deletion_pending'`,
     a.id,documentId],
@@ -155,8 +149,8 @@ export async function attachmentDelete(env,p,documentId,attachmentId){
 }
 export async function attachmentList(env,p,documentId){
   const d=await first(env.DB,`SELECT id FROM documents WHERE id=? AND lifecycle='active'
-    AND (owner_id=? OR (household_id=? AND visibility='shared'))`,
-    documentId,p.user_id,p.household_id);
+    AND owner_id=?`,
+    documentId,p.user_id);
   if(!d)bad('无权查看附件回收站','NOT_FOUND',404);
   const items=await all(env.DB,`SELECT a.id,a.file_label,a.state,a.trashed_at,o.bytes,o.mime
     FROM attachments a LEFT JOIN storage_objects o ON o.id=a.object_id
