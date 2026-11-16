@@ -27,6 +27,10 @@
   "ai": {"binding":"AI"},
   "vars": {
     "APP_ENV":"production",
+    "HOMEFLOW_SSO_ENABLED": "true",
+    "DOCUMENT_EXECUTION_ENABLED": "true",
+    "DOCUMENT_STUDY_EXECUTION_ENABLED": "true",
+    "DOCUMENT_APPROVAL_SUBMISSION_ENABLED": "true",
     "HOMEFLOW_OAUTH_ORIGIN":"https://homeflow.yupan6706.workers.dev",
     "DA_PUBLIC_ORIGIN":"https://jp-document-assistant.yupan6706.workers.dev",
     "R2_BUCKET_NAME":"jp-document-assistant-private",
