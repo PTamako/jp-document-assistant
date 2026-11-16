@@ -275,7 +275,7 @@ const gmailAvailable=gmailConfigured(),gmailAuthorizedUi=ref(false),gmailIdentit
 const gmailPersistent=ref({enabled:false,connected:false,google_email:null,client_id:''});
 let gmailGeneration=0;
 const salaryAmountDraft=ref(''),salaryAmountConfirmed=ref(false);
-const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),usageRefreshing=ref(false),inviteEmail=ref(''),inviteToken=ref('');
+const fieldDraft=reactive({id:'',value:'',state:'confirmed',confirmRemote:false}),trashItems=ref([]),usage=ref(null),usageRefreshing=ref(false);
 const translationUsagePercent=computed(()=>{
  const used=Math.max(0,Number(usage.value?.translation_jst_day?.calls||0));
  const limit=Math.max(1,Number(usage.value?.translation_jst_day?.limit||80));
@@ -533,7 +533,7 @@ function clearPrivateWorkspace(){
   backupFile.value=null;backupPass.value='';backupOffset.value=0;
   backupScope.value='all';backupMonth.value='';restoreArchive.value=null;restorePreview.value=[];
   calendarLink.value='';calendarStatusInfo.value=null;calendarShowTitle.value=false;
-  inviteEmail.value='';inviteToken.value='';pendingAttachment.value=null;
+  pendingAttachment.value=null;
   fieldDraft.id='';fieldDraft.value='';fieldDraft.confirmRemote=false;
   for(const name of Object.keys(candidateDraft)){
     if(typeof candidateDraft[name]==='boolean')candidateDraft[name]=false;
@@ -939,7 +939,7 @@ async function saveDocAiProvider(){
  try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
  closeSheet();await openDoc(id);flash('已保存 AI 选择');}catch(e){problem(e);}finally{busy.value=false;}
 }
-function closeSheet(){translationConsent.value=false;attachmentActionsTarget.value=null;importOcrEngine.value='local';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;gmailLastQuery.value='';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';inviteToken.value='';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){translationConsent.value=false;attachmentActionsTarget.value=null;importOcrEngine.value='local';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;gmailLastQuery.value='';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){
   inputMode.value=mode;sheet.value='import';
 }
@@ -1550,9 +1550,6 @@ async function permanentDelete(){busy.value=true;try{
   refreshDocumentViews(deletedId);
   flash(result.warning||'文书与无需再引用的 R2 原件已执行清理');
 }catch(e){problem(e);}finally{busy.value=false;}}
-async function issueInvite(){busy.value=true;try{
-  const d=await api('/api/household/invites',{method:'POST',body:{invitee_email:inviteEmail.value}});inviteToken.value=d.invite_token;flash('邀请码仅供指定邮箱，48小时有效');
-}catch(e){problem(e);}finally{busy.value=false;}}
 async function showOriginal(a){
   if(!current.value)return;
   const epoch=accountEpoch.snapshot(),id=current.value.id;
@@ -1692,11 +1689,10 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <button v-if="pageData.next!==null" class="load-more" @click="loadTab('links',true)">加载更多</button>
       </section>
       <section v-else class="page-surface mine-page" key="mine">
-        <div class="profile-card"><div class="avatar">{{(user.display_name||user.email||'我').slice(0,1).toUpperCase()}}</div><div><h3>{{user.display_name||'家庭成员'}}</h3><p class="muted">{{user.email}} · {{user.role==='owner'?'管理员':'家庭成员'}}</p></div></div>
+        <div class="profile-card"><div class="avatar">{{(user.display_name||user.email||'我').slice(0,1).toUpperCase()}}</div><div><h3>{{user.display_name||'家庭成员'}}</h3><p class="muted">{{user.email}} · {{user.role==='owner'?'管理员':'家庭成员'}} · {{user.auth_source==='homeflow'?'HomeFlow 统一登录':'独立登录'}}</p></div></div>
         <section class="mine-section" aria-labelledby="mine-family-heading">
-          <h3 class="mine-section-heading" id="mine-family-heading">家庭与数据</h3>
+          <h3 class="mine-section-heading" id="mine-family-heading">文书与数据</h3>
           <div class="mine-group-card">
-            <button class="settings-line" v-if="user.role==='owner'" @click="sheet='invite'">邀请第二位家庭成员 <UiIcon name="chevron-right" :size="18"/></button>
             <button class="settings-line" @click="showRecycle">回收站 <UiIcon name="chevron-right" :size="18"/></button>
             <button class="settings-line" @click="sheet='backup'">备份与恢复 <UiIcon name="chevron-right" :size="18"/></button>
             <button class="settings-line" @click="openCalendar">日历订阅 <UiIcon name="chevron-right" :size="18"/></button>
@@ -1710,12 +1706,15 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
               :disabled="homeflowSsoBusy" @click="completeHomeflowSso">
               完成 HomeFlow 关联 <UiIcon name="chevron-right" :size="18"/>
             </button>
-            <button v-if="homeflowSsoAvailable" class="settings-line"
+            <button v-if="homeflowSsoAvailable && user.auth_source!=='homeflow'" class="settings-line"
               :disabled="homeflowSsoBusy" @click="beginHomeflowSso">
-              使用 HomeFlow 登录 / 关联 <UiIcon name="chevron-right" :size="18"/>
+              切换为 HomeFlow 统一登录 <UiIcon name="chevron-right" :size="18"/>
             </button>
+            <a v-if="user.auth_source==='homeflow'" class="settings-line" href="https://homeflow.yupan6706.workers.dev" target="_blank" rel="noopener noreferrer">
+              前往 HomeFlow 管理家庭与账号 <UiIcon name="chevron-right" :size="18"/>
+            </a>
             <button class="settings-line" @click="openSessions">登录设备与会话 <UiIcon name="chevron-right" :size="18"/></button>
-            <button class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
+            <button v-if="user.auth_source!=='homeflow'" class="settings-line" @click="sheet='changePassword'">修改登录密码 <UiIcon name="chevron-right" :size="18"/></button>
             <button class="settings-line" @click="logout">退出当前账号 <UiIcon name="chevron-right" :size="18"/></button>
           </div>
         </section>
@@ -2149,7 +2148,6 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label class="form-label">新密码（至少12位）<input v-model="passwordDraft.new_password" type="password" autocomplete="new-password" /></label>
         <label class="form-label">确认新密码<input v-model="passwordDraft.confirm_password" type="password" autocomplete="new-password" /></label>
         <div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!passwordDraft.current_password||passwordDraft.new_password.length<12||passwordDraft.new_password!==passwordDraft.confirm_password" @click="changePassword">修改并退出旧会话</button></div></template>
-      <template v-else-if="sheet==='invite'"><h2>邀请家人</h2><p class="muted">仅指定邮箱可使用邀请。</p><label class="form-label">对方邮箱<input v-model="inviteEmail" type="email" placeholder="family@example.com" /></label><button class="primary full" @click="issueInvite" :disabled="busy">生成 48 小时邀请码</button><label v-if="inviteToken" class="form-label">仅复制给家人使用<input :value="inviteToken" readonly @focus="$event.target.select()" /></label><div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='ocrSpaceConfirm'"><h2>OCR.space</h2><p class="fine-print">将此附件发送至第三方识别。</p><label class="check-row"><input type="checkbox" v-model="ocrSpaceConsent"/>同意发送</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!ocrSpaceConsent" @click="confirmOcrSpace">识别</button></div></template>
       <template v-else-if="sheet==='ocrConfirm'"><h2>AI 图片识别</h2><p class="fine-print">发送图片至 Cloudflare AI，结果需核对。</p><label class="check-row"><input type="checkbox" v-model="ocrRetryStale"/>重试超时任务</label><label class="check-row"><input type="checkbox" v-model="ocrRetryEmpty"/>重试空结果</label><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy" @click="confirmRunOcr">识别</button></div></template>
       <template v-else-if="sheet==='editText'"><h2>人工核对日文原文</h2><p class="fine-print">请对照原图确认。修改文字将重新生成全部候选字段，先前审核的字段会被重置，不会自动记账或创建任务。</p><textarea v-model="editTextDraft" rows="10" placeholder="请输入或粘贴日文内容"></textarea><div class="sheet-actions"><button class="secondary" @click="closeSheet">取消</button><button class="primary" :disabled="busy||!editTextDraft.trim()" @click="saveSourceText">保存并重新分析</button></div></template>
