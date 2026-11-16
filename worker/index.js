@@ -155,6 +155,8 @@ async function handleAuth(request,env,url){
     return json({ok:true,user:{id:user.id,display_name:user.display_name,role:user.role},csrf_token:session.csrf},200,{'Set-Cookie':cookieForSession(session.cookie)});
   }
   if(path==='/api/household/join'){
+    // While unified login is active, only HomeFlow may provision household members.
+    if(homeflowSsoEnabled(env,url))bad('请在 HomeFlow 管理家庭成员','FAMILY_MANAGED_BY_HOMEFLOW',409);
     const email=normalizedEmail(data.email);
     if(!email||!validatePassword(data.password)||typeof data.invite_token!=='string')bad('邀请码、邮箱或密码无效');
     const invite=await dbFirst(env.DB,`SELECT i.* FROM household_invites i WHERE i.token_hash=? AND i.accepted_at IS NULL AND i.expires_at>?`,await hashString(data.invite_token),now);
@@ -662,7 +664,7 @@ async function route(request,env,ctx){
   if(method==='GET'&&path==='/api/calendar/status')return calendarStatus(env,p);
   if(method==='POST'&&path==='/api/calendar/subscription')return createCalendarSubscription(request,env,p);
   if(method==='POST'&&path==='/api/calendar/revoke')return revokeCalendarSubscription(env,p);
-  if(method==='GET'&&path==='/api/me')return json({user:{id:p.user_id,household_id:p.household_id,email:p.email_norm,role:p.role,display_name:p.display_name},csrf_token:p.csrf});
+  if(method==='GET'&&path==='/api/me')return json({user:{id:p.user_id,household_id:p.household_id,email:p.email_norm,role:p.role,display_name:p.display_name,auth_source:p.auth_source},csrf_token:p.csrf});
   if(method==='GET'&&path==='/api/auth/sessions'){
     const offset=Math.max(0,Math.min(100,Number(url.searchParams.get('offset')||0)||0));
     const rows=await dbAll(env.DB,`SELECT id,created_at,expires_at FROM sessions
@@ -718,6 +720,8 @@ async function route(request,env,ctx){
     return json({ok:true,reauth_required:true},200,{'Set-Cookie':clearingCookie()});
   }
   if(method==='POST'&&path==='/api/household/invites'){
+    // Do not create a second membership graph beside HomeFlow SSO.
+    if(homeflowSsoEnabled(env,url))bad('请在 HomeFlow 管理家庭成员','FAMILY_MANAGED_BY_HOMEFLOW',409);
     if(p.role!=='owner')bad('仅家庭管理员可以邀请','FORBIDDEN',403);
     const data=await readJson(request,5000),email=normalizedEmail(data.invitee_email);
     if(!email)bad('请输入有效邮箱');

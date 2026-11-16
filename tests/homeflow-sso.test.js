@@ -666,3 +666,29 @@ test('document member approval remains fail-closed for legacy sessions, missing 
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,0);
  }finally{f.sql.close();}
 });
+
+
+test('enabled HomeFlow SSO rejects legacy member enrollment and exposes the session login source',async()=>{
+ const f=await setup();
+ try{
+   const cookie='__Host-da_session='+oldCookie;
+   const meResponse=await worker.fetch(new Request(app+'/api/me',{headers:{Cookie:cookie}}),f.env,{});
+   assert.equal(meResponse.status,200);
+   const me=await meResponse.json();
+   assert.equal(me.user.auth_source,'legacy');
+   const invitation=await worker.fetch(new Request(app+'/api/household/invites',{
+     method:'POST',headers:{Origin:app,Cookie:cookie,'Content-Type':'application/json',
+       'X-CSRF-Token':me.csrf_token},body:JSON.stringify({invitee_email:'member@example.invalid'})
+   }),f.env,{});
+   assert.equal(invitation.status,409);
+   assert.equal((await invitation.json()).code,'FAMILY_MANAGED_BY_HOMEFLOW');
+   const join=await worker.fetch(new Request(app+'/api/household/join',{
+     method:'POST',headers:{Origin:app,'Content-Type':'application/json'},
+     body:JSON.stringify({email:'member@example.invalid',password:'unusable-password',invite_token:'old-token'})
+   }),f.env,{});
+   assert.equal(join.status,409);
+   assert.equal((await join.json()).code,'FAMILY_MANAGED_BY_HOMEFLOW');
+   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM household_invites').get().n,0);
+   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM users').get().n,1);
+ }finally{f.sql.close();}
+});

@@ -28,11 +28,12 @@ test('redundant full-width refresh row is gone; one compact functional icon rema
  assert.match(ui,/if\(tab==='mine'\)void loadUsage\(\)/);
 });
 test('all My features remain accessible in native grouped rows',()=>{
- for(const action of ["sheet='invite'","showRecycle","sheet='backup'","openCalendar",
+ for(const action of ["showRecycle","sheet='backup'","openCalendar",
                       "cleanupStorage","openSessions","sheet='changePassword'","logout"]){
   assert.ok(mine.includes('@click="'+action+'"'),action);
  }
- assert.match(mine,/v-if="user\.role==='owner'"/);
+ assert.doesNotMatch(mine,/邀请第二位家庭成员|sheet='invite'/);
+ assert.match(mine,/id="mine-family-heading">文书与数据/);
  assert.match(mine,/Google 全文翻译/);
  assert.match(mine,/Gemini 3\.6/);
  assert.match(mine,/Workers AI 解读/);
@@ -52,4 +53,15 @@ test('stale usage refreshes cannot overwrite more recent results or leak into ne
  assert.match(ui,/const serial=\+\+usageLoadSerial;/);
  assert.match(ui,/if\(serial===usageLoadSerial\)usage\.value=data/);
  assert.match(ui,/usageLoadSerial\+\+;usageRefreshing\.value=false/);
+});
+
+test('HomeFlow is the only visible family administrator when SSO is linked',()=>{
+ assert.doesNotMatch(ui,/issueInvite|inviteEmail|inviteToken|sheet==='invite'/);
+ assert.match(ui,/v-for="m in authModes"/);
+ assert.match(ui,/\.\.\.\(homeflowSsoAvailable\.value\?\[\]:\[\{id:'join',name:'接受邀请'\}\]\)/);
+ assert.match(mine,/user\.auth_source==='homeflow'\?'HomeFlow 统一登录':'独立登录'/);
+ assert.match(mine,/v-if="homeflowSsoAvailable && user\.auth_source!=='homeflow'"/);
+ assert.match(mine,/href="https:\/\/homeflow\.yupan6706\.workers\.dev" target="_blank" rel="noopener noreferrer"/);
+ assert.match(mine,/v-if="user\.auth_source!=='homeflow'" class="settings-line" @click="sheet='changePassword'"/);
+ assert.match(mine,/登录设备与会话/);
 });
