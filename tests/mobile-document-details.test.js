@@ -20,7 +20,7 @@ test('attachment list shows only view and the menu while keeping all existing op
  assert.match(original,/@click="openAttachmentActions\(a\)"/);
  assert.doesNotMatch(original,/class="attachment-row"/);
  assert.doesNotMatch(original,/@click="runOcr\(a\)"/);
- const menu=app.slice(app.indexOf('<template v-else-if="sheet===\'attachmentActions\'">'),app.indexOf('<template v-else-if="sheet===\'attachmentTrashConfirm\'">'));
+ const menu=app.slice(app.indexOf('<template v-else-if="sheet===\'attachmentActions\' && canManageCurrent">'),app.indexOf('<template v-else-if="sheet===\'attachmentTrashConfirm\'">'));
  for(const action of ['moveAttachmentFromMenu(-1)','moveAttachmentFromMenu(1)','runOcr(selectedAttachment)','openOcrSpace(selectedAttachment)'])
   assert.ok(menu.includes(action),action);
  assert.match(app,/sheet==='attachmentTrashConfirm'/);

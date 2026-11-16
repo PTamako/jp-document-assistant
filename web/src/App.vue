@@ -112,6 +112,7 @@ const categoryIcon=kind=>({salary:'wallet',card_spend:'wallet',bank:'wallet',top
 const candidateIcon=kind=>({finance:'wallet',homeflow_task:'today',vocabulary:'book',sentence:'book'}[kind]||'links');
 const integrationLabel=state=>({synced:'已同步',linked_existing:'已关联',failed:'同步失败',pending:'待确认'}[state]||'待确认');
 const current=ref(null),detailTab=ref('original'),detailCandidates=ref([]),detailLoading=ref(false),amountVisible=ref(false);
+const canManageCurrent=computed(()=>current.value?.can_manage===true);
 // Ignore stale document responses after another document opens, the detail closes or the account changes.
 let detailOpenSerial=0;
 let candidatePreviewSerial=0; // Only the newest preview of the current document may open the sheet.
@@ -359,7 +360,7 @@ const fieldLabel={due_date_partial:'原文截止日（月日）',required_action
 const candidateLabel={finance:'家計簿 · 待确认记账',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
 const financeTypeLabel=item=>item?.payload?.kind==='income'?'收入':
   (item?.payload?.kind==='transfer'||inferSbiInvestmentKind(item?.payload?.merchant))?'资产转移':'支出';
-const canManualSalary=computed(()=>current.value?.category==='salary'&&!current.value?.fields?.some(f=>f.field_key==='net_salary')&&/(?:入金内容|振込(?:による)?ご入金|振込入金)/.test(String(current.value?.extracted_text_ja||'').normalize('NFKC')));
+const canManualSalary=computed(()=>canManageCurrent.value&&current.value?.category==='salary'&&!current.value?.fields?.some(f=>f.field_key==='net_salary')&&/(?:入金内容|振込(?:による)?ご入金|振込入金)/.test(String(current.value?.extracted_text_ja||'').normalize('NFKC')));
 const topupAdvice=computed(()=>{
   if(current.value?.category!=='topup')return null;
   const fields=Array.isArray(current.value.fields)?current.value.fields:[];
@@ -937,7 +938,7 @@ async function runAiForCurrent(){
   flash(result.ai_status==='gemini_retry_cooldown'?`Google 服务器繁忙，约 ${result.retry_after_seconds||60} 秒后再试`:(labels[result.ai_status]||'AI 尚未产生新结果'));
  }catch(e){problem(e);}finally{busy.value=false;}
 }
-function openDocAiProvider(){if(!current.value)return;docAiProvider.value=current.value.ai_provider||'none';docGeminiConsent.value=false;sheet.value='docAiProvider';}
+function openDocAiProvider(){if(!canManageCurrent.value)return;docAiProvider.value=current.value.ai_provider||'none';docGeminiConsent.value=false;sheet.value='docAiProvider';}
 async function saveDocAiProvider(){
  if(!current.value||busy.value)return;
  if(docAiProvider.value==='gemini'&&!docGeminiConsent.value){problem(new Error('请确认发送至 Gemini'));return;}
@@ -1135,7 +1136,7 @@ async function saveManualSalary(){
   flash('人工工资金额已保存；收入候选已生成，确认后才会同步家計簿');
  }catch(e){problem(e);}finally{busy.value=false;}
 }
-function startField(field){if(field.field_key==='due_date'&&field.review_state==='unreviewed'&&field.source_quote?.startsWith('年份自动补全')){openCompleteDeadline();return;}fieldDraft.id=field.id;fieldDraft.value=field.normalized_value||'';fieldDraft.state=field.review_state==='unreviewed'?'confirmed':field.review_state;fieldDraft.confirmRemote=false;sheet.value='field';}
+function startField(field){if(!canManageCurrent.value)return;if(field.field_key==='due_date'&&field.review_state==='unreviewed'&&field.source_quote?.startsWith('年份自动补全')){openCompleteDeadline();return;}fieldDraft.id=field.id;fieldDraft.value=field.normalized_value||'';fieldDraft.state=field.review_state==='unreviewed'?'confirmed':field.review_state;fieldDraft.confirmRemote=false;sheet.value='field';}
 async function saveField(){busy.value=true;try{
   const result=await api(`/api/fields/${fieldDraft.id}`,{method:'PATCH',body:{normalized_value:fieldDraft.value,review_state:fieldDraft.state,confirm_remote_unchanged:fieldDraft.confirmRemote}});
   const id=current.value.id;sheet.value='';await openDoc(id);
@@ -1143,9 +1144,9 @@ async function saveField(){busy.value=true;try{
   if(pages[activeTab.value])await loadTab(activeTab.value);
   flash(result.linked_records_unchanged?'本地字段已修改；已同步的目标 App 记录不会自动改变，请前往目标 App 核对':'字段已保存');
 }catch(e){problem(e);}finally{busy.value=false;}}
-function askTrash(){sheet.value='trashConfirm';}
+function askTrash(){if(canManageCurrent.value)sheet.value='trashConfirm';}
 function askTrashFromList(document){
-  if(busy.value || !document?.id)return;
+  if(busy.value || !document?.id || document.can_manage!==true)return;
   swipeOpenId.value='';
   swipeTrashTarget.value={id:document.id,title:document.title};
   sheet.value='trashListConfirm';
@@ -1227,7 +1228,7 @@ async function trashAttachment(a){if(!current.value)return;busy.value=true;try{
 }catch(e){problem(e);}finally{busy.value=false;}}
 
 function openAttachmentActions(a){
- if(!current.value||busy.value||!a?.id)return;
+ if(!canManageCurrent.value||busy.value||!a?.id)return;
  attachmentActionsTarget.value={id:a.id};
  sheet.value='attachmentActions';
 }
@@ -1681,7 +1682,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         
         <div v-if="!pageData.items.length&&!loadingPage" class="empty">没有匹配的文书。</div>
         <DocumentSwipeRow v-for="d in pageData.items" :key="d.id" :id="d.id"
-          :revealed="swipeOpenId===d.id" :disabled="busy"
+          :revealed="swipeOpenId===d.id" :disabled="busy" :deletable="d.can_manage===true"
           @reveal="swipeOpenId=d.id" @hide="swipeOpenId=''" @delete="askTrashFromList(d)">
           <button class="item-card document-list-card" type="button" @click="openDoc(d.id)"><div class="item-icon"><UiIcon :name="categoryIcon(d.category)" :size="22"/></div><div class="item-info"><div class="item-title">{{d.title}}</div><p>{{d.favorite?'★ · ':''}}{{cats[d.category]||d.category}} · {{d.visibility==='shared'?'家庭共享':'仅自己'}}{{d.archived_at?' · 已归档':''}}</p></div><span class="state-tag">{{documentReviewLabel(d)}}</span></button>
         </DocumentSwipeRow>
@@ -1794,9 +1795,9 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
   <div v-if="error" class="status-toast error-toast" role="alert"><span>{{error}}</span><button @click="error=''" aria-label="关闭错误"><UiIcon name="x" :size="19"/></button></div>
 
   <div v-if="current" class="detail-surface" role="dialog" aria-modal="true" aria-label="文书详情">
-    <div class="detail-top"><button class="round ghost" @click="closeDetail" aria-label="返回"><UiIcon name="arrow-left" :size="21"/></button><strong>文书详情</strong><button class="round ghost" @click="sheet='detailsMenu'" aria-label="更多操作"><UiIcon name="ellipsis" :size="22"/></button></div>
+    <div class="detail-top"><button class="round ghost" @click="closeDetail" aria-label="返回"><UiIcon name="arrow-left" :size="21"/></button><strong>文书详情</strong><button v-if="canManageCurrent" class="round ghost" @click="sheet='detailsMenu'" aria-label="更多操作"><UiIcon name="ellipsis" :size="22"/></button></div>
     <div class="detail-body">
-      <p class="eyebrow">{{cats[current.category]||current.category}} · {{current.visibility==='shared'?'家庭共享':'仅自己'}}</p>
+      <p class="eyebrow">{{cats[current.category]||current.category}} · {{current.visibility==='shared'?'家庭共享':'仅自己'}}{{canManageCurrent?'':' · 只读'}}</p>
       <h2 class="document-detail-title" :title="current.title">{{current.title}}</h2>
       <p class="detail-note">{{documentReviewLabel(current)}} · {{current.import_mode==='original'?'私有原件':'文字摘要'}}</p>
       <p v-if="['card_spend','shopping'].includes(current.category)&&current.fields?.some(f=>['merchant','transaction_at','transaction_date'].includes(f.field_key)&&f.review_state!=='rejected')" class="muted">
@@ -1811,11 +1812,11 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div class="content-card explain-panel">
           <div class="explain-heading">
             <h3>中文讲解</h3>
-            <button class="explain-provider" type="button" @click="openDocAiProvider" aria-label="选择这份文书的 AI 引擎">{{({cloudflare:'Workers AI',gemini:'Gemini 3.6 Flash',none:'仅规则'})[current.ai_provider]||'仅规则'}}<UiIcon name="chevron-right" :size="15"/></button>
+            <button v-if="canManageCurrent" class="explain-provider" type="button" @click="openDocAiProvider" aria-label="选择这份文书的 AI 引擎">{{({cloudflare:'Workers AI',gemini:'Gemini 3.6 Flash',none:'仅规则'})[current.ai_provider]||'仅规则'}}<UiIcon name="chevron-right" :size="15"/></button>
           </div>
           <div class="explain-actions">
-            <button v-if="current.ai_provider!=='none'" class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button>
-            <button class="secondary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="16"/>重新解析</button>
+            <button v-if="canManageCurrent&&current.ai_provider!=='none'" class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button>
+            <button v-if="canManageCurrent" class="secondary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="16"/>重新解析</button>
           </div>
           <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}}</p>
           <p class="multiline explanation-text" :class="{expanded:explanationExpanded}">{{(explanationExpanded?explanationText:explanationPreview)||'还没有可讲解的文字，可在原文页补充。'}}</p>
@@ -1823,12 +1824,12 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
           <details v-if="aiAnalysis?.important_points_zh?.length" class="explain-points"><summary>重要事项（{{aiAnalysis.important_points_zh.length}}）</summary><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">{{line}}</p></details>
         </div>
       </section>
-      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可点击「重新讲解」提取原文中的日期及办理事项。</div><button v-if="current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&(!current.fields?.some(f=>f.field_key==='due_date')||current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全')))" class="secondary full" @click="openCompleteDeadline">确认／修改默认年份（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" @click="startField(field)"><div><span class="muted">{{field.field_key==='due_date'&&field.source_quote?.startsWith('年份自动补全')?'截止日期（按今年自动补全·待确认）':labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">付款与到账请核对。</div></section>
+      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可点击「重新讲解」提取原文中的日期及办理事项。</div><button v-if="canManageCurrent&&current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&(!current.fields?.some(f=>f.field_key==='due_date')||current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全')))" class="secondary full" @click="openCompleteDeadline">确认／修改默认年份（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" :disabled="!canManageCurrent" @click="startField(field)"><div><span class="muted">{{field.field_key==='due_date'&&field.source_quote?.startsWith('年份自动补全')?'截止日期（按今年自动补全·待确认）':labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">付款与到账请核对。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div v-if="canManualSalary" class="content-card"><p>已识别工资入账通知，但邮件没有金额。</p><button class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写到账金额，生成家計簿收入建议</button></div>
         <div v-if="campaignPendingDate" class="content-card campaign-review-card">
           <h3>活动截止日期 · 待核对</h3>
           <p>原文：{{current.fields?.find(f=>f.field_key==='due_date_partial')?.normalized_value}}。确认年份后才会生成本地 HomeFlow 待办候选。</p>
-          <button class="secondary small icon-label" type="button" @click="openCompleteDeadline"><UiIcon name="calendar" :size="16"/>确认活动年份</button>
+          <button v-if="canManageCurrent" class="secondary small icon-label" type="button" @click="openCompleteDeadline"><UiIcon name="calendar" :size="16"/>确认活动年份</button>
         </div>
         <div v-if="current.category==='campaign'&&current.campaign_hints?.length" class="content-card campaign-review-card">
           <h3>可选优惠操作</h3>
@@ -1886,7 +1887,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div class="content-card original-panel">
           <div class="original-section-heading">
             <h3>附件 <span class="muted">({{current.attachments?.length||0}})</span></h3>
-            <button class="text-button icon-label" type="button" :disabled="busy" @click="extraFileInput?.click()"><UiIcon name="plus" :size="16"/>添加</button>
+            <button v-if="canManageCurrent" class="text-button icon-label" type="button" :disabled="busy" @click="extraFileInput?.click()"><UiIcon name="plus" :size="16"/>添加</button>
           </div>
           <input class="visually-hidden" ref="extraFileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" @change="appendFiles" />
           <div v-if="current.attachments?.length" class="attachment-files">
@@ -1894,7 +1895,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
               <button class="attachment-file-open" type="button" :disabled="busy" @click="showOriginal(a)">
                 <UiIcon name="file" :size="18"/><span class="attachment-file-name" :title="a.file_label">{{a.file_label}}</span><span class="attachment-view-label">查看</span>
               </button>
-              <button class="attachment-file-more" type="button" :disabled="busy" :aria-label="'更多附件操作：'+a.file_label" @click="openAttachmentActions(a)"><UiIcon name="ellipsis" :size="20"/></button>
+              <button v-if="canManageCurrent" class="attachment-file-more" type="button" :disabled="busy" :aria-label="'更多附件操作：'+a.file_label" @click="openAttachmentActions(a)"><UiIcon name="ellipsis" :size="20"/></button>
             </div>
           </div>
           <div class="original-copy-section">
@@ -1904,7 +1905,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
                 <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="translationBusy" @click="translateOriginal" :aria-pressed="translationVisible" aria-label="切换日文原文与 Google 中文机翻">
                   <UiIcon name="languages" :size="17"/>{{translationBusy?'翻译中':translationVisible?'看原文':localTranslation&&translationSource===current.extracted_text_ja.trim()?'看译文':'翻译全文'}}
                 </button>
-                <button class="text-button icon-label" type="button" @click="editText"><UiIcon name="edit" :size="16"/>编辑</button>
+                <button v-if="canManageCurrent" class="text-button icon-label" type="button" @click="editText"><UiIcon name="edit" :size="16"/>编辑</button>
               </div>
             </div>
             
@@ -2039,7 +2040,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
 </template>
 <template v-else-if="sheet==='manualSalary'"><h2>手动补录工资收入</h2><p class="fine-print">这封银行通知没有金额。请根据银行入出金明细填写，系统将明确标记「人工补录」，不会伪装为原文提取，也不会自动向家計簿记账。</p><label class="form-label">实际到账金额（日元）<input v-model.trim="salaryAmountDraft" type="text" inputmode="numeric" maxlength="16" placeholder="例如：250000" /></label><label class="check-row"><input type="checkbox" v-model="salaryAmountConfirmed" /> 我已经核对银行实际入账金额，并确认不会重复记账</label><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy||!salaryAmountConfirmed||!salaryAmountDraft.trim()" @click="saveManualSalary">保存并生成收入建议</button></div></template>
 <template v-else-if="sheet==='field'"><h2>核对原文中的字段</h2><label class="form-label">确认值<input v-model="fieldDraft.value" /></label><div class="choice-form-field"><span class="choice-field-label">审核操作</span><button type="button" class="choice-field-control" @click="openChoice('reviewState')"><span>{{choiceLabel('reviewState')}}</span><UiIcon name="chevron-right" :size="18"/></button></div><label class="check-row"><input type="checkbox" v-model="fieldDraft.confirmRemote" /> 若该字段已经联动，我了解修改仅影响本 App；需要去目标 App 核对远端记录</label><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="saveField">保存</button></div></template>
-      <template v-else-if="sheet==='attachmentActions'">
+      <template v-else-if="sheet==='attachmentActions' && canManageCurrent">
         <h2>附件操作</h2>
         <p class="attachment-menu-filename" :title="selectedAttachment?.file_label">{{selectedAttachment?.file_label}}</p>
         <button class="settings-line attachment-action-line" type="button" :disabled="busy||(current?.attachments?.[0]?.id===selectedAttachment?.id)" @click="moveAttachmentFromMenu(-1)"><UiIcon name="arrow-up" :size="18"/>上移</button>
@@ -2054,8 +2055,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <p class="confirmation-help">附件可从回收站恢复，已提取的文字会保留。</p>
         <div class="sheet-actions"><button class="secondary" type="button" :disabled="busy" @click="sheet='attachmentActions'">取消</button><button class="destructive" type="button" :disabled="busy" @click="confirmAttachmentTrash"><UiIcon name="trash" :size="17"/>确认移入</button></div>
       </template>
-      <template v-else-if="sheet==='detailsMenu'"><h2>文书操作</h2><button class="settings-line" @click="sheet='shareConfirm'">{{current.visibility==='private'?'主动分享给家人':'改为仅自己'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line" @click="toggleDocument('favorite',!current.favorite)">{{current.favorite?'取消收藏':'收藏文书'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line" @click="toggleDocument('archived',!current.archived_at)">{{current.archived_at?'取消归档':'归档（停止首页提示）'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line danger-text" @click="askTrash">移入回收站 <UiIcon name="chevron-right" :size="18"/></button><div class="sheet-actions"><button class="secondary full" @click="sheet=''">取消</button></div></template>
-      <template v-else-if="sheet==='shareConfirm'"><h2>确认家庭可见范围</h2><p>共享后第二位家庭成员可以读取标题、原文、字段和附件。工资、银行、税务资料可能含敏感信息。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="changeShare">{{current.visibility==='private'?'确认共享':'确认设为私人'}}</button></div></template>
+      <template v-else-if="sheet==='detailsMenu' && canManageCurrent"><h2>文书操作</h2><button class="settings-line" @click="sheet='shareConfirm'">{{current.visibility==='private'?'主动分享给家人':'改为仅自己'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line" @click="toggleDocument('favorite',!current.favorite)">{{current.favorite?'取消收藏':'收藏文书'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line" @click="toggleDocument('archived',!current.archived_at)">{{current.archived_at?'取消归档':'归档（停止首页提示）'}} <UiIcon name="chevron-right" :size="18"/></button><button class="settings-line danger-text" @click="askTrash">移入回收站 <UiIcon name="chevron-right" :size="18"/></button><div class="sheet-actions"><button class="secondary full" @click="sheet=''">取消</button></div></template>
+      <template v-else-if="sheet==='shareConfirm' && canManageCurrent"><h2>确认家庭可见范围</h2><p>共享后第二位家庭成员可以读取标题、原文、字段和附件。工资、银行、税务资料可能含敏感信息。</p><div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="busy" @click="changeShare">{{current.visibility==='private'?'确认共享':'确认设为私人'}}</button></div></template>
       <template v-else-if="sheet==='trashListConfirm'">
         <h2>移入回收站？</h2>
         <p class="trash-confirm-title" :title="swipeTrashTarget?.title">{{swipeTrashTarget?.title}}</p>

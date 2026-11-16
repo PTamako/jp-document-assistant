@@ -186,9 +186,8 @@ async function visibleDocument(db,id,p,allowedLifecycle='active'){
     (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,id,allowedLifecycle,p.user_id,p.household_id);
 }
 async function manageableDocument(db,id,p,lifecycle='active'){
-  const doc=await dbFirst(db,`SELECT d.* FROM documents d WHERE d.id=? AND d.lifecycle=?
-    AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`,
-    id,lifecycle,p.user_id,p.household_id);
+  const doc=await dbFirst(db,`SELECT d.* FROM documents d WHERE d.id=? AND d.lifecycle=? AND d.owner_id=?`,
+    id,lifecycle,p.user_id);
   if(!doc)bad('文书不存在或没有操作权限','NOT_FOUND',404);
   return doc;
 }
@@ -197,7 +196,7 @@ async function ownedDocument(db,id,p,lifecycle=null){
   if(!doc)bad('文书不存在或没有操作权限','NOT_FOUND',404);
   return doc;
 }
-function listShape(d){return {id:d.id,category:d.category,title:d.title,visibility:d.visibility,analysis_status:d.analysis_status,review_status:d.review_status,lifecycle:d.lifecycle,created_at:d.created_at,updated_at:d.updated_at,version:d.version,favorite:!!d.favorite,archived_at:d.archived_at||null,tags:JSON.parse(d.tags_json||'[]')};}
+function listShape(d,p){return {id:d.id,category:d.category,title:d.title,visibility:d.visibility,can_manage:!!p&&d.owner_id===p.user_id,analysis_status:d.analysis_status,review_status:d.review_status,lifecycle:d.lifecycle,created_at:d.created_at,updated_at:d.updated_at,version:d.version,favorite:!!d.favorite,archived_at:d.archived_at||null,tags:JSON.parse(d.tags_json||'[]')};}
 async function analyzeStored(env,doc,force=false){
   if(doc.analysis_status==='needs_review' && !force)return {cached:true};
   if(doc.import_mode==='analyze_only')bad('仅分析内容不长期保存');
@@ -365,10 +364,10 @@ async function handleFileImport(request,env,p,ctx){
     message:extracted?'已使用文件文字层生成待核对字段':'没有可复制文字，需人工输入或手动 OCR'},201);
 }
 async function hashStringBytes(bytes){const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');}
-async function getDocDetail(db,doc){
+async function getDocDetail(db,doc,p){
   const fields=await dbAll(db,`SELECT id,field_key,raw_value,normalized_value,value_type,original_currency,source_quote,review_state,source_page FROM document_fields WHERE document_id=? ORDER BY field_key`,doc.id);
   const attachments=await dbAll(db,`SELECT a.id,a.file_label,a.page_no,a.state,o.mime FROM attachments a JOIN storage_objects o ON o.id=a.object_id WHERE a.document_id=? AND a.state='active' ORDER BY a.sort_order`,doc.id);
-  return {...listShape(doc),ai_provider:doc.ai_provider||'none',ai_analysis:await getDocumentAiCache(db,doc),ai_job:await getDocumentAiJob(db,doc.id,doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
+  return {...listShape(doc,p),ai_provider:doc.ai_provider||'none',ai_analysis:await getDocumentAiCache(db,doc),ai_job:await getDocumentAiJob(db,doc.id,doc),summary_zh:doc.summary_zh,explanation_zh:doc.explanation_zh,extracted_text_ja:doc.extracted_text_ja,import_mode:doc.import_mode,
      campaign_hints:doc.category==='campaign'?extractCampaignActionHints(doc.extracted_text_ja):[],
     source_document_date:doc.source_document_date||null,source_date_quote:doc.source_date_quote||null,
     official_current_verified_at:doc.official_current_verified_at||null,
@@ -387,7 +386,7 @@ async function handleList(env,p,url){
 WHEN NOT EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.review_state='unreviewed') THEN 'reviewed'
 WHEN EXISTS(SELECT 1 FROM document_fields f WHERE f.document_id=d.id AND f.review_state!='unreviewed') THEN 'partial'
 ELSE 'unreviewed' END review_status,
-d.lifecycle,d.created_at,d.updated_at,d.version,d.favorite,d.archived_at,d.tags_json
+d.lifecycle,d.created_at,d.updated_at,d.version,d.favorite,d.archived_at,d.tags_json,d.owner_id
 FROM documents d WHERE d.lifecycle='active' AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared'))`;
   const args=[p.user_id,p.household_id];
   if(filter){sql+=' AND d.category=?';args.push(filter);}
@@ -400,15 +399,11 @@ FROM documents d WHERE d.lifecycle='active' AND (d.owner_id=? OR (d.household_id
   if(q){sql+=` AND (d.title LIKE ? ESCAPE '\\' OR d.summary_zh LIKE ? ESCAPE '\\')`;const escaped=q.replace(/[\\%_]/g,'\\$&');args.push(`%${escaped}%`,`%${escaped}%`);}
   sql+=' ORDER BY d.created_at DESC,d.id DESC LIMIT ? OFFSET ?';args.push(limit+1,offset);
   const rows=await dbAll(env.DB,sql,...args);
-  return json({items:rows.slice(0,limit).map(listShape),next_offset:rows.length>limit?offset+limit:null});
+  return json({items:rows.slice(0,limit).map(row=>listShape(row,p)),next_offset:rows.length>limit?offset+limit:null});
 }
 async function updateDoc(request,env,p,doc){
-  // Shared documents are truly writable to either member. Only the original
-  // owner can grant/revoke visibility, to avoid an editor silently exposing
-  // the owner's private source or locking the owner out.
-  const canManage=doc.owner_id===p.user_id ||
-    (doc.household_id===p.household_id&&doc.visibility==='shared');
-  if(!canManage)bad('文书不存在或没有操作权限','NOT_FOUND',404);
+  // Sharing grants READ access only. The uploader/owner remains the sole editor.
+  if(doc.owner_id!==p.user_id)bad('文书不存在或没有操作权限','NOT_FOUND',404);
   const data=await readJson(request,10000);
   if(data.visibility!==undefined&&doc.owner_id!==p.user_id)
     bad('共享范围只能由原所有者修改','FORBIDDEN',403);
@@ -438,10 +433,10 @@ async function updateDoc(request,env,p,doc){
   if(!Number.isInteger(data.version)||data.version!==doc.version)bad('文书已被其他操作修改，请刷新','VERSION_CONFLICT',409);
   updates.push('updated_at=?','version=version+1');
   const at=isoNow();
-  values.push(at,doc.id,p.user_id,p.household_id,doc.version);
+  values.push(at,doc.id,p.user_id,doc.version);
   const output=await batch(env.DB,[
     [`UPDATE documents SET ${updates.join(',')}
-      WHERE id=? AND (owner_id=? OR (household_id=? AND visibility='shared'))
+      WHERE id=? AND owner_id=?
       AND version=? AND lifecycle='active'`,...values],
     [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
       SELECT ?,?,?,'document',?,? WHERE changes()=1`,
@@ -454,10 +449,8 @@ async function updateDoc(request,env,p,doc){
 async function updateField(request,env,p,fieldId){
   const field=await dbFirst(env.DB,`SELECT f.*,d.owner_id,d.household_id,d.visibility,d.lifecycle
     FROM document_fields f JOIN documents d ON d.id=f.document_id WHERE f.id=?`,fieldId);
-  if(!field||field.lifecycle!=='active'||!(
-    field.owner_id===p.user_id ||
-    (field.household_id===p.household_id&&field.visibility==='shared')
-  ))bad('字段不存在','NOT_FOUND',404);
+  if(!field||field.lifecycle!=='active'||field.owner_id!==p.user_id)
+    bad('字段不存在','NOT_FOUND',404);
   const data=await readJson(request,6000);
   if(!['confirmed','corrected','rejected'].includes(data.review_state))bad('审核状态无效');
   const normalized=String(data.normalized_value ?? field.normalized_value ?? '').trim();
@@ -484,9 +477,9 @@ async function updateField(request,env,p,fieldId){
       WHERE id=? AND document_id=? AND EXISTS(
         SELECT 1 FROM documents d WHERE d.id=document_fields.document_id
         AND d.lifecycle='active'
-        AND (d.owner_id=? OR (d.household_id=? AND d.visibility='shared')))`,
+        AND d.owner_id=?)`,
       normalized,data.review_state,p.user_id,now,fieldId,field.document_id,
-      p.user_id,p.household_id],
+      p.user_id],
     [`UPDATE documents SET updated_at=?,version=version+1
       WHERE id=? AND lifecycle='active' AND changes()=1`,now,field.document_id],
     [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
@@ -502,9 +495,7 @@ async function candidatesForDoc(env,p,id){
   if(!doc)bad('文书不存在','NOT_FOUND',404);
   // Sharing a source document does NOT share the owner's private target
   // accounts, approval candidates, remote ledger IDs or sync history.
-  // The collaborator may edit the shared document, but must create any
-  // personal target intent from their OWN verified account after approval
-  // workflow support is available. Avoid even loading these private rows.
+  // Read-only collaborators cannot inspect the owner's private integration rows.
   if(doc.owner_id!==p.user_id)
     return json({items:[],shared_document:true,integration_access:false});
   const rows=await dbAll(env.DB,`SELECT c.id,c.candidate_kind,c.payload_json,c.state,
@@ -518,9 +509,8 @@ async function moveToTrash(env,p,id){
   const output=await batch(env.DB,[
     [`UPDATE documents SET lifecycle='trashed',trashed_at=?,trashed_by=?,
       updated_at=?,version=version+1
-      WHERE id=? AND lifecycle='active' AND
-      (owner_id=? OR (household_id=? AND visibility='shared'))`,
-      now,p.user_id,now,id,p.user_id,p.household_id],
+      WHERE id=? AND lifecycle='active' AND owner_id=?`,
+      now,p.user_id,now,id,p.user_id],
     [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
       SELECT ?,?,?,'document',?,? WHERE changes()=1`,
       randomToken(16),p.user_id,'document_trashed',id,now]
@@ -538,9 +528,8 @@ async function restoreDoc(env,p,id){
   const output=await batch(env.DB,[
     [`UPDATE documents SET lifecycle='active',trashed_at=NULL,
       trashed_by=NULL,updated_at=?,version=version+1
-      WHERE id=? AND lifecycle='trashed' AND
-      (owner_id=? OR (household_id=? AND visibility='shared'))`,
-      at,id,p.user_id,p.household_id],
+      WHERE id=? AND lifecycle='trashed' AND owner_id=?`,
+      at,id,p.user_id],
     [`INSERT INTO audit_events(id,actor_user_id,kind,entity_type,entity_id,created_at)
       SELECT ?,?,?,'document',?,? WHERE changes()=1`,
       randomToken(16),p.user_id,'document_restored',id,at]
@@ -874,7 +863,7 @@ ELSE 'unreviewed' END review_status,
     if(!rest){
       const doc=await visibleDocument(env.DB,id,p);
       if(!doc)bad('文书不存在','NOT_FOUND',404);
-      if(method==='GET')return json({document:await getDocDetail(env.DB,doc)});
+      if(method==='GET')return json({document:await getDocDetail(env.DB,doc,p)});
       if(method==='PATCH')return updateDoc(request,env,p,doc);
     }
     if(method==='POST'&&rest==='ocr')return ocrAttachment(request,env,p,id);
@@ -1084,11 +1073,11 @@ ELSE 'unreviewed' END review_status,
       // makes the entire reorder all-or-nothing; changes() chains the write
       // gate so a lost CAS cannot reorder any of the attachments.
       const statements=[[
-        `UPDATE documents SET version=version+1,updated_at=? WHERE id=? AND (owner_id=? OR (household_id=? AND visibility='shared'))
+        `UPDATE documents SET version=version+1,updated_at=? WHERE id=? AND owner_id=?
           AND version=? AND lifecycle='active'
           AND (SELECT COUNT(*) FROM attachments WHERE document_id=? AND state='active')=?
           AND NOT EXISTS(SELECT 1 FROM attachments WHERE document_id=? AND state='active' AND id NOT IN (${params}))`,
-        now,id,p.user_id,p.household_id,d.version,id,ids.length,id,...ids
+        now,id,p.user_id,d.version,id,ids.length,id,...ids
       ]];
       ids.forEach((aid,index)=>statements.push([
         `UPDATE attachments SET sort_order=?,updated_at=? WHERE id=? AND document_id=? AND state='active' AND changes()=1`,
