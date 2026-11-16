@@ -1695,7 +1695,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <button v-if="pageData.next!==null" class="load-more" @click="loadTab('links',true)">加载更多</button>
       </section>
       <section v-else class="page-surface mine-page" key="mine">
-        <div class="profile-card"><div class="avatar">{{(user.display_name||user.email||'我').slice(0,1).toUpperCase()}}</div><div><h3>{{user.display_name||'家庭成员'}}</h3><p class="muted">{{user.email}} · {{user.role==='owner'?'管理员':'家庭成员'}} · {{user.auth_source==='homeflow'?'HomeFlow 统一登录':'独立登录'}}</p></div></div>
+        <div class="profile-card"><div class="avatar">{{(user.display_name||'我').slice(0,1).toUpperCase()}}</div><div><h3>{{user.display_name||'家庭成员'}}</h3><p class="muted">{{user.role==='owner'?'管理员':'家庭成员'}} · {{user.auth_source==='homeflow'?'HomeFlow 统一登录':'独立登录'}}</p></div></div>
         <section class="mine-section" aria-labelledby="mine-family-heading">
           <h3 class="mine-section-heading" id="mine-family-heading">文书与数据</h3>
           <div class="mine-group-card">

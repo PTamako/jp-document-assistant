@@ -65,3 +65,13 @@ test('HomeFlow is the only visible family administrator when SSO is linked',()=>
  assert.match(mine,/v-if="user\.auth_source!=='homeflow'" class="settings-line" @click="sheet='changePassword'"/);
  assert.match(mine,/登录设备与会话/);
 });
+
+
+test('HomeFlow profile hides internal synthetic account email and displays only user-facing identity',()=>{
+ assert.match(mine,/class="profile-card"/);
+ assert.match(mine,/\{\{user\.display_name\|\|'家庭成员'\}\}/);
+ assert.doesNotMatch(mine,/\{\{user\.email\}\}/);
+ assert.doesNotMatch(mine,/user\.display_name\|\|user\.email/);
+ assert.match(mine,/user\.role==='owner'\?'管理员':'家庭成员'/);
+ assert.match(mine,/user\.auth_source==='homeflow'\?'HomeFlow 统一登录':'独立登录'/);
+});
