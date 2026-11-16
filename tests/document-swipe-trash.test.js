@@ -33,3 +33,20 @@ test('swiping only reveals the button; user must confirm before trash API is cal
   assert.match(app,/可恢复，已同步到其他 App 的内容不受影响/);
   assert.doesNotMatch(swipe,/permanent-delete|DELETE_FOREVER/);
 });
+
+
+test('shared recipient has no swipe deletion, edit, field write or attachment mutation controls',()=>{
+  assert.match(app,/:deletable="d\.can_manage===true"/);
+  assert.match(swipe,/deletable:\{type:Boolean,default:true\}/);
+  assert.match(swipe,/if\(props\.disabled\|\|!props\.deletable/);
+  assert.match(swipe,/v-if="deletable" type="button" class="document-swipe-delete"/);
+  assert.match(swipe,/v-if="deletable" type="button" class="document-swipe-trigger"/);
+  assert.match(app,/const canManageCurrent=computed\(\(\)=>current\.value\?\.can_manage===true\)/);
+  assert.match(app,/v-if="canManageCurrent" class="round ghost" @click="sheet='detailsMenu'"/);
+  assert.match(app,/v-if="canManageCurrent" class="attachment-file-more"/);
+  assert.match(app,/v-if="canManageCurrent" class="text-button icon-label" type="button" @click="editText"/);
+  assert.match(app,/:disabled="!canManageCurrent" @click="startField\(field\)"/);
+  assert.match(app,/v-else-if="sheet==='detailsMenu' && canManageCurrent"/);
+  assert.match(app,/v-else-if="sheet==='attachmentActions' && canManageCurrent"/);
+  assert.match(app,/document\.can_manage!==true/);
+});
