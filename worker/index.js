@@ -655,7 +655,7 @@ async function route(request,env,ctx){
   if(path==='/api/homeflow-sso/complete')return completeHomeFlowSso(request,env,url);
   // The callback deliberately needs no browser cookie: one-time state binds it to the PWA user.
   if(method==='GET'&&path==='/api/google/oauth/callback')return oauthCallback(request,env,url);
-  const internalDocument=path.match(/^\/api\/internal\/document-actions\/(execute|receipt|source-check)$/);
+  const internalDocument=path.match(/^\/api\/internal\/document-actions\/(execute|receipt|source-check|preview)$/);
   if(internalDocument)return documentExecutionRoute(request,env,internalDocument[1]);
    const internalTask=path.match(/^\/api\/internal\/document-task\/(prepare|receipt)$/);
    if(internalTask)return documentTaskSourceRoute(request,env,internalTask[1]);
