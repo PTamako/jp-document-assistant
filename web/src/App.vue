@@ -1419,9 +1419,18 @@ async function prepareCandidate(item){
    const options=await api('/api/integrations/kakeibo/stable-accounts');
    if(!stillCurrent())return;
    financeStableAccounts.value=Array.isArray(options?.accounts)?options.accounts:[];
+   ledgerOptions.value.categories=(Array.isArray(options?.categories)?options.categories:[])
+     .filter(c=>c.entry_type===candidateDraft.entry_type)
+     .map(c=>({value:c.value,label:c.label}));
+   if(financeStableAccounts.value.length===1&&!candidateDraft.account_id){
+     candidateDraft.account_id=financeStableAccounts.value[0].account_id;
+     chooseFinanceStableAccount();
+   }
+   if(!ledgerOptions.value.categories.length)
+     financeStableAccountsError.value='记账本尚未返回可核验的分类，请不要手工猜测';
   }catch(e){
    if(!stillCurrent())return;
-   financeStableAccountsError.value='家計簿账户无法验证，请检查本人账户设置';
+   financeStableAccountsError.value='无法连接记账本的已验证支付方式及分类，请稍后重试';
   }
  }
  sheet.value='candidate';integrationConfigured.value=!candidateApprovalRequired.value&&d.available&&
@@ -1501,10 +1510,10 @@ async function commitApprovedCandidate(){
   problem(new Error('请选择 SBI 资金实际生效日'));busy.value=false;return;
  }
  if(!resumeApproval&&body.kind==='finance'&&memberApproval&&
-   (!String(body.category||'').trim()||
+   (!ledgerOptions.value.categories.some(x=>x.value===body.category)||
      !financeStableAccounts.value.some(x=>x.account_id===body.account_id&&
       x.label===body.payment_source))){
-  problem(new Error('请选择经过家計簿验证的本人金融账户与分类，不能只填写名称'));
+  problem(new Error('请选择记账本数据库里的分类及本人支付方式'));
   busy.value=false;return;
  }
  if(!resumeApproval&&body.kind==='finance'&&!memberApproval&&!candidatePersonalTransfer.value&&
@@ -2190,9 +2199,9 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
-        <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">申请分类（管理员批准后仍需账本核验）<input v-model="candidateDraft.category" maxlength="80" placeholder="填写家計簿分类" /></label>
+        <div v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateApprovalPrepared||candidateApprovalSubmitted" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
-        <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">本人金融账户（稳定账户 ID）<select v-model="candidateDraft.account_id" :disabled="candidateApprovalPrepared||candidateApprovalSubmitted||candidateDraft.entry_type==='transfer'" @change="chooseFinanceStableAccount"><option value="">请选择已验证账户</option><option v-for="account in financeStableAccounts" :key="account.account_id" :value="account.account_id">{{account.label}} · {{account.account_id.slice(-6)}}</option></select></label>
+        <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">家計簿本人支付方式<select v-model="candidateDraft.account_id" :disabled="candidateApprovalPrepared||candidateApprovalSubmitted||candidateDraft.entry_type==='transfer'" @change="chooseFinanceStableAccount"><option value="">请选择支付方式</option><option v-for="account in financeStableAccounts" :key="account.account_id" :value="account.account_id">{{account.label}}</option></select></label>
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&financeStableAccountsError" class="fine-print" role="status">{{financeStableAccountsError}}</p>
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&candidateDraft.entry_type==='transfer'" class="fine-print">SBI 等非现金业务需要独立审批执行器，不能使用现金账目代替。</p>
         <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
