@@ -430,209 +430,34 @@ test('HomeFlow identity mismatch cannot read private document list',async()=>{
 });
 
 
-test('member document review requests retain an immutable private payload and create only signed HomeFlow pending approval',async()=>{
+test('personal vocabulary proposal never creates family approval or shared mutation',async()=>{
  const f=await setup();
  try{
-  const owner=await f.start({oldSession:true});
-  assert.equal((await f.finish(owner)).status,200);
-  f.state.hfUser=memberId;f.state.hfRole='member';f.state.nickname='家庭成员';
-  const flow=await f.start();
-  const signedIn=await f.finish(flow);
-  assert.equal(signedIn.status,200);
-  const cookie=signedIn.headers.getSetCookie().find(x=>x.startsWith('__Host-da_session=')).split(';')[0];
-  const me=await worker.fetch(new Request(app+'/api/me',{headers:{Cookie:cookie}}),f.env,{});
-  assert.equal(me.status,200);
-  const auth=await me.json();
-  const localMember=auth.user.id,csrf=auth.csrf_token;
-  const doc='member-private-doc',candidate='c'.repeat(32);
+  const linked=await f.finish(await f.start({oldSession:true}));
+  assert.equal(linked.status,200);
+  f.state.hfUser=memberId;f.state.hfRole='member';f.state.nickname='鸡毛';
+  const signed=await f.finish(await f.start());
+  assert.equal(signed.status,200);
+  const cookie=signed.headers.getSetCookie().find(x=>x.startsWith('__Host-da_session=')).split(';')[0];
+  const memberMe=await (await worker.fetch(new Request(app+'/api/me',{headers:{Cookie:cookie}}),f.env,{})).json();
+  const id='f'.repeat(32);
   f.sql.prepare(`INSERT INTO documents
-   (id,owner_id,household_id,visibility,title,created_at,updated_at)
-   VALUES(?,?,?,'private','Private study',?,?)`)
-   .run(doc,localMember,'local-hh',now(),now());
+    (id,owner_id,household_id,title,lifecycle,visibility,version,created_at,updated_at)
+    VALUES(?,?,?,'个人学习','active','private',1,?,?)`)
+    .run('b'.repeat(32),memberMe.user.id,'local-hh',now(),now());
   f.sql.prepare(`INSERT INTO action_candidates
-   (id,document_id,candidate_kind,payload_json,created_at,updated_at)
-   VALUES(?,?,'vocabulary',?,?,?)`).run(candidate,doc,
-    JSON.stringify({term:'確認',reading:'かくにん',meaning_zh:'确认'}),now(),now());
-  f.env.DOCUMENT_APPROVAL_SUBMISSION_ENABLED='true';
-  f.env.DOCUMENT_APPROVAL_SUBMISSION_SECRET='d'.repeat(64);
-  f.env.DOCUMENT_INTENT_ENCRYPTION_KEY='e'.repeat(64);
-  const original=f.env.HOMEFLOW_BRIDGE_SERVICE;
-  let submissions=0,lastWire=null,bridgeCalls=0,loseOnceFor=null,liveStatus='pending',statusCalls=0,statusOffline=false,statusTamper=false;
-  f.env.HOMEFLOW_BRIDGE_SERVICE={fetch:async(request)=>{
-   const url=new URL(request.url);
-   if(url.pathname==='/api/internal/approvals/document-submit'){
-    submissions++;
-    assert.equal(request.headers.get('origin'),null);
-    assert.equal(request.headers.get('cookie'),null);
-    assert.equal(request.headers.get('authorization'),null);
-    assert.equal(request.headers.get('x-approval-client'),'jp-document-assistant');
-    const raw=await request.text();
-    const stamp=request.headers.get('x-approval-timestamp');
-    const signature=createHmac('sha256',Buffer.from('d'.repeat(64),'hex'))
-      .update('jp-document-assistant\n'+stamp+'\n'+raw).digest('hex');
-    assert.equal(request.headers.get('x-approval-signature'),signature);
-    const body=JSON.parse(raw);
-    assert.deepEqual(Object.keys(body).sort(),[
-     'household_id','payload_sha256','requester_user_id','resource_id','target_app']);
-    assert.equal(body.requester_user_id,memberId);
-    assert.equal(body.household_id,'primary');
-    assert.ok([candidate,'e'.repeat(32)].includes(body.resource_id));
-    assert.equal(body.target_app,'it-study-platform');
-    assert.match(body.payload_sha256,/^[a-f0-9]{64}$/);
-    assert.doesNotMatch(raw,/確認|Private study|确认|かくにん/);
-    lastWire=body;
-    if(loseOnceFor===body.resource_id){loseOnceFor=null;throw Error('lost HomeFlow response');}
-    return Response.json({ok:true,approval_id:body.resource_id===candidate?
-     '55555555-5555-4555-8555-555555555555':'66666666-6666-4666-8666-666666666666',
-     status:'pending',...body,replayed:submissions>1,
-     applied:false,target_changed:false});
-   }
-   if(url.pathname==='/api/internal/approvals/document-status'){
-    statusCalls++;
-    assert.equal(request.headers.get('cookie'),null);
-    assert.equal(request.headers.get('origin'),null);
-    assert.equal(request.headers.get('authorization'),null);
-    const raw=await request.text(),stamp=request.headers.get('x-approval-timestamp');
-    const expected=createHmac('sha256',Buffer.from('d'.repeat(64),'hex'))
-      .update('jp-document-assistant:status\n'+stamp+'\n'+raw).digest('hex');
-    assert.equal(request.headers.get('x-approval-signature'),expected);
-    const body=JSON.parse(raw);
-    assert.deepEqual(Object.keys(body).sort(),[
-     'approval_id','household_id','payload_sha256','requester_user_id','resource_id','target_app']);
-    assert.equal(body.household_id,'primary');
-    assert.equal(body.requester_user_id,memberId);
-    assert.equal(body.target_app,'it-study-platform');
-    assert.equal(body.resource_id,candidate);
-    assert.equal(body.payload_sha256,lastWire.payload_sha256);
-    assert.doesNotMatch(raw,/確認|Private study|确认|かくにん/);
-    if(statusOffline)throw Error('HomeFlow unavailable');
-    return Response.json({ok:true,...body,status:liveStatus,version:2,
-      reviewed_at:liveStatus==='pending'?null:Date.now(),
-      applied:false,target_changed:false,
-      ...(statusTamper?{payload_sha256:'f'.repeat(64)}:{})});
-   }
-   bridgeCalls++;
-   return original.fetch(request);
-  }};
-  const post=async(payload={confirm:'CONFIRM_STUDY',privacy_confirmed:true,
-   redacted_term:'確認'},resource=candidate)=>worker.fetch(new Request(
-   app+'/api/candidates/'+resource+'/request-approval',{
-    method:'POST',headers:{Origin:app,Cookie:cookie,'X-CSRF-Token':csrf,
-     'Content-Type':'application/json'},body:JSON.stringify(payload)
-   }),f.env,{});
-  delete f.env.DOCUMENT_INTENT_ENCRYPTION_KEY;
-  assert.equal((await post()).status,503,'no encryption key must fail before snapshot or remote submission');
+    (id,document_id,candidate_kind,payload_json,created_at,updated_at)
+    VALUES(?,?,'vocabulary',?,?,?)`)
+    .run(id,'b'.repeat(32),JSON.stringify({term:'記録',meaning_zh:'记录'}),now(),now());
+  const response=await worker.fetch(new Request(app+'/api/candidates/'+id+'/request-approval',{
+    method:'POST',headers:{Origin:app,Cookie:cookie,'Content-Type':'application/json',
+      'X-CSRF-Token':memberMe.csrf_token},
+    body:JSON.stringify({confirm:'CONFIRM_STUDY',privacy_confirmed:true})
+  }),f.env,{});
+  assert.equal(response.status,409);
+  assert.equal((await response.json()).code,'PERSONAL_SYNC_NO_APPROVAL');
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,0);
-  assert.equal(submissions,0);
-  f.env.DOCUMENT_INTENT_ENCRYPTION_KEY='e'.repeat(64);
-  const first=await post();
-  assert.equal(first.status,200,await first.clone().text());
-  const created=await first.json();
-  assert.equal(created.approval_status,'pending');
-  assert.equal(created.approval_submitted,true);
-  assert.equal(created.applied,false);
-  assert.equal(created.target_changed,false);
-  const row=f.sql.prepare('SELECT * FROM document_member_sync_intents').get();
-  assert.equal(row.local_user_id,localMember);
-  assert.equal(row.homeflow_user_id,memberId);
-  assert.equal(row.homeflow_household_id,'primary');
-  assert.equal(row.target_app,'it-study-platform');
-  assert.equal(row.payload_sha256,lastWire.payload_sha256);
-  assert.ok(!JSON.stringify(row).includes('確認'),'snapshot plaintext is not persisted');
-  assert.ok((await openDocumentIntent(f.env,row)).includes('確認'));
-  await assert.rejects(openDocumentIntent({...f.env,DOCUMENT_INTENT_ENCRYPTION_KEY:'f'.repeat(64)},row));
-  await assert.rejects(openDocumentIntent(f.env,{...row,homeflow_user_id:ownerId}));
-  await assert.rejects(openDocumentIntent(f.env,{...row,payload_cipher:row.payload_cipher.slice(0,-4)+'AAAA'}));
-  assert.equal(row.approval_id,created.approval_id);
-  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
-  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,1);
-  const replay=await post();
-  assert.equal(replay.status,200);
-  assert.equal((await replay.json()).approval_id,created.approval_id);
-  assert.equal(submissions,2,'retry reuses same immutable candidate and hash');
-  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM audit_events WHERE kind='document_sync_approval_submitted'").get().n,1);
-  assert.equal((await post({confirm:'CONFIRM_STUDY',privacy_confirmed:true,
-   redacted_term:'変更'})).status,409);
-  assert.equal(submissions,2,'conflicting payload rejected before any remote request');
-  const status=await worker.fetch(new Request(
-   app+'/api/candidates/'+candidate+'/approval',{headers:{Cookie:cookie}}),f.env,{});
-  assert.equal(status.status,200,await status.clone().text());
-  const pendingResult=await status.json();
-  assert.equal(pendingResult.approval_id,created.approval_id);
-  assert.equal(pendingResult.approval_status,'pending');
-  assert.equal(pendingResult.approval_checked,true);
-  assert.equal(pendingResult.applied,false);
-  assert.equal(pendingResult.target_changed,false);
-  liveStatus='approved';
-  const getStatus=()=>worker.fetch(new Request(
-   app+'/api/candidates/'+candidate+'/approval',{headers:{Cookie:cookie}}),f.env,{});
-  const approved=await getStatus();
-  assert.equal(approved.status,200);
-  const approvedResult=await approved.json();
-  assert.equal(approvedResult.approval_status,'approved');
-  assert.equal(approvedResult.applied,false,'review approval is not a target write');
-  assert.equal(approvedResult.target_changed,false);
-  liveStatus='rejected';
-  const rejected=await getStatus();
-  assert.equal(rejected.status,200);
-  assert.equal((await rejected.json()).approval_status,'rejected');
-  statusTamper=true;
-  const invalid=await getStatus();
-  assert.equal(invalid.status,503);
-  assert.equal((await invalid.json()).code,'APPROVAL_STATUS_UNCONFIRMED');
-  statusTamper=false;
-  statusOffline=true;
-  const offline=await getStatus();
-  assert.equal(offline.status,503);
-  assert.equal((await offline.json()).code,'APPROVAL_STATUS_UNAVAILABLE');
-  statusOffline=false;liveStatus='pending';
-  assert.equal(statusCalls,5);
-  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
-  // The immutable approval refers to the old source version. Editing the
-  // candidate must not show an old approval as valid for the new content,
-  // re-submit it, or even contact HomeFlow for a misleading status.
-  f.sql.prepare('UPDATE action_candidates SET updated_at=? WHERE id=?')
-   .run('2099-01-01T00:00:00.000Z',candidate);
-  const stale=await getStatus();
-  assert.equal(stale.status,409);
-  assert.equal((await stale.json()).code,'APPROVAL_SOURCE_CHANGED');
-  assert.equal(statusCalls,5,'stale approval never reaches the remote status bridge');
-  const staleResubmit=await post();
-  assert.equal(staleResubmit.status,409);
-  assert.equal((await staleResubmit.json()).code,'APPROVAL_SOURCE_CHANGED');
-  assert.equal(submissions,2,'changed source does not replay old HomeFlow intent');
-  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
-  // Network reply loss creates a private 'prepared' record, not a second
-  // approval. A deliberate resume uses exactly the original frozen snapshot.
-  const second='e'.repeat(32);
-  f.sql.prepare(`INSERT INTO action_candidates
-   (id,document_id,candidate_kind,payload_json,created_at,updated_at)
-   VALUES(?,?,'vocabulary',?,?,?)`).run(second,doc,
-    JSON.stringify({term:'照会',meaning_zh:'查询'}),now(),now());
-  loseOnceFor=second;
-  const firstLost=await post({confirm:'CONFIRM_STUDY',privacy_confirmed:true,
-   redacted_term:'照会'},second);
-  assert.equal(firstLost.status,503);
-  assert.equal((await firstLost.json()).code,'APPROVAL_SUBMISSION_UNCONFIRMED');
-  const frozen=f.sql.prepare('SELECT * FROM document_member_sync_intents WHERE candidate_id=?').get(second);
-  assert.equal(frozen.status,'prepared');
-  assert.notEqual(frozen.payload_iv,row.payload_iv,'each intent has its own random nonce');
-  assert.equal(frozen.approval_id,null);
-  const recovery=await post({confirm:'CONFIRM_STUDY',resume_existing:true},second);
-  assert.equal(recovery.status,200,await recovery.clone().text());
-  const recovered=await recovery.json();
-  assert.equal(recovered.approval_submitted,true);
-  assert.equal(recovered.applied,false);
-  assert.equal(recovered.target_changed,false);
-  assert.equal(f.sql.prepare('SELECT payload_cipher FROM document_member_sync_intents WHERE candidate_id=?').get(second).payload_cipher,
-   frozen.payload_cipher);
-  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_sync_intents').get().n,2);
-  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
-  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM audit_events WHERE kind='document_sync_approval_submitted'").get().n,2);
-  assert.equal(bridgeCalls>=2,true,'member identity was live-introspected for each request');
-  assert.throws(()=>f.sql.prepare('UPDATE document_member_sync_intents SET payload_sha256=?').run('f'.repeat(64)),/DOCUMENT_APPROVAL_INTENT_IMMUTABLE/);
-  assert.throws(()=>f.sql.prepare('DELETE FROM document_member_sync_intents').run(),/DOCUMENT_APPROVAL_INTENT_NO_DELETE/);
- }finally{f.sql.close();}
+ }finally{f.sql.close()}
 });
 
 test('document member approval remains fail-closed for legacy sessions, missing CSRF and unconfigured backend',async()=>{

@@ -12,7 +12,9 @@ test('document collaborator can request review only as the verified SSO member, 
  assert.match(preview,/approvalActionEnabled=approvalRequired&&p.auth_source==='homeflow'/);
  assert.match(preview,/approval_submitted:preparedApproval\?\.status==='submitted'/);
  assert.match(preview,/approval_prepared:preparedApproval\?\.status==='prepared'/);
- assert.match(preview,/if\(p.role!=='owner'\)[\s\S]*?APPROVAL_REQUIRED/);
+ assert.match(preview,/target==='kakebo'/);
+ assert.match(preview,/p\.auth_source!=='homeflow'/);
+ assert.match(preview,/PERSONAL_SYNC_NO_APPROVAL|个人联动需使用 HomeFlow/);
  assert.match(route,/if\(method==='POST'&&candidate\[2\]==='request-approval'\)return requestDocumentMemberApproval/);
  assert.match(route,/if\(method==='GET'&&candidate\[2\]==='approval'\)return documentMemberApprovalStatus/);
  assert.match(intent,/checkedMember\(p\)/);

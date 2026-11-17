@@ -3074,7 +3074,7 @@ test('Stage E shared document does not expose the owner private integration cand
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,1);
 });
 
-test('Stage D/E real member session cannot bypass missing HomeFlow approval to directly sync any target',async()=>{
+test('household finance remains approval-gated for members while personal destinations are separate',async()=>{
   const env=makeEnv(),owner=await boot(env);
   const invite=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
     data:{invitee_email:'approval-member@example.com'}});
@@ -3122,7 +3122,7 @@ test('Stage D/E real member session cannot bypass missing HomeFlow approval to d
     data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true}});
   assert.equal(attempt.response.status,409,JSON.stringify(attempt.data));
   assert.equal(attempt.data.code,'APPROVAL_REQUIRED');
-  assert.match(attempt.data.message,/未提交申请/);
+  assert.match(attempt.data.message,/家庭账本明细变更需要管理员审批/);
   assert.equal(calls,0,'no external target write for a non-approved member');
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,original,
     'do not create a sending or succeeded journal entry');
