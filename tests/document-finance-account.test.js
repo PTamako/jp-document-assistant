@@ -88,3 +88,15 @@ test('signed stable account list keeps duplicate labels distinct and rejects own
  await assert.rejects(listDocumentFinanceAccounts(env,{...p,role:'owner'}),
   e=>e.code==='HOMEFLOW_MEMBER_REQUIRED');
 });
+
+test('existing paired finance execution secret supports account proof without new production secret',async()=>{
+ const f=setup();
+ f.env.DOCUMENT_FINANCE_TARGET_SECRET=f.env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET;
+ delete f.env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET;
+ const proof=await verifiedDocumentFinanceAccount(f.env,principal,id,'expense','现金');
+ assert.equal(proof.account_id,id);
+ assert.equal(f.getCalls(),1);
+ delete f.env.DOCUMENT_FINANCE_TARGET_SECRET;
+ await assert.rejects(verifiedDocumentFinanceAccount(f.env,principal,id,'expense','现金'),
+  e=>e.code==='ACCOUNT_PROOF_UNAVAILABLE');
+});
