@@ -101,7 +101,8 @@ async function requireSession(request,env){
   }else if(session.auth_source==='legacy'){
     // Once the real HomeFlow household owner has an active identity link,
     // legacy sessions must not bypass HomeFlow logout or account disable.
-    if(homeflowSsoEnabled(env,new URL(env.DA_PUBLIC_ORIGIN))){
+    if(env.HOMEFLOW_SSO_ENABLED==='true' && env.DA_PUBLIC_ORIGIN &&
+       homeflowSsoEnabled(env,new URL(env.DA_PUBLIC_ORIGIN))){
       const linked=await dbFirst(env.DB,`SELECT 1 FROM homeflow_identity_links l
         JOIN users u ON u.id=l.local_user_id
         WHERE l.state='active' AND u.role='owner' AND u.status='active' LIMIT 1`);
