@@ -9,7 +9,15 @@ const first=(db,s,...a)=>db.prepare(s).bind(...a).first();
 const run=(db,s,...a)=>db.prepare(s).bind(...a).run();
 const trim=(s,max)=>typeof s==='string'?s.trim().slice(0,max):'';
 const safeVal=(v)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0;
-function authorizedMapping(env,userId,target){
+function authorizedMapping(env,user,target){
+  // The verified HomeFlow identity from requireSession is authoritative for
+  // private task and study sync. Static maps remain only for legacy owner and
+  // Kakeibo bridges. Never accept a browser-provided target actor.
+  if(typeof user==='object'&&user&&['homeflow','zhixue'].includes(target)&&
+     user.auth_source==='homeflow'&&user.homeflow_user_id&&
+     user.homeflow_household_id&&['owner','member'].includes(user.role))
+    return user.homeflow_user_id;
+  const userId=typeof user==='object'?user?.user_id:user;
   let all={};try{all=JSON.parse(env.BRIDGE_USER_MAP||'{}');}catch{}
   const id=all?.[userId]?.[target];
   return typeof id==='string'&&id.length>=1&&id.length<=100?id:null;
@@ -155,7 +163,7 @@ export function validatedPayload(target,item,approved,body){
   bad('不支持的联动目标');
 }
 export async function getBridgeStatus(env,p){
-  return json({targets:Object.fromEntries(['kakebo','homeflow','zhixue'].map(t=>[t,{configured:!!config(env,t),account_mapping_ready:!!authorizedMapping(env,p.user_id,t),requires_explicit_confirmation:true,identity_mapping:'server_approved'}]))});
+  return json({targets:Object.fromEntries(['kakebo','homeflow','zhixue'].map(t=>[t,{configured:!!config(env,t),account_mapping_ready:!!authorizedMapping(env,p,t),requires_explicit_confirmation:true,identity_mapping:'server_approved'}]))});
 }
 // Load only live catalogue labels; do not expose account numbers, balances,
 // transaction history, or the identity mapping through this endpoint.
@@ -232,11 +240,12 @@ export async function integrationStatus(env,p,id){
 }
 
 /** Read a signed, household-scoped assignee list; never expose other households. */
-export async function homeflowMemberOptions(env,userId,candidateId){
-  const dest=config(env,'homeflow'),actor=authorizedMapping(env,userId,'homeflow');
+export async function homeflowMemberOptions(env,user,candidateId){
+  const dest=config(env,'homeflow'),actor=authorizedMapping(env,user,'homeflow');
   if(!dest||!actor)return {error:'HomeFlow 账号尚未完成联动授权'};
   const key=`jda:homeflow:${candidateId}`;
   const raw=JSON.stringify({source:'jp-document-assistant',actor_user_id:actor,
+    ...(typeof user==='object'&&user?.auth_source==='homeflow'?{identity_source:'homeflow_sso'}:{}),
     idempotency_key:key,payload:{operation:'members'}});
   const stamp=String(Date.now());
   try{
@@ -265,10 +274,9 @@ export async function candidatePreview(request,env,p,id){
   const payload=JSON.parse(item.payload_json);
   const verifiedMerchant=fields.get('merchant')||payload.merchant;
   const entryType=target==='kakebo'?ledgerEntryType(payload,verifiedMerchant):null;
-  // Member-initiated writes require a separately verified HomeFlow approval.
-  // Until that executor is implemented, never look up private target accounts
-  // or expose an enabled "sync" button merely because a bridge is configured.
-  const approvalRequired=p.role!=='owner';
+  // Only Kakeibo family-ledger mutations require a household approval.
+  // Private tasks and study cards go straight to the verified person's account.
+  const approvalRequired=p.role!=='owner'&&target==='kakebo';
   const approvalActionEnabled=approvalRequired&&p.auth_source==='homeflow'&&
     !!p.homeflow_user_id&&!!p.homeflow_household_id&&
     env.HOMEFLOW_SSO_ENABLED==='true'&&
@@ -283,7 +291,7 @@ export async function candidatePreview(request,env,p,id){
   const picker=!approvalRequired&&target==='kakebo'
     ?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
   const members=!approvalRequired&&target==='homeflow'
-    ?await homeflowMemberOptions(env,p.user_id,id):null;
+    ?await homeflowMemberOptions(env,p,id):null;
   return json({candidate_id:id,target,kind:item.candidate_kind,payload,entry_type:entryType,ledger_options:picker?.data||null,
     ledger_options_error:picker?.error||null,
     homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
@@ -296,7 +304,7 @@ export async function candidatePreview(request,env,p,id){
     approval_status:preparedApproval?.status==='submitted'?'submitted_status_unknown':
       preparedApproval?.status==='prepared'?'prepared_unconfirmed':'not_submitted',
     applied:false,
-    account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p.user_id,target),
+    account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p,target),
     note:approvalRequired
       ?preparedApproval?.status==='submitted'
         ?'已提交 HomeFlow 审批；尚未同步到目标应用，审批结果请到 HomeFlow 查看。'
@@ -311,13 +319,13 @@ export async function commitCandidate(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
   const target=TARGETS[item.candidate_kind];
-  // Hard server-side gate: neither a legacy member session nor a new SSO
-  // member may write household finance, tasks, or private study targets
-  // without a VERIFIED HomeFlow approval and scoped target executor.
-  // Do not create an integration_link (or claim a remote write) here.
-  if(p.role!=='owner')
+  // Only household ledger changes require administrator review. Personal
+  // tasks, vocabulary, and sentences can be saved directly for their verified
+  // HomeFlow owner/member. Legacy member sessions remain blocked.
+  if(p.role!=='owner'&&(target==='kakebo'||p.auth_source!=='homeflow'||
+     !p.homeflow_user_id||!p.homeflow_household_id))
     return failure('APPROVAL_REQUIRED',
-      '普通成员跨应用同步需要 HomeFlow 审批；当前未提交申请，也未写入目标 App。',409);
+      '家庭账本明细变更需要管理员审批；个人联动需使用 HomeFlow 统一登录。',409);
   const data=await readJson(request,9000);
   if(data.confirm!==CONFIRMATIONS[item.candidate_kind])bad('需要明确二次确认','CONFIRM_REQUIRED',409);
   const supplied=request.headers.get('Idempotency-Key');
@@ -330,10 +338,13 @@ export async function commitCandidate(request,env,p,id){
   if(!dest)return failure('BRIDGE_NOT_CONFIGURED','该 App 的安全联动服务尚未配置；没有写入目标 App',503);
   const fields=await checkedFields(env,item.document_id);
   const payload=validatedPayload(target,item,fields,data);
-  const remoteUser=authorizedMapping(env,p.user_id,target);
+  const remoteUser=authorizedMapping(env,p,target);
   if(!remoteUser)return failure('ACCOUNT_NOT_LINKED','尚未完成目标账号的独立授权和身份映射；没有发送联动',403);
   const key=existing?.idempotency_key||`jda:${target}:${id}`;
-  const requestPayload={source:'jp-document-assistant',source_document_id:item.document_id,source_candidate_id:id,actor_user_id:remoteUser,idempotency_key:key,payload};
+  const requestPayload={source:'jp-document-assistant',source_document_id:item.document_id,source_candidate_id:id,
+    actor_user_id:remoteUser,idempotency_key:key,
+    ...((target==='homeflow'||target==='zhixue')&&p.auth_source==='homeflow'?
+      {identity_source:'homeflow_sso'}:{}),payload};
   const raw=JSON.stringify(requestPayload),fingerprint=await hashString(raw),timestamp=String(Date.now());
   const staleBefore=new Date(Date.now()-120000).toISOString();
   // Changed payloads are prohibited until the owner explicitly confirms the
