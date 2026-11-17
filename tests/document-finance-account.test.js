@@ -76,13 +76,16 @@ test('signed stable account list keeps duplicate labels distinct and rejects own
    assert.deepEqual(JSON.parse(raw),{household_id:'primary',requester_user_id:member});
    return Response.json({ok:true,verified:true,applied:false,accounts:[
     {account_id:'a'.repeat(32),label:'现金',account_kind:'cash',account_version:1},
-    {account_id:'d'.repeat(32),label:'现金',account_kind:'cash',account_version:2}]});
+    {account_id:'d'.repeat(32),label:'现金',account_kind:'cash',account_version:2}],
+    categories:[{value:'餐饮',label:'外食',entry_type:'expense'},
+      {value:'給与',label:'給与',entry_type:'income'}]});
   }}
  };
  const res=await listDocumentFinanceAccounts(env,p);
  assert.equal(res.status,200);
  const rows=(await res.json()).accounts;
  assert.equal(rows.length,2);
+ assert.equal((await listDocumentFinanceAccounts(env,p)).status,200);
  assert.equal(rows[0].label,rows[1].label);
  assert.notEqual(rows[0].account_id,rows[1].account_id);
  await assert.rejects(listDocumentFinanceAccounts(env,{...p,role:'owner'}),
