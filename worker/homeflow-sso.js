@@ -7,7 +7,9 @@ import {randomToken,hashString,hmacHex,safeEqual,parseCookie,cookieForSession,is
 // before four production backups, the identity-link migration and PWA audit.
 const CLIENT_ID='jp-document-assistant';
 const PENDING_MS=5*60*1000;
-const SESSION_MS=15*60*1000;
+// Mirror HomeFlow's original 14-day login window; every private request
+// still introspects the backend-sealed assertion against the original session.
+const SESSION_MS=30*86400000;
 const enc=new TextEncoder();
 const dbFirst=(db,sql,...values)=>db.prepare(sql).bind(...values).first();
 const dbRun=(db,sql,...values)=>db.prepare(sql).bind(...values).run();
@@ -135,7 +137,7 @@ async function verifyHomeFlow(env,code,verifier){
     !/^[a-f0-9]{64}$/.test(token.session_assertion||'')||
     !Number.isInteger(token.session_assertion_expires_in)||
     token.session_assertion_expires_in<1||
-    token.session_assertion_expires_in>900)return null;
+    token.session_assertion_expires_in>SESSION_MS/1000)return null;
  const infoReq=new Request(new URL('/api/oauth/userinfo',env.HOMEFLOW_OAUTH_ORIGIN),{
    method:'GET',redirect:'manual',
    headers:{Authorization:'Bearer '+token.access_token,Accept:'application/json'}

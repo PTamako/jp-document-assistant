@@ -93,7 +93,7 @@ async function setup(){
        .replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
      assert.equal(b64,state.challenge);
      return Response.json({access_token:'e'.repeat(64),token_type:'Bearer',expires_in:180,
-       session_assertion:'d'.repeat(64),session_assertion_expires_in:900});
+       session_assertion:'d'.repeat(64),session_assertion_expires_in:30*86400});
    }
    if(url.pathname==='/api/oauth/userinfo'){
      assert.equal(request.headers.get('Authorization'),'Bearer '+'e'.repeat(64));
@@ -299,7 +299,7 @@ test('changed audience, HomeFlow household or role cannot take over prior local 
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM users').get().n,1);
  }finally{f.sql.close();}
 });
-test('PKCE verifier and state are sealed/hashed at rest; SSO local cookie expires in 15 minutes',async()=>{
+test('PKCE verifier and state are sealed/hashed at rest; SSO local cookie persists for 30 days, bounded by HomeFlow original login',async()=>{
  const f=await setup();
  try{
    const flow=await f.start({oldSession:true});
@@ -316,7 +316,9 @@ test('PKCE verifier and state are sealed/hashed at rest; SSO local cookie expire
    assert.ok(session);
    const lifetime=f.sql.prepare('SELECT expires_at,created_at FROM sessions WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get('local-owner');
    assert.ok(lifetime);
-   assert.ok(response.headers.getSetCookie().some(x=>x.includes('Max-Age=900')));
+   assert.ok(response.headers.getSetCookie().some(x=>x.includes('Max-Age=2592000')));
+   assert.ok(new Date(lifetime.expires_at).getTime()-new Date(lifetime.created_at).getTime()>=29*86400000,
+     'The original HomeFlow session can be resumed without a 15-minute relogin');
  }finally{f.sql.close();}
 });
 
