@@ -216,6 +216,8 @@ export async function requestDocumentMemberApproval(request,env,p,id){
  if(!documentMemberApprovalReady(env))
   return failure('DOCUMENT_APPROVAL_DISABLED','文书审批服务暂未启用，没有提交申请或写入目标应用',503);
  const item=await candidate(env,p,id);
+ if(item.candidate_kind!=='finance')
+  bad('个人待办、生词和句子直接同步本人账号，不需要家庭审批','PERSONAL_SYNC_NO_APPROVAL',409);
  const body=await readJson(request,4500);
  if(!body||typeof body!=='object'||Array.isArray(body)||
   body.confirm!==kinds[item.candidate_kind].confirm)
