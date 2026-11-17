@@ -710,6 +710,13 @@ test('legacy login is disabled once the HomeFlow owner is linked, without passwo
    }),f.env,{});
    assert.equal(after.status,409);
    assert.equal((await after.json()).code,'HOMEFLOW_LOGIN_REQUIRED');
+   // Bad or missing SSO credentials must never revive the legacy route.
+   delete f.env.HOMEFLOW_SSO_ENCRYPTION_KEY;
+   const unconfigured=await worker.fetch(new Request(app+'/api/auth/login',{
+     method:'POST',headers:{Origin:app,'Content-Type':'application/json'},
+     body:JSON.stringify({email:'not-registered@example.invalid',password:'wrong'})
+   }),f.env,{});
+   assert.equal(unconfigured.status,409,'SSO misconfiguration still fails closed');
    const old=await worker.fetch(new Request(app+'/api/me',{
      headers:{Cookie:'__Host-da_session='+oldCookie}
    }),f.env,{});
