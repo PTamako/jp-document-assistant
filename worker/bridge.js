@@ -276,7 +276,11 @@ export async function candidatePreview(request,env,p,id){
   const entryType=target==='kakebo'?ledgerEntryType(payload,verifiedMerchant):null;
   // Only Kakeibo family-ledger mutations require a household approval.
   // Private tasks and study cards go straight to the verified person's account.
-  const approvalRequired=p.role!=='owner'&&target==='kakebo';
+  // Member SBI/asset movements are not family income/expense approvals.
+ // They require a separately verified personal-asset executor; the legacy
+ // household entry bridge must never silently take this path.
+ const memberPersonalTransfer=p.role!=='owner'&&target==='kakebo'&&entryType==='transfer';
+ const approvalRequired=p.role!=='owner'&&target==='kakebo'&&!memberPersonalTransfer;
   const approvalActionEnabled=approvalRequired&&p.auth_source==='homeflow'&&
     !!p.homeflow_user_id&&!!p.homeflow_household_id&&
     env.HOMEFLOW_SSO_ENABLED==='true'&&
@@ -288,15 +292,16 @@ export async function candidatePreview(request,env,p,id){
     typeof env.HOMEFLOW_BRIDGE_SERVICE?.fetch==='function';
   const preparedApproval=approvalActionEnabled?
     await first(env.DB,'SELECT status,approval_id FROM document_member_sync_intents WHERE candidate_id=?',id):null;
-  const picker=!approvalRequired&&target==='kakebo'
+  const picker=!approvalRequired&&!memberPersonalTransfer&&target==='kakebo'
     ?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
   const members=!approvalRequired&&target==='homeflow'
     ?await homeflowMemberOptions(env,p,id):null;
   return json({candidate_id:id,target,kind:item.candidate_kind,payload,entry_type:entryType,ledger_options:picker?.data||null,
-    ledger_options_error:picker?.error||null,
+    ledger_options_error:memberPersonalTransfer?
+      '资产转移不属于家庭收入／支出审批。当前文书助手没有个人 SBI 资金转移的安全执行器；请在家計簿本人资产页面完成，未自动记账。':picker?.error||null,
     homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
-    integration:link||null,available:!approvalRequired&&!!config(env,target),
+    integration:link||null,available:!approvalRequired&&!memberPersonalTransfer&&!!config(env,target),
     approval_required:approvalRequired,approval_action_enabled:approvalActionEnabled,
     approval_submitted:preparedApproval?.status==='submitted',
     approval_prepared:preparedApproval?.status==='prepared',
@@ -305,7 +310,7 @@ export async function candidatePreview(request,env,p,id){
       preparedApproval?.status==='prepared'?'prepared_unconfirmed':'not_submitted',
     applied:false,
     account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p,target),
-    note:approvalRequired
+    note:memberPersonalTransfer?'个人资产操作无需管理员审批；请在家計簿自行核对与操作，不会通过旧联动直接写家庭账本。':approvalRequired
       ?preparedApproval?.status==='submitted'
         ?'已提交 HomeFlow 审批；尚未同步到目标应用，审批结果请到 HomeFlow 查看。'
         :preparedApproval?.status==='prepared'
@@ -319,6 +324,13 @@ export async function commitCandidate(request,env,p,id){
   const item=await first(env.DB,`SELECT c.*,d.owner_id,d.lifecycle,d.visibility,d.id document_id,d.title FROM action_candidates c JOIN documents d ON d.id=c.document_id WHERE c.id=?`,id);
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
   const target=TARGETS[item.candidate_kind];
+  const verified=target==='kakebo'?await checkedFields(env,item.document_id):null;
+  // No personal SBI transfer can use the legacy owner-ledger bridge.
+  // Keep it outside HomeFlow review while the dedicated target journal is absent.
+  if(p.role!=='owner'&&target==='kakebo'&&
+     ledgerEntryType(JSON.parse(item.payload_json),verified?.get('merchant')||undefined)==='transfer')
+    return failure('PERSONAL_TRANSFER_EXECUTOR_REQUIRED',
+      '个人资产转移无需家庭审批，但文书助手尚无独立的安全执行器；请在家計簿本人资产页面操作，未写入账本。',409);
   // Only household ledger changes require administrator review. Personal
   // tasks, vocabulary, and sentences can be saved directly for their verified
   // HomeFlow owner/member. Legacy member sessions remain blocked.
@@ -336,7 +348,7 @@ export async function commitCandidate(request,env,p,id){
   if(existing?.state==='synced'||existing?.state==='linked_existing')return json({ok:true,already_synced:true,remote_id:existing.remote_id,target});
   const dest=config(env,target);
   if(!dest)return failure('BRIDGE_NOT_CONFIGURED','该 App 的安全联动服务尚未配置；没有写入目标 App',503);
-  const fields=await checkedFields(env,item.document_id);
+  const fields=verified||await checkedFields(env,item.document_id);
   const payload=validatedPayload(target,item,fields,data);
   const remoteUser=authorizedMapping(env,p,target);
   if(!remoteUser)return failure('ACCOUNT_NOT_LINKED','尚未完成目标账号的独立授权和身份映射；没有发送联动',403);

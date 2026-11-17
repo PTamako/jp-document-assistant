@@ -25,7 +25,8 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
   {binding:'HOMEFLOW_BRIDGE_SERVICE',service:'homeflow'},
   {binding:'ZHIXUE_BRIDGE_SERVICE',service:'it-study-platform'},
   {binding:'STUDY_DOCUMENT_EXECUTION_SERVICE',service:'it-study-platform'},
-  {binding:'KAKEIBO_DOCUMENT_FINANCE_SERVICE',service:'kakeibo-homeflow-bridge'}
+  {binding:'KAKEIBO_DOCUMENT_FINANCE_SERVICE',service:'kakeibo-homeflow-bridge'},
+  {binding:'KAKEIBO_DOCUMENT_ACCOUNT_SERVICE',service:'kakeibo-homeflow-bridge'}
  ]);
  assert.doesNotMatch(JSON.stringify(wrangler),/JPDA_BRIDGE_ALLOWED_USER|JPDA_BRIDGE_STUDY_ACTOR_ID|BRIDGE_USER_MAP/);
  assert.equal(wrangler.vars?.R2_BUCKET_NAME,'jp-document-assistant-private');
@@ -37,6 +38,7 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.equal(wrangler.vars?.OCR_APP_UTC_DAILY_LIMIT,'5');
  assert.equal(wrangler.vars?.OCR_SPACE_APP_UTC_DAILY_LIMIT,'20');
  assert.equal(wrangler.vars?.DOCUMENT_TASK_EXECUTION_ENABLED,'true');
+ assert.equal(wrangler.vars?.DOCUMENT_ACCOUNT_VERIFY_ENABLED,'true');
  assert.equal(wrangler.vars?.DOCUMENT_STUDY_EXECUTION_ENABLED,'true');
  assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.
  assert.equal(wrangler.preview_urls,false);
