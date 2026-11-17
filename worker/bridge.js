@@ -2,6 +2,7 @@
 // All requests are authenticated server-to-server and assigned a stable idempotency key.
 import { randomToken, hmacHex, isoNow, hashString } from './security.js';
 import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
+import {personalSbiReady,commitPersonalSbiCandidate,personalSbiReceiptStatus} from './document-personal-sbi.js';
 import { json, bad, readJson, failure } from './http.js';
 const TARGETS={finance:'kakebo',homeflow_task:'homeflow',vocabulary:'zhixue',sentence:'zhixue'};
 const CONFIRMATIONS={finance:'CONFIRM_ACCOUNTING',homeflow_task:'CONFIRM_TASK',vocabulary:'CONFIRM_STUDY',sentence:'CONFIRM_STUDY'};
@@ -230,6 +231,12 @@ export async function integrationStatus(env,p,id){
     return json({ok:true,target,stored_state:link?.state||'not_synced',record_state:'not_synced'});
   if(target!=='kakebo')
     return json({ok:true,target,stored_state:link.state,record_state:'not_checked'});
+  if(link.idempotency_key==='jda:personal-sbi:'+id){
+   const proof=await personalSbiReceiptStatus(env,p,id);
+   if(!proof)return failure('STATUS_UNAVAILABLE','本人 SBI 资产转移回执尚未确认，原记录未改动',503);
+   return json({ok:true,target,stored_state:link.state,record_state:proof.state,
+    needs_attention:proof.state!=='active',remote_id:proof.remote_id});
+  }
   const dest=config(env,'kakebo'),actor=authorizedMapping(env,p.user_id,'kakebo');
   if(!dest||!actor)return failure('STATUS_UNAVAILABLE','家計簿状态暂不可核对，保留原同步记录',503);
   const found=await lookupKakeboIdempotency(dest,{
@@ -279,7 +286,7 @@ export async function candidatePreview(request,env,p,id){
   // Member SBI/asset movements are not family income/expense approvals.
  // They require a separately verified personal-asset executor; the legacy
  // household entry bridge must never silently take this path.
- const memberPersonalTransfer=p.role!=='owner'&&target==='kakebo'&&entryType==='transfer';
+ const memberPersonalTransfer=p.role==='member'&&target==='kakebo'&&entryType==='transfer';
  const approvalRequired=p.role!=='owner'&&target==='kakebo'&&!memberPersonalTransfer;
   const approvalActionEnabled=approvalRequired&&p.auth_source==='homeflow'&&
     !!p.homeflow_user_id&&!!p.homeflow_household_id&&
@@ -296,12 +303,15 @@ export async function candidatePreview(request,env,p,id){
     ?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
   const members=!approvalRequired&&target==='homeflow'
     ?await homeflowMemberOptions(env,p,id):null;
-  return json({candidate_id:id,target,kind:item.candidate_kind,payload,entry_type:entryType,ledger_options:picker?.data||null,
-    ledger_options_error:memberPersonalTransfer?
-      '资产转移不属于家庭收入／支出审批。当前文书助手没有个人 SBI 资金转移的安全执行器；请在家計簿本人资产页面完成，未自动记账。':picker?.error||null,
+  const personalReady=memberPersonalTransfer&&personalSbiReady(env,p);
+  return json({candidate_id:id,target,kind:item.candidate_kind,payload,entry_type:entryType,
+    personal_asset_transfer:memberPersonalTransfer,
+    ledger_options:picker?.data||null,
+    ledger_options_error:memberPersonalTransfer&&!personalReady?
+      '本人 SBI 资产转移执行器暂不可用，未自动记账。':picker?.error||null,
     homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
-    integration:link||null,available:!approvalRequired&&!memberPersonalTransfer&&!!config(env,target),
+    integration:link||null,available:personalReady||(!approvalRequired&&!memberPersonalTransfer&&!!config(env,target)),
     approval_required:approvalRequired,approval_action_enabled:approvalActionEnabled,
     approval_submitted:preparedApproval?.status==='submitted',
     approval_prepared:preparedApproval?.status==='prepared',
@@ -310,7 +320,7 @@ export async function candidatePreview(request,env,p,id){
       preparedApproval?.status==='prepared'?'prepared_unconfirmed':'not_submitted',
     applied:false,
     account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p,target),
-    note:memberPersonalTransfer?'个人资产操作无需管理员审批；请在家計簿自行核对与操作，不会通过旧联动直接写家庭账本。':approvalRequired
+    note:memberPersonalTransfer?'本人确认后记入个人 SBI 资产转移记录，不计收支、不扣卡、不新增基金份额，无需家庭审批。':approvalRequired
       ?preparedApproval?.status==='submitted'
         ?'已提交 HomeFlow 审批；尚未同步到目标应用，审批结果请到 HomeFlow 查看。'
         :preparedApproval?.status==='prepared'
@@ -325,12 +335,11 @@ export async function commitCandidate(request,env,p,id){
   if(!item||item.owner_id!==p.user_id||item.lifecycle!=='active')bad('候选不存在','NOT_FOUND',404);
   const target=TARGETS[item.candidate_kind];
   const verified=target==='kakebo'?await checkedFields(env,item.document_id):null;
-  // No personal SBI transfer can use the legacy owner-ledger bridge.
-  // Keep it outside HomeFlow review while the dedicated target journal is absent.
-  if(p.role!=='owner'&&target==='kakebo'&&
+  // A verified member uses only the dedicated personal SBI journal, NEVER
+  // the legacy household owner-ledger bridge or HomeFlow income/expense review.
+  if(p.role==='member'&&target==='kakebo'&&
      ledgerEntryType(JSON.parse(item.payload_json),verified?.get('merchant')||undefined)==='transfer')
-    return failure('PERSONAL_TRANSFER_EXECUTOR_REQUIRED',
-      '个人资产转移无需家庭审批，但文书助手尚无独立的安全执行器；请在家計簿本人资产页面操作，未写入账本。',409);
+    return commitPersonalSbiCandidate(request,env,p,item,verified);
   // Only household ledger changes require administrator review. Personal
   // tasks, vocabulary, and sentences can be saved directly for their verified
   // HomeFlow owner/member. Legacy member sessions remain blocked.
