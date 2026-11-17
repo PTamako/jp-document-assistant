@@ -1399,7 +1399,7 @@ async function prepareCandidate(item){
  candidateDraft.note=current.value.category==='card_spend'?'':(item.payload?.note||'');
  candidateMerchant.value=item.candidate_kind==='finance'?(item.payload?.merchant||''):'';
  candidateDraft.title=item.payload?.title||current.value.title;
- candidateDraft.visibility=current.value.visibility==='shared'?'household':'private';candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;candidateDraft.task_share_confirmed=false;
+ candidateDraft.visibility='private'; // Personal task by default; sharing requires explicit selection.candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;candidateDraft.task_share_confirmed=false;
  candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||item.payload?.sentence||'';
  // A failed network attempt must reopen with precisely its previously
  // authorized scope and fields, or immutable idempotency rejects the retry.
@@ -2199,8 +2199,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <p v-if="candidateApprovalRequired&&candidateApprovalSubmitted" class="info-note" role="status">{{candidateApprovalMessage}}</p>
         <button v-if="candidateApprovalRequired&&(candidateApprovalSubmitted||candidateApprovalPrepared)" type="button" class="secondary" :disabled="busy||!candidateApprovalReady" @click="checkCandidateApprovalStatus">查询 HomeFlow 审批状态</button>
         <p v-else-if="candidateApprovalRequired&&candidateApprovalPrepared" class="info-note" role="status">上次提交结果不确定。重试时使用首次保存的申请内容，忽略此处后续改动；不会重复创建申请或写入目标应用。</p>
-        <p v-else-if="candidateApprovalRequired&&candidateApprovalReady" class="info-note" role="status">将请求家庭管理员审批。这里只提交申请，不直接记账、建任务或保存生词。</p>
-        <p v-else-if="candidateApprovalRequired" class="info-note" role="status">HomeFlow 管理员审批入口暂未启用，没有提交申请或写入目标应用。</p>
+        <p v-else-if="candidateApprovalRequired&&candidateApprovalReady" class="info-note" role="status">将请求家庭管理员审批。这里只提交家庭账本明细审批申请，不直接记账。</p>
+        <p v-else-if="candidateApprovalRequired" class="info-note" role="status">家庭账本审批入口暂未启用，没有提交申请或写入目标应用。</p>
         <p v-else-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
         <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':candidateApprovalPrepared?'重试原申请':'提交 HomeFlow 审批'):ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
