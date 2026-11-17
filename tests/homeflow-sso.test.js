@@ -409,7 +409,7 @@ test('SSO session requires live HomeFlow proof on every private GET; never legac
   const existing=await worker.fetch(new Request(app+'/api/me',{
     headers:{Cookie:'__Host-da_session='+oldCookie}
   }),f.env,{});
-  assert.equal(existing.status,200,'legacy owner session remains valid until stage F');
+  assert.equal(existing.status,401,'linked owner legacy session must not bypass HomeFlow logout');
  }finally{f.sql.close();}
 });
 test('HomeFlow identity mismatch cannot read private document list',async()=>{
@@ -651,7 +651,7 @@ test('document member approval remains fail-closed for legacy sessions, missing 
      'Content-Type':'application/json'},
     body:JSON.stringify({confirm:'CONFIRM_STUDY',privacy_confirmed:true})
    }),f.env,{});
-  assert.equal(legacy.status,403,'old password alone cannot request HomeFlow approval');
+  assert.equal(legacy.status,401,'linked owner legacy session cannot request approval');
   const local=await f.finish(await f.start({oldSession:true}));
   assert.equal(local.status,200);
   const cookie=local.headers.getSetCookie().find(x=>x.startsWith('__Host-da_session=')).split(';')[0];
@@ -690,5 +690,29 @@ test('enabled HomeFlow SSO rejects legacy member enrollment and exposes the sess
    assert.equal((await join.json()).code,'FAMILY_MANAGED_BY_HOMEFLOW');
    assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM household_invites').get().n,0);
    assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM users').get().n,1);
+ }finally{f.sql.close();}
+});
+
+
+test('legacy login is disabled once the HomeFlow owner is linked, without password guessing',async()=>{
+ const f=await setup();
+ try{
+   const before=await worker.fetch(new Request(app+'/api/auth/login',{
+     method:'POST',headers:{Origin:app,'Content-Type':'application/json'},
+     body:JSON.stringify({email:'not-registered@example.invalid',password:'no-password-required'})
+   }),f.env,{});
+   assert.equal(before.status,401,'first-time owner recovery remains available until verified link');
+   const flow=await f.start({oldSession:true});
+   assert.equal((await f.finish(flow)).status,200);
+   const after=await worker.fetch(new Request(app+'/api/auth/login',{
+     method:'POST',headers:{Origin:app,'Content-Type':'application/json'},
+     body:JSON.stringify({email:'not-registered@example.invalid',password:'no-password-required'})
+   }),f.env,{});
+   assert.equal(after.status,409);
+   assert.equal((await after.json()).code,'HOMEFLOW_LOGIN_REQUIRED');
+   const old=await worker.fetch(new Request(app+'/api/me',{
+     headers:{Cookie:'__Host-da_session='+oldCookie}
+   }),f.env,{});
+   assert.equal(old.status,401);
  }finally{f.sql.close();}
 });

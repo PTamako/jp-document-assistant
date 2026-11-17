@@ -264,9 +264,27 @@ export async function handleBrowserGoogle(request,env,p,url){
  if(path==='/api/google/oauth/disconnect'&&method==='POST'){
    const data=await readJson(request,1000);
    if(!validService(data?.service))bad('Google 服务无效','GOOGLE_INVALID_SERVICE',400);
+   const grant=await grantFor(env,p.user_id,data.service);
+   // Revoking a Google OAuth grant can also invalidate another scope issued to
+   // the same Google account and client. Never break the user's other service.
+   const sibling=grant?await dbFirst(env.DB,`SELECT 1 FROM google_oauth_grants
+     WHERE user_id=? AND service!=? AND google_email=? AND status='connected' LIMIT 1`,
+     p.user_id,data.service,grant.google_email):null;
    await dbRun(env.DB,'DELETE FROM google_oauth_grants WHERE user_id=? AND service=?',p.user_id,data.service);
    await dbRun(env.DB,'DELETE FROM google_oauth_pending WHERE user_id=? AND service=?',p.user_id,data.service);
-   return json({ok:true,connected:false});
+   let remotelyRevoked=false;
+   if(grant?.status==='connected'&&!sibling){
+     try{
+       const refresh=await decrypt(env,data.service,p.user_id,grant);
+       const res=await googleFetch(env,'https://oauth2.googleapis.com/revoke',{
+         method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+         body:new URLSearchParams({token:refresh}).toString()
+       });
+       remotelyRevoked=res.ok;
+     }catch{ /* Local disconnect is final; users can revoke in Google settings. */ }
+   }
+   return json({ok:true,connected:false,remotely_revoked:remotelyRevoked,
+     remote_revocation_skipped_to_protect_other_service:!!sibling});
  }
  if(path==='/api/google/drive/files'&&method==='GET'){
    const token=await getAccess(env,p.user_id,'drive');

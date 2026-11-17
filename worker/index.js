@@ -98,7 +98,17 @@ async function requireSession(request,env){
       current.role!==session.role)
       bad('HomeFlow 登录已失效，请重新登录','UNAUTHENTICATED',401);
     session.display_name=current.nickname;
-  }else if(session.auth_source!=='legacy'){
+  }else if(session.auth_source==='legacy'){
+    // Once the real HomeFlow household owner has an active identity link,
+    // legacy sessions must not bypass HomeFlow logout or account disable.
+    if(env.HOMEFLOW_SSO_ENABLED==='true' && env.DA_PUBLIC_ORIGIN &&
+       homeflowSsoEnabled(env,new URL(env.DA_PUBLIC_ORIGIN))){
+      const linked=await dbFirst(env.DB,`SELECT 1 FROM homeflow_identity_links l
+        JOIN users u ON u.id=l.local_user_id
+        WHERE l.state='active' AND u.role='owner' AND u.status='active' LIMIT 1`);
+      if(linked)bad('请使用 HomeFlow 重新登录','HOMEFLOW_LOGIN_REQUIRED',401);
+    }
+  }else{
     bad('无效的登录方式','UNAUTHENTICATED',401);
   }
   const csrf=await hmacHex(env.SESSION_HMAC_KEY,`csrf:${cookie}`);
@@ -142,6 +152,14 @@ async function handleAuth(request,env,url){
     return json({ok:true,user:{id:uid,display_name:String(data.display_name||'').slice(0,50),role:'owner'},csrf_token:session.csrf},201,{'Set-Cookie':cookieForSession(session.cookie)});
   }
   if(path==='/api/auth/login'){
+    // The old password route exists only for a not-yet-linked first owner.
+    // A linked HomeFlow household must never regain a parallel login.
+    if(homeflowSsoEnabled(env,url)){
+      const linked=await dbFirst(env.DB,`SELECT 1 FROM homeflow_identity_links l
+        JOIN users u ON u.id=l.local_user_id
+        WHERE l.state='active' AND u.role='owner' AND u.status='active' LIMIT 1`);
+      if(linked)bad('统一登录已启用，请使用 HomeFlow','HOMEFLOW_LOGIN_REQUIRED',409);
+    }
     const email=normalizedEmail(data.email);
     if(!email||typeof data.password!=='string')bad('邮箱或密码错误','INVALID_CREDENTIALS',401);
     const identity=await hashString(`login:${email}`);
@@ -1130,5 +1148,12 @@ export default {
   },
   async scheduled(controller,env,ctx){
     ctx.waitUntil(runDueDocumentAiJobs(env));
+    // One daily bounded retention pass, not an extra Cron or per-request D1 write.
+    const now=new Date();
+    if(now.getUTCHours()===0&&now.getUTCMinutes()<5&&env.DB?.prepare){
+      const cutoff=new Date(now.getTime()-60*60*1000).toISOString();
+      ctx.waitUntil(env.DB.prepare(`DELETE FROM homeflow_oauth_pending
+        WHERE expires_at<? AND status IN ('consumed','failed','pending')`).bind(cutoff).run());
+    }
   }
 };
