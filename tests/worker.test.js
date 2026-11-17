@@ -3122,7 +3122,7 @@ test('household finance remains approval-gated for members while personal destin
     data:{confirm:'CONFIRM_ACCOUNTING',payment_confirmed:true}});
   assert.equal(attempt.response.status,409,JSON.stringify(attempt.data));
   assert.equal(attempt.data.code,'APPROVAL_REQUIRED');
-  assert.match(attempt.data.message,/未提交申请/);
+  assert.match(attempt.data.message,/家庭账本明细变更需要管理员审批/);
   assert.equal(calls,0,'no external target write for a non-approved member');
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,original,
     'do not create a sending or succeeded journal entry');
