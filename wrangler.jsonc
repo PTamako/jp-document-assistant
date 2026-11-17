@@ -22,6 +22,7 @@
     {"binding":"KAKEBO_BRIDGE_SERVICE","service":"kakeibo-homeflow-bridge"},
     {"binding":"HOMEFLOW_BRIDGE_SERVICE","service":"homeflow"},
     {"binding":"ZHIXUE_BRIDGE_SERVICE","service":"it-study-platform"},
+    {"binding":"STUDY_DOCUMENT_EXECUTION_SERVICE","service":"it-study-platform"},
     {"binding":"KAKEIBO_DOCUMENT_FINANCE_SERVICE","service":"kakeibo-homeflow-bridge"}
   ],
   "ai": {"binding":"AI"},
@@ -30,6 +31,7 @@
     "HOMEFLOW_SSO_ENABLED": "true",
     "DOCUMENT_EXECUTION_ENABLED": "true",
     "DOCUMENT_STUDY_EXECUTION_ENABLED": "true",
+    "DOCUMENT_TASK_EXECUTION_ENABLED": "true",
     "DOCUMENT_APPROVAL_SUBMISSION_ENABLED": "true",
     "HOMEFLOW_OAUTH_ORIGIN":"https://homeflow.yupan6706.workers.dev",
     "DA_PUBLIC_ORIGIN":"https://jp-document-assistant.yupan6706.workers.dev",
