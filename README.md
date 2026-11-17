@@ -41,3 +41,6 @@ npm run build
 5. Cloudflare Builds 使用项目专属用户级 Token；当前连接无 `/user/tokens` 管理权限，需从 Cloudflare 控制台更换。Cloudflare Billing Read 也需要授权才能核实真实费用与总免费余量。
 
 以上项目未经实机/实账单验证时，不得宣布完整 v0.11 全部验收通过。详细历史与实施说明见 `docs/`。
+
+
+> 2026-11-17 定向代码与生产权限审查：见 [整改记录](docs/audit-followup-20261117.md)。历史上线清单中的旧状态不代表当前生产状态。

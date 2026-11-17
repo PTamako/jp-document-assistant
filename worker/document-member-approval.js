@@ -256,6 +256,10 @@ export async function requestDocumentMemberApproval(request,env,p,id){
   const payload=validatedPayload(
    target==='it-study-platform'?'zhixue':target,item,approved,body);
   if(target==='kakebo'){
+   // An asset movement is not a household income/expense approval and
+   // must not create a frozen family ledger intent as an accidental fallback.
+   if(payload.type==='transfer')bad('个人资产转移不需要家庭账本审批，也不能改记为现金收支',
+     'PERSONAL_TRANSFER_NO_APPROVAL',409);
    const account=await verifiedDocumentFinanceAccount(env,p,body.account_id,
     payload.type,payload.paymentSource);
    // Freeze the TARGET-authoritative account ID and version with the source

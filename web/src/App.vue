@@ -10,6 +10,7 @@ import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIde
 import { extractDocumentText } from './document-text.js';
 import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
+import {resetCandidateConfirmation} from './candidate-draft.js';
 import {verifyDocumentPwaSessionOnResume} from './pwa-session-resume.js';
 import TabIcon from './TabIcon.vue';
 import UiIcon from './UiIcon.vue';
@@ -1398,9 +1399,13 @@ async function prepareCandidate(item){
  // accounting note blank for card purchase; the user can add their own.
  candidateDraft.note=current.value.category==='card_spend'?'':(item.payload?.note||'');
  candidateMerchant.value=item.candidate_kind==='finance'?(item.payload?.merchant||''):'';
- candidateDraft.title=item.payload?.title||current.value.title;
- candidateDraft.visibility='private'; // Personal task by default; sharing requires explicit selection.candidateDraft.assignee='';candidateDraft.bonus_points=0;candidateDraft.privacy_confirmed=false;candidateDraft.task_share_confirmed=false;
- candidateDraft.redacted_term=item.payload?.term||'';candidateDraft.redacted_sentence=item.payload?.redacted_sentence||item.payload?.sentence||'';
+ // Reset confirmations for EACH new candidate, including after opening another document.
+ // A prior task assignee or privacy approval must never authorize a new sync.
+ resetCandidateConfirmation(candidateDraft,{
+  title:item.payload?.title||current.value.title,
+  term:item.payload?.term||'',
+  sentence:item.payload?.redacted_sentence||item.payload?.sentence||''
+ });
  // A failed network attempt must reopen with precisely its previously
  // authorized scope and fields, or immutable idempotency rejects the retry.
  if(pendingCandidateRetry.value?.id===item.id)Object.assign(candidateDraft,pendingCandidateRetry.value.body);
