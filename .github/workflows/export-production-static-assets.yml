@@ -1,0 +1,30 @@
+name: Package production static assets (no deployment)
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export-production-static-assets.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check:syntax
+      - run: npm run build
+      - name: Package only the built static PWA, never credentials or D1 data
+        run: tar -czf document-production-dist.tar.gz -C dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: document-production-dist
+          path: document-production-dist.tar.gz
+          retention-days: 1
+          if-no-files-found: error
