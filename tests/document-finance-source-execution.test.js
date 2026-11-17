@@ -194,3 +194,37 @@ test('document finance rejects revoked source and non-production execution befor
   assert.equal(f.counters.homeflow,0);
  }finally{f.sql.close()}
 });
+
+test('private source preview reveals reviewed ledger fields only, without approval or target writes',async()=>{
+ const f=await fixture();
+ try{
+  const body={request_id:requestId,resource_id:candidate,household_id:hh,
+   requester_user_id:actor,payload_sha256:f.digest};
+  const make=(domain='homeflow:document-preview',extra={})=>{
+   const raw=JSON.stringify(body),stamp=String(Date.now());
+   return new Request('https://document.internal/api/internal/document-actions/preview',{
+    method:'POST',headers:{'content-type':'application/json','x-approval-client':'homeflow',
+     'x-approval-timestamp':stamp,
+     'x-approval-signature':signed(domain,executeKey,stamp,raw),...extra},body:raw});
+  };
+  const preview=await documentExecutionRoute(make(),f.env,'preview');
+  assert.equal(preview.status,200,await preview.clone().text());
+  const detail=await preview.json();
+  assert.deepEqual(detail.entry,{
+   date:'2026-11-14',type:'expense',amount:1420,category:'食費',
+   merchant:'セブン-イレブン',note:'现金收据',payment_source:'现金'});
+  assert.equal(detail.approval_id,requestId);
+  assert.equal(detail.proposal_id,candidate);
+  assert.ok(!('account_id' in detail.entry),'personal account id stays private');
+  assert.equal(f.counters.homeflow,0);
+  assert.equal(f.counters.target,0);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM document_member_execution_reservations').get().n,0);
+  assert.equal((await documentExecutionRoute(make('homeflow:document-execute'),f.env,'preview')).status,403);
+  assert.equal((await documentExecutionRoute(make('homeflow:document-preview',
+   {origin:'https://attacker.invalid'}),f.env,'preview')).status,403);
+  f.sql.prepare("UPDATE homeflow_identity_links SET state='revoked',revoked_at=? WHERE homeflow_user_id=?")
+   .run(new Date().toISOString(),actor);
+  assert.equal((await documentExecutionRoute(make(),f.env,'preview')).status,409);
+  assert.equal(f.counters.target,0);
+ }finally{f.sql.close()}
+});

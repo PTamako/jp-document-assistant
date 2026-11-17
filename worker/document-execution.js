@@ -216,16 +216,29 @@ export async function documentExecutionRoute(request,env,mode){
   typeof env.HOMEFLOW_BRIDGE_SERVICE?.fetch!=='function'||
   typeof env.KAKEIBO_DOCUMENT_FINANCE_SERVICE?.fetch!=='function'||
   typeof env.DB?.prepare!=='function')return refuse('DOCUMENT_EXECUTION_DISABLED',503);
- if(!['execute','receipt','source-check'].includes(mode))return refuse('NOT_FOUND',404);
- const check=mode==='source-check',receiptOnly=mode==='receipt';
+ if(!['execute','receipt','source-check','preview'].includes(mode))return refuse('NOT_FOUND',404);
+ const check=mode==='source-check',receiptOnly=mode==='receipt',previewOnly=mode==='preview';
  const b=await signedBody(request,check?env.DOCUMENT_FINANCE_TARGET_SECRET:
   env.HOMEFLOW_DOCUMENT_EXECUTION_SECRET,check?'kakeibo':'homeflow',
-  check?'kakeibo:document-source-check':
+  check?'kakeibo:document-source-check':previewOnly?'homeflow:document-preview':
     receiptOnly?'homeflow:document-receipt':'homeflow:document-execute',
-  check?[...core,'operation_sha256']:receiptOnly?core:[...core,'execution_nonce']);
+  check?[...core,'operation_sha256']:receiptOnly||previewOnly?core:[...core,'execution_nonce']);
  if(!b)return refuse('UNAUTHORIZED',403);
  const db=env.DB,r=await sourceRow(db,b);
  if(!matches(r,b))return refuse('SOURCE_IDENTITY_CONFLICT',409);
+ // Owner-only source inspection: HomeFlow verifies the current owner role
+ // before sending a signed private Service Binding request. No reservation,
+ // approval or target execution may occur in preview mode.
+ if(previewOnly){
+  if(!active(r,b))return refuse('SOURCE_CHANGED',409);
+  const op=await operation(env,r,b);
+  if(!op)return refuse('SEALED_INTENT_INVALID',409);
+  return reply({ok:true,approval_id:b.request_id,proposal_id:b.resource_id,
+   operation:'document.sync.finance',
+   entry:{date:op.date,type:op.type,amount:op.amount_jpy,
+    category:op.category,merchant:op.merchant,note:op.note,
+    payment_source:op.payment_source},before:null});
+ }
  if(check){
   if(!active(r,b))return refuse('SOURCE_CHANGED',409);
   const lock=await db.prepare('SELECT * FROM document_member_execution_reservations WHERE approval_id=?')
