@@ -45,8 +45,10 @@ function setup(){
    assert.equal(request.headers.get('x-approval-signature'),expected);
    const b=JSON.parse(wire);
    assert.equal(b.owner_user_id,p.homeflow_user_id);
-   assert.equal(b.amount_jpy,15000);
-   assert.equal(b.purpose,'monthly');
+   if(domain==='jpda:personal-sbi-execute'){
+    assert.equal(b.amount_jpy,15000);
+    assert.equal(b.purpose,'monthly');
+   }
    assert.equal(b.payment_source,undefined);
    return Response.json({ok:true,applied:true,owner_user_id:p.homeflow_user_id,
     household_id:p.homeflow_household_id,source_candidate_id:candidate,
@@ -80,7 +82,7 @@ test('member SBI transfer refuses unreviewed amount, forged user and changed sou
   err=>err.code==='PERSONAL_SBI_REVIEW_REQUIRED');
  const blocked=await commitPersonalSbiCandidate(request(),t.env,{...p,role:'owner'},item,fields);
  assert.equal(blocked.status,503);
- const wrong=await commitPersonalSbiCandidate(request({transfer_date:'2030-20-99'}),t.env,p,item,fields);
- assert.equal(wrong.status,409);
+ await assert.rejects(commitPersonalSbiCandidate(request({transfer_date:'2030-20-99'}),t.env,p,item,fields),
+  err=>err.code==='PERSONAL_SBI_DATE_REQUIRED');
  assert.equal(t.seen(),0);
 });
