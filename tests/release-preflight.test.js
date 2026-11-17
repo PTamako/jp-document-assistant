@@ -100,7 +100,8 @@ test('historical financial sync requires a visible reconciliation checkbox befor
 
 test('store-based prefill and transaction clock are surfaced in the document UI',()=>{
  const app=read('web/src/App.vue');
- assert.match(app,/candidateDraft\.category=ledgerOptions\.value\.suggested\?\.category/);
+ assert.match(app,/candidateDraft\.category=candidatePersonalTransfer\.value/);
+ assert.match(app,/ledgerOptions\.value\.suggested\?\.category/);
  assert.match(app,/candidateDraft\.payment_source=ledgerOptions\.value\.suggested\?\.payment_source/);
  assert.match(app,/\['card_spend','shopping'\]\.includes\(current\.category\)/);
 });

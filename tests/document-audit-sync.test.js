@@ -31,10 +31,11 @@ test('member SBI transfers are neither submitted for approval nor posted via leg
  const bridge=read('../worker/bridge.js');
  const approval=read('../worker/document-member-approval.js');
  const wrangler=read('../wrangler.jsonc');
- assert.match(bridge,/const memberPersonalTransfer=p\.role!=='owner'&&target==='kakebo'&&entryType==='transfer'/);
+ assert.match(bridge,/const memberPersonalTransfer=p\.role==='member'&&target==='kakebo'&&entryType==='transfer'/);
  assert.match(bridge,/const approvalRequired=p\.role!=='owner'&&target==='kakebo'&&!memberPersonalTransfer/);
- assert.match(bridge,/available:!approvalRequired&&!memberPersonalTransfer&&!!config/);
- assert.match(bridge,/PERSONAL_TRANSFER_EXECUTOR_REQUIRED/);
+ assert.match(bridge,/commitPersonalSbiCandidate\(request,env,p,item,verified\)/);
+ assert.match(bridge,/available:personalReady\|\|/);
+ assert.doesNotMatch(bridge,/PERSONAL_TRANSFER_EXECUTOR_REQUIRED/);
  assert.match(approval,/PERSONAL_TRANSFER_NO_APPROVAL/);
  assert.match(wrangler,/KAKEIBO_DOCUMENT_ACCOUNT_SERVICE/);
  assert.match(wrangler,/DOCUMENT_ACCOUNT_VERIFY_ENABLED/);

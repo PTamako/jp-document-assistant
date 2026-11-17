@@ -27,7 +27,7 @@ function queue(){
   accountEpoch:gate,resetCandidateConfirmation,
   detailCandidates:ref([a,b]),current:ref({id:'docA',category:'manual',title:'Document A',visibility:'private'}),
   sheet:ref(''),busy:ref(false),
-  candidateApprovalRequired:ref(false),candidateApprovalReady:ref(false),
+  candidateApprovalRequired:ref(false),candidatePersonalTransfer:ref(false),candidateApprovalReady:ref(false),
   candidateApprovalSubmitted:ref(false),candidateApprovalPrepared:ref(false),
   candidateApprovalId:ref(''),candidateApprovalStatus:ref('not_submitted'),
   candidateApprovalChecked:ref(false),

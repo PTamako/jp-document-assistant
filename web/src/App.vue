@@ -298,6 +298,7 @@ const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recyc
 const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 const candidateApprovalRequired=ref(false);
+const candidatePersonalTransfer=ref(false);
 const financeStableAccounts=ref([]),financeStableAccountsError=ref('');
 function chooseFinanceStableAccount(){
  const selected=financeStableAccounts.value.find(x=>x.account_id===candidateDraft.account_id);
@@ -330,6 +331,8 @@ const candidateActionDisabled=computed(()=>{
  if(candidateApprovalRequired.value?!candidateApprovalReady.value:!integrationConfigured.value)return true;
  if(candidateApprovalRequired.value&&candidateApprovalPrepared.value)return false;
  if(candidateDraft.kind==='finance'){
+  if(candidatePersonalTransfer.value)return !candidateDraft.date||!candidateDraft.transfer_date||
+   (ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value);
   if(!candidateDraft.date||
    (candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date))return true;
   if(candidateApprovalRequired.value){
@@ -533,7 +536,7 @@ function clearPrivateWorkspace(){
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usageLoadSerial++;usageRefreshing.value=false;
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
-  candidateApprovalRequired.value=false;candidateApprovalReady.value=false;candidateApprovalSubmitted.value=false;candidateApprovalPrepared.value=false;candidateApprovalId.value='';candidateApprovalStatus.value='not_submitted';candidateApprovalChecked.value=false;
+  candidatePersonalTransfer.value=false;candidateApprovalRequired.value=false;candidateApprovalReady.value=false;candidateApprovalSubmitted.value=false;candidateApprovalPrepared.value=false;candidateApprovalId.value='';candidateApprovalStatus.value='not_submitted';candidateApprovalChecked.value=false;
   ledgerOptions.value={categories:[],paymentSources:[]};ledgerOptionsError.value='';ledgerAttempted.value=false;ledgerMappingChangeConfirmed.value=false;candidateMerchant.value='';pendingCandidateRetry.value=null;
   homeflowMemberChoices.value=[{value:'',label:'未指定'}];homeflowMembersError.value='';
   for(const key of Object.keys(financeTargetStatus))delete financeTargetStatus[key];
@@ -1373,6 +1376,7 @@ async function prepareCandidate(item){
  // approval form after logout or a new document selection.
  if(!stillCurrent())return;
  candidateApprovalRequired.value=d.approval_required===true;
+ candidatePersonalTransfer.value=d.personal_asset_transfer===true;
  candidateApprovalReady.value=d.approval_action_enabled===true;
  candidateApprovalSubmitted.value=d.approval_submitted===true;
  candidateApprovalPrepared.value=d.approval_prepared===true;
@@ -1391,7 +1395,8 @@ async function prepareCandidate(item){
  ledgerAttempted.value=Number(d.integration?.attempt_count||0)>0&&d.integration?.state==='failed';ledgerMappingChangeConfirmed.value=false;
  // Suggestions are calculated by Kakebo against its real D1 merchant rules
  // and user-configured defaults. The user can always override either picker.
- candidateDraft.category=ledgerOptions.value.suggested?.category||
+ candidateDraft.category=candidatePersonalTransfer.value?'投資・資産移動':
+  ledgerOptions.value.suggested?.category||
   (candidateApprovalRequired.value&&candidateDraft.entry_type==='transfer'?'投資・資産移動':'');
  candidateDraft.payment_source=ledgerOptions.value.suggested?.payment_source||'';
  financeStableAccounts.value=[];financeStableAccountsError.value='';candidateDraft.account_id='';
@@ -1420,7 +1425,8 @@ async function prepareCandidate(item){
   }
  }
  sheet.value='candidate';integrationConfigured.value=!candidateApprovalRequired.value&&d.available&&
-   (item.candidate_kind!=='finance'||(ledgerOptions.value.categories.length>0&&ledgerOptions.value.paymentSources.length>0))&&
+   (item.candidate_kind!=='finance'||candidatePersonalTransfer.value||
+    (ledgerOptions.value.categories.length>0&&ledgerOptions.value.paymentSources.length>0))&&
    (item.candidate_kind!=='homeflow_task'||homeflowMemberChoices.value.some(x=>x.self===true));
  }catch(e){if(stillCurrent())problem(e);}
 }
@@ -1501,7 +1507,7 @@ async function commitApprovedCandidate(){
   problem(new Error('请选择经过家計簿验证的本人金融账户与分类，不能只填写名称'));
   busy.value=false;return;
  }
- if(!resumeApproval&&body.kind==='finance'&&!memberApproval&&
+ if(!resumeApproval&&body.kind==='finance'&&!memberApproval&&!candidatePersonalTransfer.value&&
    (!ledgerOptions.value.categories.some(x=>x.value===body.category)||
     !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){
   problem(new Error('请从家計簿同步的分类和支付方式中选择'));
@@ -1535,6 +1541,7 @@ async function commitApprovedCandidate(){
   // candidate/snapshot may be retried, without creating a new approval ID.
   if(memberApproval){problem(e);busy.value=false;return;}
   const attempted=String(e?.code||'').startsWith('TARGET_')||
+   String(e?.code||'').startsWith('PERSONAL_SBI_')||
    ['BRIDGE_UNCONFIRMED','LINK_CONFLICT','SENDING','RETRY_PAYLOAD_CHANGED'].includes(e?.code);
   if(!attempted){problem(e);busy.value=false;return;}
   pendingCandidateRetry.value={id,body};
@@ -2184,11 +2191,12 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
         <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">申请分类（管理员批准后仍需账本核验）<input v-model="candidateDraft.category" maxlength="80" placeholder="填写家計簿分类" /></label>
-        <div v-else-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">本人金融账户（稳定账户 ID）<select v-model="candidateDraft.account_id" :disabled="candidateApprovalPrepared||candidateApprovalSubmitted||candidateDraft.entry_type==='transfer'" @change="chooseFinanceStableAccount"><option value="">请选择已验证账户</option><option v-for="account in financeStableAccounts" :key="account.account_id" :value="account.account_id">{{account.label}} · {{account.account_id.slice(-6)}}</option></select></label>
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&financeStableAccountsError" class="fine-print" role="status">{{financeStableAccountsError}}</p>
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&candidateDraft.entry_type==='transfer'" class="fine-print">SBI 等非现金业务需要独立审批执行器，不能使用现金账目代替。</p>
-        <div v-else-if="candidateDraft.kind==='finance'" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <p v-if="candidatePersonalTransfer" class="fine-print">此处只同步本人 SBI 资产转移记录，不新增账户、不改变卡片或现金余额、不创建基金份额，也不需要家庭审批。</p>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
         <label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>已尝试同步，同意核对旧记录并防止重复记账</label>
         <label v-if="candidateDraft.kind==='finance'" class="form-label">备注<input v-model="candidateDraft.note" /></label>
