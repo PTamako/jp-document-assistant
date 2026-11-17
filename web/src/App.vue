@@ -1651,7 +1651,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
           {{homeflowSsoPending?'重新授权':'使用 HomeFlow 登录'}}
         </button>
       </div>
-      <div class="auth-panel">
+      <div v-if="!homeflowSsoAvailable || initialized===false" class="auth-panel">
         <div class="segments"><button v-for="m in authModes" :key="m.id" :class="{selected:authMode===m.id}" @click="authMode=m.id;error=''">{{m.name}}</button></div>
         <p v-if="initialized===false" class="fine-print">家庭尚未初始化。请使用「首次设置」，输入 Cloudflare 中完整的初始化令牌。设置完成后再使用「登录」。</p>
         <form @submit.prevent="submitAuth" class="stack">
