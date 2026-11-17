@@ -26,6 +26,8 @@ jobs:
           const tests=[
             {name:'jpda-health',url:'https://jp-document-assistant.yupan6706.workers.dev/api/health',status:200,check:d=>d?.ok===true&&d?.service==='document-assistant'&&d?.ai_ocr==='experimental'},
             {name:'jpda-first-account',url:'https://jp-document-assistant.yupan6706.workers.dev/api/auth/status',status:200,check:d=>d?.ok===true&&d?.initialized===true},
+            {name:'homeflow-sso-enabled',url:'https://jp-document-assistant.yupan6706.workers.dev/api/homeflow-sso/status',status:200,check:d=>d?.enabled===true},
+            {name:'legacy-login-disabled',url:'https://jp-document-assistant.yupan6706.workers.dev/api/auth/login',method:'POST',body:JSON.stringify({email:'audit-no-user@example.invalid',password:'audit-only-no-credential'}),status:409,check:d=>d?.code==='HOMEFLOW_LOGIN_REQUIRED'},
             {name:'jpda-private-api',url:'https://jp-document-assistant.yupan6706.workers.dev/api/me',status:401},
             // Intentionally malformed JSON: must reach the auth Worker, fail before any DB write,
             // and return INVALID_JSON/400 rather than Static Assets HTTP 405.
@@ -92,5 +94,5 @@ jobs:
           console.log('PWA manifest and iOS app icon links: PASS');
 
           if(errors)throw new Error(errors+' live security checks failed. No actual writes were attempted.');
-          console.log('All six real production security checks passed; no auth material provided.');
+          console.log('All production security checks passed; no auth material provided.');
           NODE
