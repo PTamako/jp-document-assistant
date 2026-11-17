@@ -101,8 +101,8 @@ async function requireSession(request,env){
   }else if(session.auth_source==='legacy'){
     // Once the real HomeFlow household owner has an active identity link,
     // legacy sessions must not bypass HomeFlow logout or account disable.
-    if(env.HOMEFLOW_SSO_ENABLED==='true' && env.DA_PUBLIC_ORIGIN &&
-       homeflowSsoEnabled(env,new URL(env.DA_PUBLIC_ORIGIN))){
+    // Fail closed even when an OAuth secret is accidentally missing.
+    if(env.HOMEFLOW_SSO_ENABLED==='true'){
       const linked=await dbFirst(env.DB,`SELECT 1 FROM homeflow_identity_links l
         JOIN users u ON u.id=l.local_user_id
         WHERE l.state='active' AND u.role='owner' AND u.status='active' LIMIT 1`);
@@ -152,9 +152,8 @@ async function handleAuth(request,env,url){
     return json({ok:true,user:{id:uid,display_name:String(data.display_name||'').slice(0,50),role:'owner'},csrf_token:session.csrf},201,{'Set-Cookie':cookieForSession(session.cookie)});
   }
   if(path==='/api/auth/login'){
-    // The old password route exists only for a not-yet-linked first owner.
-    // A linked HomeFlow household must never regain a parallel login.
-    if(homeflowSsoEnabled(env,url)){
+    // Even missing SSO settings must not reactivate an old password.
+    if(env.HOMEFLOW_SSO_ENABLED==='true'){
       const linked=await dbFirst(env.DB,`SELECT 1 FROM homeflow_identity_links l
         JOIN users u ON u.id=l.local_user_id
         WHERE l.state='active' AND u.role='owner' AND u.status='active' LIMIT 1`);
