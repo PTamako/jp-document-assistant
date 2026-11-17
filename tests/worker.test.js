@@ -3074,7 +3074,7 @@ test('Stage E shared document does not expose the owner private integration cand
   assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,1);
 });
 
-test('Stage D/E real member session cannot bypass missing HomeFlow approval to directly sync any target',async()=>{
+test('household finance remains approval-gated for members while personal destinations are separate',async()=>{
   const env=makeEnv(),owner=await boot(env);
   const invite=await req(env,'/api/household/invites',{method:'POST',...auth(owner),
     data:{invitee_email:'approval-member@example.com'}});
