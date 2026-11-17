@@ -3,6 +3,13 @@
 import {bad,json} from './http.js';
 const hex64=/^[0-9a-f]{64}$/i;
 const hex32=/^[0-9a-f]{32}$/i;
+// Prefer a separately rotated key when present; otherwise reuse the already
+// paired document-finance execution key with a distinct HMAC message domain.
+const accountProofSecret=env=>
+  hex64.test(env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET||'')
+    ?env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET
+    :env.DOCUMENT_FINANCE_TARGET_SECRET;
+
 async function mac(secret,stamp,raw){
   const key=await crypto.subtle.importKey('raw',
     Uint8Array.from(secret.match(/.{2}/g),x=>parseInt(x,16)),
@@ -22,7 +29,7 @@ export async function verifiedDocumentFinanceAccount(env,principal,accountId,ent
     !principal.homeflow_user_id||!principal.homeflow_household_id)
     bad('HomeFlow 成员身份验证失败','HOMEFLOW_MEMBER_REQUIRED',403);
   if(env.DOCUMENT_ACCOUNT_VERIFY_ENABLED!=='true'||
-    !hex64.test(env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET||'')||
+    !hex64.test(accountProofSecret(env)||'')||
     typeof env.KAKEIBO_DOCUMENT_ACCOUNT_SERVICE?.fetch!=='function')
     bad('稳定金融账户验证暂不可用，没有生成审批申请','ACCOUNT_PROOF_UNAVAILABLE',503);
   const data={account_id:accountId,household_id:principal.homeflow_household_id,
@@ -35,7 +42,7 @@ export async function verifiedDocumentFinanceAccount(env,principal,accountId,ent
         method:'POST',redirect:'manual',headers:{'content-type':'application/json',
           'accept':'application/json','x-approval-client':'jp-document-assistant',
           'x-approval-timestamp':stamp,
-          'x-approval-signature':await mac(env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET,stamp,raw)},
+          'x-approval-signature':await mac(accountProofSecret(env),stamp,raw)},
         body:raw
       }));
     if(response.status!==200||response.headers.has('location'))
@@ -66,7 +73,7 @@ export async function listDocumentFinanceAccounts(env,p){
    !p.homeflow_user_id||!p.homeflow_household_id)
   bad('请先使用 HomeFlow 成员身份登录','HOMEFLOW_MEMBER_REQUIRED',403);
  if(env.DOCUMENT_ACCOUNT_VERIFY_ENABLED!=='true'||
-  !hex64.test(env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET||'')||
+  !hex64.test(accountProofSecret(env)||'')||
   typeof env.KAKEIBO_DOCUMENT_ACCOUNT_SERVICE?.fetch!=='function')
   bad('家計簿账户选项不可用','ACCOUNT_PROOF_UNAVAILABLE',503);
  const wire={household_id:p.homeflow_household_id,
@@ -77,7 +84,7 @@ export async function listDocumentFinanceAccounts(env,p){
    'https://kakeibo.internal/api/internal/document-accounts/list',{
     method:'POST',redirect:'manual',headers:{'content-type':'application/json',
     'x-approval-client':'jp-document-assistant','x-approval-timestamp':stamp,
-    'x-approval-signature':await mac(env.DOCUMENT_ACCOUNT_VERIFICATION_SECRET,stamp,raw)},
+    'x-approval-signature':await mac(accountProofSecret(env),stamp,raw)},
     body:raw}));
   if(res.status!==200||res.headers.has('location'))
    bad('尚未验证本人金融账户','ACCOUNT_SELECTION_UNAVAILABLE',409);
