@@ -9,7 +9,7 @@ const CLIENT_ID='jp-document-assistant';
 const PENDING_MS=5*60*1000;
 // Mirror HomeFlow's original 14-day login window; every private request
 // still introspects the backend-sealed assertion against the original session.
-const SESSION_MS=14*86400000;
+const SESSION_MS=30*86400000;
 const enc=new TextEncoder();
 const dbFirst=(db,sql,...values)=>db.prepare(sql).bind(...values).first();
 const dbRun=(db,sql,...values)=>db.prepare(sql).bind(...values).run();
