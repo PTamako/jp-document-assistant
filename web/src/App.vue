@@ -681,7 +681,7 @@ async function chooseDriveFile(item){
 async function disconnectGoogle(service){
   if(service==='gmail')gmailBusy.value=true;else driveBusy.value=true;
   try{
-    await api('/api/google/oauth/disconnect',{method:'POST',body:{service}});
+    const disconnected=await api('/api/google/oauth/disconnect',{method:'POST',body:{service}});
     if(service==='gmail'){
       gmailForget();gmailItems.value=[];gmailAuthorizedUi.value=false;
       gmailPersistent.value={enabled:true,connected:false,google_email:null};
@@ -689,7 +689,12 @@ async function disconnectGoogle(service){
       driveCloud.value={enabled:true,connected:false,google_email:null};
       driveItems.value=[];driveNext.value='';
     }
-    flash('已断开 '+(service==='gmail'?'Gmail':'Google Drive'));
+    const serviceName=service==='gmail'?'Gmail':'Google Drive';
+    flash(disconnected.remote_revocation_skipped_to_protect_other_service
+      ?'已断开 '+serviceName+'；同一 Google 账号的另一个服务仍保持授权'
+      :disconnected.remotely_revoked
+        ?'已断开 '+serviceName+'，Google 远端授权已撤销'
+        :'已断开 '+serviceName+'；远端撤销未确认，可在 Google 账号安全设置中检查');
   }catch(e){problem(e);}
   finally{gmailBusy.value=false;driveBusy.value=false;}
 }
