@@ -317,6 +317,8 @@ test('PKCE verifier and state are sealed/hashed at rest; SSO local cookie persis
    const lifetime=f.sql.prepare('SELECT expires_at,created_at FROM sessions WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get('local-owner');
    assert.ok(lifetime);
    assert.ok(response.headers.getSetCookie().some(x=>x.includes('Max-Age=2592000')));
+   assert.ok(new Date(lifetime.expires_at).getTime()-new Date(lifetime.created_at).getTime()>=29*86400000,
+     'The original HomeFlow session can be resumed without a 15-minute relogin');
  }finally{f.sql.close();}
 });
 
