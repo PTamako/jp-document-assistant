@@ -22,6 +22,32 @@ jobs:
       - run: npm run build
       - name: Package only the built static PWA, never credentials or D1 data
         run: tar -czf document-production-dist.tar.gz -C dist .
+      - name: Verify real production Vue and CSS byte fingerprints (read-only)
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs/promises';
+          import { createHash } from 'node:crypto';
+          const origin='https://jp-document-assistant.yupan6706.workers.dev';
+          const html=await fs.readFile('dist/index.html','utf8');
+          const files=[...html.matchAll(/(?:src|href)="(\/assets\/index-[^"]+\.(?:js|css))"/g)].map(x=>x[1]);
+          if(files.length!==2)throw Error('Expected exactly one Vite JS and CSS index asset');
+          const response=await fetch(origin+'/',{cache:'no-store',redirect:'manual'});
+          if(response.status!==200)throw Error('Production index response '+response.status);
+          const liveHtml=await response.text();
+          for(const path of files){
+            if(!liveHtml.includes(path))throw Error('Production HTML does not reference built asset: '+path);
+            const asset=await fetch(origin+path,{cache:'no-store',redirect:'manual'});
+            if(asset.status!==200)throw Error('Production asset unavailable: '+path+' '+asset.status);
+            const live=Buffer.from(await asset.arrayBuffer()),local=await fs.readFile('dist'+path);
+            const hash=b=>createHash('sha256').update(b).digest('hex');
+            if(hash(live)!==hash(local))throw Error('Production hash mismatch: '+path);
+            console.log('LIVE_MATCH',path,live.length,hash(live).slice(0,12));
+          }
+          const js=await fs.readFile('dist'+files.find(p=>p.endsWith('.js')),'utf8');
+          if(!js.includes('家計簿本人支付方式'))throw Error('New member payment picker absent from build');
+          if(js.includes('本人金融账户（稳定账户 ID）'))throw Error('Old member picker still in build');
+          console.log('Production frontend matches current GitHub main and uses canonical member picker');
+          NODE
       - uses: actions/upload-artifact@v4
         with:
           name: document-production-dist
