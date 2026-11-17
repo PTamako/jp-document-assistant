@@ -104,7 +104,13 @@ export async function listDocumentFinanceAccounts(env,p){
    a.account_version<1)||
   new Set(rows.map(a=>a.account_id)).size!==rows.length)
   bad('家計簿账户身份验证结果异常','ACCOUNT_PROOF_MISMATCH',409);
+ const categories=Array.isArray(result?.categories)?result.categories:[];
+ if(categories.length>100||categories.some(c=>!c||
+   typeof c.value!=='string'||!c.value||c.value.length>80||
+   typeof c.label!=='string'||!c.label||c.label.length>80||
+   !['income','expense'].includes(c.entry_type)))
+  bad('家計簿分类来源验证失败','CATEGORY_PROOF_MISMATCH',409);
  return json({ok:true,accounts:rows.map(a=>({
   account_id:a.account_id,label:a.label,account_version:a.account_version,
-  account_kind:'cash'}))});
+  account_kind:'cash'})),categories});
 }
