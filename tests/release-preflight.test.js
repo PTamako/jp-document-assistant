@@ -24,6 +24,7 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
   {binding:'KAKEBO_BRIDGE_SERVICE',service:'kakeibo-homeflow-bridge'},
   {binding:'HOMEFLOW_BRIDGE_SERVICE',service:'homeflow'},
   {binding:'ZHIXUE_BRIDGE_SERVICE',service:'it-study-platform'},
+  {binding:'STUDY_DOCUMENT_EXECUTION_SERVICE',service:'it-study-platform'},
   {binding:'KAKEIBO_DOCUMENT_FINANCE_SERVICE',service:'kakeibo-homeflow-bridge'}
  ]);
  assert.doesNotMatch(JSON.stringify(wrangler),/JPDA_BRIDGE_ALLOWED_USER|JPDA_BRIDGE_STUDY_ACTOR_ID|BRIDGE_USER_MAP/);
@@ -35,6 +36,8 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.equal(wrangler.vars?.OCR_CALLS_PER_USER_DAY,'5');
  assert.equal(wrangler.vars?.OCR_APP_UTC_DAILY_LIMIT,'5');
  assert.equal(wrangler.vars?.OCR_SPACE_APP_UTC_DAILY_LIMIT,'20');
+ assert.equal(wrangler.vars?.DOCUMENT_TASK_EXECUTION_ENABLED,'true');
+ assert.equal(wrangler.vars?.DOCUMENT_STUDY_EXECUTION_ENABLED,'true');
  assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.
  assert.equal(wrangler.preview_urls,false);
  assert.equal(wrangler.observability?.enabled,false);
@@ -129,4 +132,19 @@ test('HomeFlow private/family task switch is always available and sharing privat
  assert.match(bridge,/body\.visibility==='household'&&body\.task_share_confirmed!==true/);
  assert.match(bridge,/TASK_SHARE_CONFIRM_REQUIRED/);
  assert.match(bridge,/visibility:body\.visibility/);
+});
+
+
+test('production identity and approval safeguards stay enabled and legacy UI is hidden',()=>{
+ const ui=read('web/src/App.vue');
+ const sso=read('worker/homeflow-sso.js');
+ const task=read('worker/document-task-source.js');
+ const study=read('worker/document-study-source.js');
+ assert.match(worker,/HOMEFLOW_LOGIN_REQUIRED/);
+ assert.match(worker,/auth_source==='legacy'/);
+ assert.match(ui,/v-if="!homeflowSsoAvailable \|\| initialized===false" class="auth-panel"/);
+ assert.match(task,/DOCUMENT_TASK_EXECUTION_ENABLED==='true'/);
+ assert.match(study,/STUDY_DOCUMENT_EXECUTION_SERVICE\?\.fetch/);
+ assert.match(sso,/verifyHomeFlowSession/);
+ assert.match(worker,/DELETE FROM homeflow_oauth_pending/);
 });
