@@ -35,7 +35,7 @@ test('all My features remain accessible in native grouped rows',()=>{
  assert.doesNotMatch(mine,/邀请第二位家庭成员|sheet='invite'/);
  assert.match(mine,/id="mine-family-heading">文书与数据/);
  assert.match(mine,/Google 全文翻译/);
- assert.match(mine,/Gemini 3\.6/);
+ assert.match(mine,/Gemini 3\.5 Flash-Lite/);
  assert.match(mine,/Workers AI 解读/);
  assert.match(mine,/Workers AI OCR/);
  assert.match(mine,/OCR\.space/);
