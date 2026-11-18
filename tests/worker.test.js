@@ -2806,6 +2806,49 @@ test('Gemini 503 waits for scheduled one-time recovery without consuming quota d
  }finally{globalThis.fetch=previousFetch;}
 });
 
+test('Gemini 503 automatic retry ends after two total attempts, even if Cron runs again',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GEMINI_API_KEY='local-test-key';
+ const original=globalThis.fetch;
+ let googleCalls=0;
+ globalThis.fetch=async()=>{
+  googleCalls++;
+  return new Response(JSON.stringify({error:{message:'temporary service overload'}}),{
+   status:503,headers:{'Content-Type':'application/json'}
+  });
+ };
+ try{
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+   title:'重试有限测试',text:'電気料金の請求書です。金額をご確認ください。',
+   source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+  }});
+  assert.equal(imported.response.status,201);
+  const id=imported.data.document_id;
+  assert.equal(googleCalls,1);
+  const first=(await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_job;
+  assert.equal(first.state,'retry_wait');
+  assert.equal(first.attempts,1);
+  assert.ok(Date.parse(first.next_attempt_at)-Date.now()>=14*60*1000);
+  env.DB.sql.prepare('UPDATE document_ai_analyses SET updated_at=? WHERE document_id=?')
+   .run(new Date(Date.now()-16*60*1000).toISOString(),id);
+  env.DB.sql.prepare('UPDATE document_ai_jobs SET next_attempt_at=? WHERE document_id=?')
+   .run(new Date(Date.now()-1000).toISOString(),id);
+  const pending=[];
+  await app.scheduled({},env,{waitUntil:p=>pending.push(p)});
+  await Promise.all(pending);
+  assert.equal(googleCalls,2,'one and only one automatic retry');
+  const second=(await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_job;
+  assert.equal(second.state,'failed');
+  assert.equal(second.attempts,2);
+  for(let i=0;i<3;i++){
+   const remaining=[];
+   await app.scheduled({},env,{waitUntil:p=>remaining.push(p)});
+   await Promise.all(remaining);
+  }
+  assert.equal(googleCalls,2,'later Cron executions do not retry failed jobs');
+ }finally{globalThis.fetch=original;}
+});
+
 test('campaign email rule re-analysis backfills missing deadline without using Gemini, and only explicit year confirmation creates a HomeFlow proposal',async()=>{
  const env=makeEnv(),owner=await boot(env);
  const source=[
