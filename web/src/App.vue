@@ -116,9 +116,33 @@ async function completeHomeflowSso(){
   flash('HomeFlow 登录成功');
  }catch(e){
   problem(e);
-  if(['SSO_INVALID_PROOF','SSO_INVALID_STATE'].includes(e.message))
+  if(['SSO_INVALID_STATE','SSO_REPLAY'].includes(e.message))
    clearHomeflowSsoPending();
  }finally{homeflowSsoBusy.value=false;}
+}
+// Safely resume callback exchange only in the original installed PWA. The
+// one-use proof survives iOS WebView restarts, never enters a Safari URL.
+let homeflowProgressChecking=false;
+async function resumeHomeflowSsoIfReady(){
+ if(!homeflowSsoAvailable.value||homeflowSsoBusy.value||homeflowProgressChecking||user.value)return;
+ homeflowProgressChecking=true;
+ try{
+  const pending=await readHomeflowSsoPendingWithRecovery();
+  if(!pending)return;
+  const response=await fetch('/api/homeflow-sso/progress',{
+   method:'POST',credentials:'same-origin',cache:'no-store',
+   headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({state:pending.state,resume_secret:pending.resume_secret})
+  });
+  const status=await response.json();
+  if(!response.ok||status?.ok!==true)return;
+  if(status.progress==='expired'){
+   clearHomeflowSsoPending();problem('HomeFlow 授权已过期，请重新授权');
+  }else if(status.ready===true){
+   await completeHomeflowSso();
+  }
+ }catch{ /* A temporary network failure does not invalidate the proof. */ }
+ finally{homeflowProgressChecking=false;}
 }
 const busy=ref(false),error=ref(''),notice=ref(''),activeTab=ref('today');
 const passwordDraft=reactive({current_password:'',new_password:'',confirm_password:''});
@@ -666,7 +690,7 @@ async function revalidatePrivatePwaResume(){
 }
 function onGoogleVisibility(){
  if(document.visibilityState!=='visible')return;
- if(!user.value)void refreshHomeflowSsoAvailability();
+ if(!user.value){void refreshHomeflowSsoAvailability().then(()=>resumeHomeflowSsoIfReady());return;}
  void revalidatePrivatePwaResume().then(ok=>{
   if(!ok)return;
   void refreshGoogleOnReturn();
@@ -674,7 +698,7 @@ function onGoogleVisibility(){
  });
 }
 function onAppPageShow(){
- if(!user.value)void refreshHomeflowSsoAvailability();
+ if(!user.value){void refreshHomeflowSsoAvailability().then(()=>resumeHomeflowSsoIfReady());return;}
  void revalidatePrivatePwaResume().then(ok=>{
   if(!ok)return;
   void refreshGoogleOnReturn();
@@ -1717,7 +1741,7 @@ onMounted(async()=>{
   window.addEventListener('pageshow',onAppPageShow);
   window.addEventListener('focus',onAppPageShow);
   await Promise.all([boot(),refreshHomeflowSsoAvailability()]);
-  if(!user.value)await refreshInitStatus();
+  if(!user.value){await resumeHomeflowSsoIfReady();if(!user.value)await refreshInitStatus();}
 });
 onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);document.removeEventListener('visibilitychange',onGoogleVisibility);window.removeEventListener('pageshow',onAppPageShow);window.removeEventListener('focus',onAppPageShow);clearPrivateWorkspace();if(noticeTimeout!==null)clearTimeout(noticeTimeout);if(errorTimeout!==null)clearTimeout(errorTimeout);fileDraft.value=null;});
 </script>
@@ -1737,7 +1761,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <p class="muted auth-intro">读懂日本生活文书，重要事项不错过。</p>
       <div v-if="homeflowSsoAvailable" class="auth-panel stack">
         <p v-if="homeflowSsoPending" class="fine-print">
-          如果 iPhone 打开 Safari，请先在 Safari 完成 HomeFlow 授权，再返回原来的主屏幕文书助手，点击下方按钮。临时授权凭证只保存在文书助手 App 内，5 分钟过期，成功登录后立即清除。
+          在 Safari 完成 HomeFlow 授权后返回原来的文书助手，会自动核验并完成登录。未自动完成时可点下方按钮；临时凭证仅保存在原 App 内，5 分钟过期。
         </p>
         <button v-if="homeflowSsoPending" type="button" class="primary action-large"
           :disabled="homeflowSsoBusy" @click="completeHomeflowSso">

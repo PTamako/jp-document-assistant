@@ -17,7 +17,7 @@ import { ocrAttachment } from './ocr.js';
 import { ocrSpaceAttachment } from './ocr-space.js';
 import { handleGoogleGmail } from './google-oauth.js';
 import { oauthCallback,handleBrowserGoogle } from './google-browser-oauth.js';
-import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso,homeflowSsoEnabled,verifyHomeFlowSession} from './homeflow-sso.js';
+import {startHomeFlowSso,callbackHomeFlowSso,completeHomeFlowSso,homeflowSsoProgress,homeflowSsoEnabled,verifyHomeFlowSession} from './homeflow-sso.js';
 import {ocrSpaceImportPreview} from './ocr-space-preview.js';
 import {workersAiImportPreview} from './ocr-import-preview.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
@@ -635,46 +635,16 @@ async function contentForAttachment(env,p,id,aid){
   if(!result)bad('R2 原件已缺失','ORIGINAL_MISSING',404);
   return new Response(result.body,{headers:{'Content-Type':a.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox",'Content-Disposition':'inline'}});
 }
-// Temporary production compatibility until a full Static Assets upload is available.
-// Only the HTML entrypoint and tiny main JS bootstrap are intercepted; OCR/PDF
-// worker chunks and all other static files stay on asset-first serving.
-async function serveGeminiUiCompatibility(request,env,path){
-  const response=await env.ASSETS.fetch(request);
-  if(!response.ok||request.method!=='GET')return response;
-  const html=path==='/'||path==='/index.html';
-  const js=/^\/assets\/index-[A-Za-z0-9_-]+\.js$/.test(path);
-  if(!html&&!js)return response;
-  const original=await response.clone().text();
-  let updated=original;
-  if(html){
-    updated=original.replace(/(src="\/assets\/index-[A-Za-z0-9_-]+\.js)"/,
-      '$1?gemini-model-ui-20261118"');
-  }else{
-    const changes=[
-      ['Gemini 3.6 Flash','Gemini 3.5 Flash-Lite'],
-      ['Gemini 今日 20 次已用完（美西午夜重置）','Gemini 今日 500 次已用完（美西午夜重置；仅统计本应用）'],
-      ['Gemini 每分钟最多 5 次，请稍后重试','Gemini 每分钟最多 15 次，请稍后重试'],
-      ['Gemini 3.6','Gemini 3.5 Flash-Lite'],
-      ['Google 暂时繁忙，已安排自动重试','Google 暂时繁忙，约 15 分钟后最多自动重试一次']
-    ];
-    for(const [from,to] of changes)updated=updated.replaceAll(from,to);
-  }
-  if(updated===original)return response;
-  const headers=new Headers(response.headers);
-  headers.set('Cache-Control','no-store');
-  headers.delete('Content-Length');headers.delete('Content-Encoding');headers.delete('ETag');
-  return new Response(updated,{status:response.status,statusText:response.statusText,headers});
-}
 async function route(request,env,ctx){
   const url=new URL(request.url),path=url.pathname,method=request.method;
   if(!path.startsWith('/api/')){
-    if(env.ASSETS&&method==='GET'&&(path==='/'||path==='/index.html'||/^\/assets\/index-[A-Za-z0-9_-]+\.js$/.test(path)))
-      return serveGeminiUiCompatibility(request,env,path);
+    // Native Workers Static Assets serve the production PWA first; this
+    // fallback only handles explicit requests reaching the Worker.
     return env.ASSETS?.fetch(request) || new Response('Not found',{status:404});
   }
   const calendarToken=method==='GET'?path.match(/^\/api\/calendar\/([a-f0-9]{64})\.ics$/):null;
   if(calendarToken)return serveCalendar(request,env,calendarToken[1]);
-  if(method==='GET'&&path==='/api/health')return json({ok:true,service:'document-assistant',ai_ocr:env.ENABLE_EXPERIMENTAL_OCR==='true'&&!!env.AI?'experimental':'disabled',version:'0.1.0'});
+  if(method==='GET'&&path==='/api/health')return json({ok:true,service:'document-assistant',ai_ocr:env.ENABLE_EXPERIMENTAL_OCR==='true'&&!!env.AI?'experimental':'disabled',version:'0.1.0',worker_version:env.CF_VERSION_METADATA?.id||null});
   if(method==='GET'&&path==='/api/auth/status'){
     requireBinding(env,'DB');
     const state=await dbFirst(env.DB,'SELECT COUNT(*) count FROM households');
@@ -687,6 +657,7 @@ async function route(request,env,ctx){
   if(path==='/api/homeflow-sso/start')return startHomeFlowSso(request,env,url);
   if(path==='/api/homeflow-sso/callback')return callbackHomeFlowSso(request,env,url);
   if(path==='/api/homeflow-sso/complete')return completeHomeFlowSso(request,env,url);
+  if(path==='/api/homeflow-sso/progress')return homeflowSsoProgress(request,env,url);
   // The callback deliberately needs no browser cookie: one-time state binds it to the PWA user.
   if(method==='GET'&&path==='/api/google/oauth/callback')return oauthCallback(request,env,url);
   const internalDocument=path.match(/^\/api\/internal\/document-actions\/(execute|receipt|source-check|preview)$/);

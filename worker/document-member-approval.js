@@ -1,6 +1,7 @@
 // Stage D/E: durable, private member intent -> signed HomeFlow pending review.
-// NO target-app bridge call is made here. Approval does not authorize execution;
-// document.sync.* needs its own verified executor, which is NOT implemented.
+// This module submits and verifies a frozen approval intent only. Target execution
+// is separately handled by signed, receipt-checked finance/task/study executors;
+// approval alone never authorizes claiming that a write has succeeded.
 import {randomToken,hashString,isoNow} from './security.js';
 import {json,bad,readJson,failure} from './http.js';
 import {validatedPayload} from './bridge.js';

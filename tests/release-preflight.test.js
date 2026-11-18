@@ -13,8 +13,16 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.equal(wrangler.main,'worker/index.js');
  assert.equal(wrangler.assets?.directory,'./dist');
  assert.equal(wrangler.assets?.binding,'ASSETS');
- assert.ok(wrangler.assets?.run_worker_first?.includes('/assets/index-*.js'));
- assert.ok(wrangler.assets?.run_worker_first?.includes('/'));
+ assert.deepEqual(wrangler.assets?.run_worker_first,['/api/*','/assets/worker-entry-*.js']);
+ assert.equal(wrangler.version_metadata?.binding,'CF_VERSION_METADATA');
+ // Serving index.html and hashed JS asset-first saves Worker invocations.
+ const headers=read('web/public/_headers');
+ assert.match(headers,/Content-Security-Policy: default-src 'self'/);
+ assert.match(headers,/X-Frame-Options: DENY/);
+ assert.match(headers,/Referrer-Policy: strict-origin-when-cross-origin/);
+ assert.match(headers,/Cache-Control: public, max-age=31536000, immutable/);
+ assert.doesNotMatch(worker,/serveGeminiUiCompatibility/);
+ assert.match(worker,/worker_version:env.CF_VERSION_METADATA\?\.id\|\|null/);
  assert.equal(wrangler.d1_databases?.length,1);
  assert.equal(wrangler.d1_databases[0].binding,'DB');
  assert.equal(wrangler.d1_databases[0].database_name,'jp-document-assistant');
