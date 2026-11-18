@@ -263,6 +263,12 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  if(source.length>9000)return {ai_status:'too_long'};
  const sourceHash=await hashString(source),model=modelFor(provider);
  const old=await first(env.DB,'SELECT * FROM document_ai_analyses WHERE document_id=?',doc.id);
+ // Another active shared document may already contain the exact model/result.
+ // Check BEFORE reserving scarce Gemini/Workers AI requests.
+ if(doc.visibility==='shared'&&doc.household_id){
+  const reused=await getDocumentAiCache(env.DB,doc);
+  if(reused?.status==='success')return {ai_status:'cached',result:reused.result,added_fields:0};
+ }
  // Preserve prior successful analysis across a prompt-only upgrade;
  // the user can backfill missing structured fields with rules without
  // consuming their limited Gemini / Cloudflare daily allowance.
@@ -337,8 +343,29 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
 }
 export async function getDocumentAiCache(db,doc){
  if(!doc.extracted_text_ja)return null;
- const row=await first(db,'SELECT provider,source_sha,model_id,prompt_version,state,result_json FROM document_ai_analyses WHERE document_id=?',doc.id);
- if(!row||row.provider!==(doc.ai_provider||'none')||row.source_sha!==await hashString(doc.extracted_text_ja)||!SUCCESS_PROMPT_VERSIONS.has(row.prompt_version)||row.model_id!==modelFor(row.provider))return null;
+ const provider=doc.ai_provider||'none';
+ const sourceSha=await hashString(doc.extracted_text_ja);
+ const valid=row=>!!row&&row.provider===provider&&row.source_sha===sourceSha&&
+   SUCCESS_PROMPT_VERSIONS.has(row.prompt_version)&&row.model_id===modelFor(provider);
+ const local=await first(db,'SELECT provider,source_sha,model_id,prompt_version,state,result_json FROM document_ai_analyses WHERE document_id=?',doc.id);
+ let row=valid(local)?local:null;
+ // Household reuse is allowed only when BOTH records are explicitly shared.
+ // No derived content is copied across records; revoking the donor share removes access.
+ if((!row||row.state!=='success')&&doc.visibility==='shared'&&doc.household_id&&
+    (provider==='gemini'||provider==='cloudflare')){
+  const versions=[...SUCCESS_PROMPT_VERSIONS];
+  const shared=await first(db,`SELECT a.provider,a.source_sha,a.model_id,a.prompt_version,a.state,a.result_json
+     FROM document_ai_analyses a JOIN documents d ON d.id=a.document_id
+     WHERE d.household_id=? AND d.visibility='shared' AND d.lifecycle='active'
+       AND d.id<>? AND d.extracted_text_ja=? AND d.ai_provider=?
+       AND a.provider=? AND a.source_sha=? AND a.model_id=? AND a.state='success'
+       AND a.prompt_version IN (${versions.map(()=>'?').join(',')})
+     ORDER BY a.updated_at DESC LIMIT 1`,
+     doc.household_id,doc.id,doc.extracted_text_ja,provider,provider,
+     sourceSha,modelFor(provider),...versions);
+  if(valid(shared))row=shared;
+ }
+ if(!row)return null;
  let stored=null;
  try{stored=row.result_json?JSON.parse(row.result_json):null;}catch{}
  return {status:row.state,provider:row.provider,model:row.model_id,analysis_version:row.prompt_version,
