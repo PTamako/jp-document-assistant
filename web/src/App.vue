@@ -5,6 +5,7 @@ import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
 import { isIosStandalonePwa } from './google-auth-context.js';
 import { handoffHomeflowBrowserAuthorization,validateHomeflowAuthorizationUrl } from './homeflow-sso-pwa-return.js';
+import { persistHomeflowSsoRecovery,restoreHomeflowSsoRecovery,clearHomeflowSsoRecovery } from './homeflow-sso-recovery.js';
 import { deleteOldLocalTranslationWeights } from './local-translation-support.js';
 import {gmailConfigured,gmailConnected,gmailForget,preloadGmailIdentity,gmailIdentityReady,gmailAuthorize,gmailList,gmailReadOne,gmailRevoke,gmailPayloadToDocument} from './gmail-import.js';
 import { extractDocumentText } from './document-text.js';
@@ -34,7 +35,8 @@ const authModes=computed(()=>[
 // is checking its current HttpOnly session after Safari/app-switch resume.
 const resumeChecking=ref(false);
 // HomeFlow SSO is invisible until the backend explicitly opts in.
-// The 5-minute resume proof stays only in the original PWA session.
+// Five-minute one-use proof is recoverable only in installed PWA origin storage.
+// iOS Safari handoff may discard sessionStorage even before the user returns.
 const homeflowSsoAvailable=ref(false),homeflowSsoPending=ref(false),homeflowSsoBusy=ref(false);
 const SSO_PENDING_KEY='da-homeflow-sso-pending';
 function readHomeflowSsoPending(){
@@ -50,16 +52,29 @@ function readHomeflowSsoPending(){
   return data;
  }catch{return null;}
 }
+async function readHomeflowSsoPendingWithRecovery(){
+ const current=readHomeflowSsoPending();
+ if(current)return current;
+ if(!isIosStandalonePwa())return null;
+ try{
+  const pending=await restoreHomeflowSsoRecovery();
+  if(!pending)return null;
+  sessionStorage.setItem(SSO_PENDING_KEY,JSON.stringify(pending));
+  return pending;
+ }catch{return null;}
+}
 function clearHomeflowSsoPending(){
  try{sessionStorage.removeItem(SSO_PENDING_KEY);}catch{}
  homeflowSsoPending.value=false;
+ // The one-use proof must not remain recoverable after login, logout or expiry.
+ void clearHomeflowSsoRecovery().catch(()=>{});
 }
 async function refreshHomeflowSsoAvailability(){
  try{
   const r=await fetch('/api/homeflow-sso/status',{credentials:'same-origin',cache:'no-store'});
   homeflowSsoAvailable.value=r.ok&&(await r.json()).enabled===true;
  }catch{homeflowSsoAvailable.value=false;}
- homeflowSsoPending.value=homeflowSsoAvailable.value&&!!readHomeflowSsoPending();
+ homeflowSsoPending.value=homeflowSsoAvailable.value&&!!(await readHomeflowSsoPendingWithRecovery());
 }
 async function beginHomeflowSso(){
  if(!homeflowSsoAvailable.value||homeflowSsoBusy.value)return;
@@ -74,19 +89,22 @@ async function beginHomeflowSso(){
    throw Error('登录请求无效');
   const url=validateHomeflowAuthorizationUrl(data.authorization_url,data.state,
    window.location.origin);
-  sessionStorage.setItem(SSO_PENDING_KEY,JSON.stringify({
-   state:data.state,resume_secret:data.resume_secret,until:Date.now()+300000
-  }));
+  const pending={state:data.state,resume_secret:data.resume_secret,
+   until:Date.now()+300000};
+  // Persist before leaving the PWA: iOS can recreate its WebView on return.
+  // Never send this proof to Safari or add it to the authorization URL.
+  if(isIosStandalonePwa())await persistHomeflowSsoRecovery(pending);
+  sessionStorage.setItem(SSO_PENDING_KEY,JSON.stringify(pending));
   homeflowSsoPending.value=true;
   handoffHomeflowBrowserAuthorization(window.location,url.href,homeflowSsoBusy);
  }catch(e){problem(e);homeflowSsoBusy.value=false;}
 }
 async function completeHomeflowSso(){
- const p=readHomeflowSsoPending();
- if(!p){clearHomeflowSsoPending();problem('登录已过期，请重新授权');return;}
  if(homeflowSsoBusy.value)return;
  homeflowSsoBusy.value=true;error.value='';
  try{
+  const p=await readHomeflowSsoPendingWithRecovery();
+  if(!p){clearHomeflowSsoPending();throw Error('登录已过期，请重新授权');}
   const r=await fetch('/api/homeflow-sso/complete',{method:'POST',
    credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},
    body:JSON.stringify({state:p.state,resume_secret:p.resume_secret})});
@@ -539,9 +557,9 @@ async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={})
     const err=new Error(sessionLost?'HomeFlow 登录已失效，请重新登录':data?.message||`HTTP ${resp.status}`);
     err.code=code;err.status=resp.status;
     if(sessionLost){
-      // A revoked HomeFlow session must not leave an already opened private
-      // document, raw OCR text, Gmail import or attachment preview onscreen.
-      clearHomeflowSsoPending();
+      // A revoked identity must erase private state, but an expected /api/me
+      // 401 while signing in must NOT delete a pending HomeFlow OAuth proof.
+      if(user.value)clearHomeflowSsoPending();
       clearPrivateWorkspace();
     }
     throw err;
@@ -648,6 +666,7 @@ async function revalidatePrivatePwaResume(){
 }
 function onGoogleVisibility(){
  if(document.visibilityState!=='visible')return;
+ if(!user.value)void refreshHomeflowSsoAvailability();
  void revalidatePrivatePwaResume().then(ok=>{
   if(!ok)return;
   void refreshGoogleOnReturn();
@@ -655,6 +674,7 @@ function onGoogleVisibility(){
  });
 }
 function onAppPageShow(){
+ if(!user.value)void refreshHomeflowSsoAvailability();
  void revalidatePrivatePwaResume().then(ok=>{
   if(!ok)return;
   void refreshGoogleOnReturn();
@@ -1717,7 +1737,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <p class="muted auth-intro">读懂日本生活文书，重要事项不错过。</p>
       <div v-if="homeflowSsoAvailable" class="auth-panel stack">
         <p v-if="homeflowSsoPending" class="fine-print">
-          如果 iPhone 打开 Safari，请先在 Safari 完成 HomeFlow 授权，再返回原来的主屏幕文书助手，点击下方按钮。授权凭证只保留在原 App 会话中。
+          如果 iPhone 打开 Safari，请先在 Safari 完成 HomeFlow 授权，再返回原来的主屏幕文书助手，点击下方按钮。临时授权凭证只保存在文书助手 App 内，5 分钟过期，成功登录后立即清除。
         </p>
         <button v-if="homeflowSsoPending" type="button" class="primary action-large"
           :disabled="homeflowSsoBusy" @click="completeHomeflowSso">
