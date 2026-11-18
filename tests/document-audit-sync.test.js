@@ -34,7 +34,7 @@ test('member SBI transfers are neither submitted for approval nor posted via leg
  assert.match(bridge,/const memberPersonalTransfer=p\.role==='member'&&target==='kakebo'&&entryType==='transfer'/);
  assert.match(bridge,/const approvalRequired=p\.role!=='owner'&&target==='kakebo'&&!memberPersonalTransfer/);
  assert.match(bridge,/commitPersonalSbiCandidate\(request,env,p,item,verified\)/);
- assert.match(bridge,/available:personalReady\|\|/);
+ assert.match(bridge,/available:!unsupportedMovement&&\(personalReady\|\|/);
  assert.doesNotMatch(bridge,/PERSONAL_TRANSFER_EXECUTOR_REQUIRED/);
  assert.match(approval,/PERSONAL_TRANSFER_NO_APPROVAL/);
  assert.match(wrangler,/KAKEIBO_DOCUMENT_ACCOUNT_SERVICE/);
