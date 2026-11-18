@@ -13,8 +13,8 @@ function fixture(){
   }}}}};
  return {sql,db};
 }
-test('Gemini 3.6 Flash uses the screenshot limits as a shared, model-specific cap',()=>{
- assert.equal(GEMINI_MODEL,'gemini-3.6-flash');
+test('Gemini Flash-Lite respects the shared app-wide quota across model upgrades',()=>{
+ assert.equal(GEMINI_MODEL,'gemini-3.5-flash-lite');
  assert.equal(GEMINI_DAY_LIMIT,20);
  assert.equal(GEMINI_MINUTE_LIMIT,5);
 });
@@ -51,13 +51,15 @@ test('20 attempts/day and 5 attempts/minute are enforced atomically for both fam
  assert.equal((await geminiQuotaUsage(db,reset)).calls,1);
  sql.close();
 });
-test('existing Gemini 3.5 usage must not count toward 3.6 and missing schema fails closed',async()=>{
+test('previous model calls count toward the shared daily cap and missing schema fails closed',async()=>{
  const {db,sql}=fixture();
  const at=new Date('2026-11-12T18:10:00Z');
  sql.prepare("INSERT INTO gemini_api_daily(model_id,day_pt,calls,minute_utc,minute_calls) VALUES(?,?,?,?,?)")
-  .run('gemini-3.5-flash','2026-11-12',20,'2026-11-12T18:09',5);
- assert.equal((await geminiQuotaUsage(db,at)).calls,0);
+  .run('gemini-3.6-flash','2026-11-12',19,'2026-11-12T18:09',5);
+ assert.equal((await geminiQuotaUsage(db,at)).calls,19);
  assert.deepEqual(await reserveGeminiRequest(db,at),{allowed:true});
+ assert.equal((await geminiQuotaUsage(db,at)).calls,20);
+ assert.deepEqual(await reserveGeminiRequest(db,at),{allowed:false,code:'gemini_daily_limit'});
  sql.exec('DROP TABLE gemini_api_daily');
  await assert.rejects(reserveGeminiRequest(db,at),/no such table/);
 });
