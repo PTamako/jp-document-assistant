@@ -246,15 +246,6 @@ function invalidateStaleTranslation(){
    translationSource.value!==String(current.value?.extracted_text_ja||'').trim())
   stopTranslation({clear:true});
 }
-// Keep the original visible by default. Only an explicit tap opens the AI
-// interpretation; a completed personal/family result is shown without inference.
-function showAiExplanation(){
- if(!current.value)return;
- detailTab.value='explain';
- if(canManageCurrent.value&&current.value.ai_provider!=='none'&&
-    !aiResultReady(current.value)&&!isAiJobPending(current.value.ai_job)&&!busy.value)
-  void runAiForCurrent();
-}
 // Preserve exact retry fields in memory while the app stays open.
 const pendingCandidateRetry=ref(null);
 const ledgerOptions=ref({categories:[],paymentSources:[]}),ledgerOptionsError=ref(''),ledgerAttempted=ref(false),ledgerMappingChangeConfirmed=ref(false),candidateMerchant=ref('');
@@ -322,7 +313,7 @@ const aiFailureMessage=computed(()=>{
  if(job?.state==='failed'){
     const message=aiFailureLabels[job.last_error]||'AI 解析未完成';
     return job.provider==='gemini'&&Number(job.attempts)>=2
-      ?message+'。已自动重试一次，现已停止；需要你手动点击「AI 解读」才能再次请求'
+      ?message+'。已自动重试一次，现已停止；需要你手动点击「重试 AI 解读」才能再次请求'
       :message+'。已停止自动重试，可手动重试';
   }
  return current.value?.ai_analysis?.status==='failed'
@@ -1935,9 +1926,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <h3>中文讲解</h3>
             <button v-if="canManageCurrent" class="explain-provider" type="button" @click="openDocAiProvider" aria-label="选择这份文书的 AI 引擎">{{({cloudflare:'Workers AI',gemini:'Gemini 3.5 Flash-Lite',none:'仅规则'})[current.ai_provider]||'仅规则'}}<UiIcon name="chevron-right" :size="15"/></button>
           </div>
-          <div class="explain-actions">
-            <button v-if="canManageCurrent&&current.ai_provider!=='none'" class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button>
-            <button v-if="canManageCurrent" class="secondary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="16"/>重新解析</button>
+          <div v-if="canManageCurrent&&current.ai_provider!=='none'&&!aiResultReady(current)&&!isAiJobPending(current.ai_job)" class="explain-actions">
+            <button class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>{{current.ai_job?.state==='failed'||current.ai_analysis?.status==='failed'?'重试 AI 解读':'AI 解读'}}</button>
           </div>
           <p v-if="aiFailureMessage" class="detail-note" role="status">{{aiFailureMessage}}</p>
           <p class="multiline explanation-text" :class="{expanded:explanationExpanded}">{{(explanationExpanded?explanationText:explanationPreview)||'还没有可讲解的文字，可在原文页补充。'}}</p>
@@ -1945,7 +1935,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
           <details v-if="aiAnalysis?.important_points_zh?.length" class="explain-points"><summary>重要事项（{{aiAnalysis.important_points_zh.length}}）</summary><p v-for="(line,index) in aiAnalysis.important_points_zh" :key="index">{{line}}</p></details>
         </div>
       </section>
-      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="!current.fields?.length" class="empty">暂无字段。可点击「重新讲解」提取原文中的日期及办理事项。</div><button v-if="canManageCurrent&&current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&(!current.fields?.some(f=>f.field_key==='due_date')||current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全')))" class="secondary full" @click="openCompleteDeadline">确认／修改默认年份（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" :disabled="!canManageCurrent" @click="startField(field)"><div><span class="muted">{{field.field_key==='due_date'&&field.source_quote?.startsWith('年份自动补全')?'截止日期（按今年自动补全·待确认）':labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">付款与到账请核对。</div></section>
+      <section v-if="detailTab==='finance'"><div class="section-head"><h3>从原文提取的字段</h3><button class="text-button icon-label" @click="amountVisible=!amountVisible"><UiIcon :name="amountVisible?'eye-off':'eye'" :size="17"/>{{amountVisible?'隐藏金额':'显示金额'}}</button></div><div v-if="canManageCurrent" class="field-refresh-action"><button class="secondary small icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="refreshInterpretation"><UiIcon name="refresh-cw" :size="16"/>重新提取字段</button></div><div v-if="!current.fields?.length" class="empty">{{canManageCurrent?'暂无字段。可点击「重新提取字段」从原文提取日期及办理事项。':'暂无字段。'}}</div><button v-if="canManageCurrent&&current.fields?.some(f=>f.field_key==='due_date_partial'&&f.review_state!=='rejected')&&(!current.fields?.some(f=>f.field_key==='due_date')||current.fields?.some(f=>f.field_key==='due_date'&&f.review_state==='unreviewed'&&f.source_quote?.startsWith('年份自动补全')))" class="secondary full" @click="openCompleteDeadline">确认／修改默认年份（之后可创建待办）</button><button v-if="canManualSalary" class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写工资到账金额</button><button class="field-card" v-for="field in current.fields" :key="field.id" :disabled="!canManageCurrent" @click="startField(field)"><div><span class="muted">{{field.field_key==='due_date'&&field.source_quote?.startsWith('年份自动补全')?'截止日期（按今年自动补全·待确认）':labelFor(field.field_key)}}</span><strong>{{displayValue(field)}}</strong><small>{{field.source_quote?.startsWith('用户手动补录')?'来源':'原文'}}：{{field.source_quote||'未记录'}}</small></div><span class="state-tag">{{field.review_state==='unreviewed'?'待确认':'已核验'}}</span></button><div class="info-note">付款与到账请核对。</div></section>
       <section v-if="detailTab==='tasks'"><h3 class="section-title">待办与财务建议</h3><div v-if="canManualSalary" class="content-card"><p>已识别工资入账通知，但邮件没有金额。</p><button class="secondary full" @click="salaryAmountDraft='';salaryAmountConfirmed=false;sheet='manualSalary'">手动填写到账金额，生成家計簿收入建议</button></div>
         <div v-if="campaignPendingDate" class="content-card campaign-review-card">
           <h3>活动截止日期 · 待核对</h3>
@@ -2023,7 +2013,6 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <div class="original-section-heading">
               <h3>OCR 文字</h3>
               <div class="original-translate-actions">
-                <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="busy" @click="showAiExplanation"><UiIcon name="sparkles" :size="17"/>AI 解读</button>
                 <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="translationBusy" @click="translateOriginal" :aria-pressed="translationVisible" aria-label="切换日文原文与 Google 中文机翻">
                   <UiIcon name="languages" :size="17"/>{{translationBusy?'翻译中':translationVisible?'看原文':localTranslation&&translationSource===current.extracted_text_ja.trim()?'看译文':'翻译全文'}}
                 </button>
