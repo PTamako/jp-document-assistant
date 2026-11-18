@@ -6,7 +6,7 @@ import {enqueueDocumentAi,getDocumentAiJob,processDocumentAiJob} from '../worker
 
 function setup(){
  const sql=new DatabaseSync(':memory:');
- sql.exec("PRAGMA foreign_keys=ON; CREATE TABLE documents(id TEXT PRIMARY KEY, lifecycle TEXT DEFAULT 'active', category TEXT, ai_provider TEXT, ai_consent_at TEXT, extracted_text_ja TEXT);");
+ sql.exec("PRAGMA foreign_keys=ON; CREATE TABLE documents(id TEXT PRIMARY KEY, lifecycle TEXT DEFAULT 'active', category TEXT, household_id TEXT, visibility TEXT DEFAULT 'private', ai_provider TEXT, ai_consent_at TEXT, extracted_text_ja TEXT);");
  sql.exec(fs.readFileSync(new URL('../migrations/0012_document_ai_analysis.sql',import.meta.url),'utf8'));
  sql.exec(fs.readFileSync(new URL('../migrations/0018_document_ai_jobs.sql',import.meta.url),'utf8'));
  const db={prepare(query){return {bind(...args){const s=sql.prepare(query);
