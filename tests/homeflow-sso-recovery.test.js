@@ -43,6 +43,6 @@ test('public /api/me 401 must not destroy pending SSO and PWA must recover befor
  assert.match(app,/homeflowSsoPending\.value=homeflowSsoAvailable\.value&&!!\(await readHomeflowSsoPendingWithRecovery\(\)\)/);
  assert.match(app,/if\(isIosStandalonePwa\(\)\)await persistHomeflowSsoRecovery\(pending\);[\s\S]*?handoffHomeflowBrowserAuthorization/);
  assert.match(app,/const p=await readHomeflowSsoPendingWithRecovery\(\)/);
- assert.match(app,/if\(!user\.value\)void refreshHomeflowSsoAvailability\(\)/);
+ assert.match(app,/if\(!user\.value\)\{void refreshHomeflowSsoAvailability\(\)\.then\(\(\)=>resumeHomeflowSsoIfReady\(\)\);return;\}/);
  assert.doesNotMatch(app,/localStorage\.setItem\(SSO_PENDING_KEY/);
 });
