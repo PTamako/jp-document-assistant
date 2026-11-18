@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, nextTick, watch } from 'vue';
 import { compressImage } from './compress.js';
 import { readLocalText } from './mail-import.js';
 import { drivePickerConfig,pickGoogleDriveFile,prepareGoogleDrivePicker,googlePickerReady,driveAuthorizationReady,forgetDriveAuthorization,revokeDriveAuthorization } from './google-drive-picker.js';
@@ -22,6 +22,7 @@ import { aiResultReady, isAiJobPending, aiResultBecameAvailable } from './ai-sta
 import { studySyncState } from './study-sync-status.js';
 import { inferSbiInvestmentKind } from '../../shared/sbi-investment.js';
 import DocumentSwipeRow from './DocumentSwipeRow.vue';
+import OriginalPreview from './OriginalPreview.vue';
 
 const user=ref(null),csrf=ref(''),authMode=ref('login'),auth=reactive({email:'',password:'',setup_token:'',invite_token:'',display_name:''});
 const initialized=ref(null);
@@ -341,7 +342,8 @@ const translationUsagePercent=computed(()=>{
  const limit=Math.max(1,Number(usage.value?.translation_jst_day?.limit||80));
  return Math.min(100,Math.round(100*used/limit));
 });
-const originalUrl=ref(''),originalMime=ref(''); let loadSerial=0;
+const originalUrl=ref(''),originalMime=ref(''),originalFileName=ref('');
+const originalBlob=shallowRef(null);let originalOpenSerial=0,loadSerial=0;
 const accountEpoch=createAccountEpoch();
 let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
@@ -1041,7 +1043,7 @@ async function saveDocAiProvider(){
  try{await api('/api/documents/'+id+'/ai-provider',{method:'PATCH',body:{ai_provider:docAiProvider.value,gemini_consent:docGeminiConsent.value}});
  closeSheet();await openDoc(id);flash('已保存 AI 选择');}catch(e){problem(e);}finally{busy.value=false;}
 }
-function closeSheet(){translationConsent.value=false;attachmentActionsTarget.value=null;importOcrEngine.value='local';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;gmailLastQuery.value='';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
+function closeSheet(){if(sheet.value==='original')revokeOriginal();translationConsent.value=false;attachmentActionsTarget.value=null;importOcrEngine.value='local';importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;missingYearDateDraft.value='';missingYearConfirmed.value=false;ocrSpaceConsent.value=false;ocrProgress.value='';aiProvider.value='';geminiConsent.value=false;docGeminiConsent.value=false;choiceField.value='';choiceSearch.value='';choiceReturnSheet.value='';swipeTrashTarget.value=null;if(sheet.value==='gmail'){gmailGeneration++;gmailBusy.value=false;gmailItems.value=[];gmailNext.value=null;gmailSearched.value=false;gmailLastQuery.value='';}calendarLink.value='';passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';sheet.value='';editTextDraft.value='';localImportNote.value='';fileDraft.value=null;fileSource.value='local_file';ocrAttachmentPending.value=null;ocrRetryStale.value=false;ocrRetryEmpty.value=false;fileText.value='';fileWarning.value='';fileRetention.value='original';textDraft.text='';textDraft.title='';textDraft.source_type='text';textDraft.retention='summary';if(fileInput.value)fileInput.value.value='';if(localTextInput.value)localTextInput.value.value='';}
 function openImport(mode='text'){
   inputMode.value=mode;sheet.value='import';
 }
@@ -1672,17 +1674,36 @@ async function permanentDelete(){busy.value=true;try{
 async function showOriginal(a){
   if(!current.value)return;
   const epoch=accountEpoch.snapshot(),id=current.value.id;
-  revokeOriginal();busy.value=true;
+  revokeOriginal();
+  const serial=originalOpenSerial;
+  busy.value=true;
   try{
     const response=await fetch(`/api/documents/${id}/attachments/${a.id}/content`,{credentials:'same-origin',cache:'no-store',signal:accountController.signal});
     accountEpoch.assertCurrent(epoch);
+    if(serial!==originalOpenSerial)return;
     if(!response.ok)throw new Error('无法读取私人原件');
     const blob=await response.blob();
     accountEpoch.assertCurrent(epoch);
-    originalMime.value=blob.type;originalUrl.value=URL.createObjectURL(blob);sheet.value='original';
-  }catch(e){if(accountEpoch.isCurrent(epoch))problem(e);}finally{if(accountEpoch.isCurrent(epoch))busy.value=false;}
+    if(serial!==originalOpenSerial)return;
+    const supported=['application/pdf','image/jpeg','image/png','image/webp'];
+    const declared=[blob.type,a.mime].map(s=>String(s||'').split(';')[0].trim().toLowerCase()).find(s=>supported.includes(s));
+    const suffix=/\.pdf$/i.test(a.file_label||'')?'application/pdf':
+      /\.jpe?g$/i.test(a.file_label||'')?'image/jpeg':
+      /\.png$/i.test(a.file_label||'')?'image/png':
+      /\.webp$/i.test(a.file_label||'')?'image/webp':'';
+    originalMime.value=declared||suffix||String(blob.type||'application/octet-stream').toLowerCase();
+    originalFileName.value=a.file_label||'文书原件';
+    originalBlob.value=blob;
+    originalUrl.value=URL.createObjectURL(blob);
+    sheet.value='original';
+  }catch(e){if(accountEpoch.isCurrent(epoch)&&serial===originalOpenSerial)problem(e);}
+  finally{if(accountEpoch.isCurrent(epoch))busy.value=false;}
 }
-function revokeOriginal(){if(originalUrl.value)URL.revokeObjectURL(originalUrl.value);originalUrl.value='';}
+function revokeOriginal(){
+  originalOpenSerial++;
+  if(originalUrl.value)URL.revokeObjectURL(originalUrl.value);
+  originalUrl.value='';originalBlob.value=null;originalMime.value='';originalFileName.value='';
+}
 async function changeShare(){
   const newVisibility=current.value.visibility==='private'?'shared':'private';
   busy.value=true;
@@ -2311,7 +2332,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <p v-else-if="candidateApprovalRequired" class="info-note" role="status">家庭账本审批入口暂未启用，没有提交申请或写入目标应用。</p>
         <p v-else-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
         <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':candidateApprovalPrepared?'重试原申请':'提交 HomeFlow 审批'):ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
-      <template v-else-if="sheet==='original'"><h2>私人原件 · 按需加载</h2><img v-if="originalMime.startsWith('image/')" :src="originalUrl" alt="用户主动查看的文书原件" class="original-image" /><iframe v-else-if="originalMime==='application/pdf'" :src="originalUrl" title="文书 PDF 原件" class="original-pdf"></iframe><div class="sheet-actions"><button class="secondary full" @click="revokeOriginal();sheet=''">关闭并释放内存</button></div></template>
+      <OriginalPreview v-else-if="sheet==='original'" :file="originalBlob" :mime="originalMime" :url="originalUrl" :filename="originalFileName" @close="revokeOriginal();sheet=''" />
     </section>
   </div>
 </div>
