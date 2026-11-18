@@ -53,7 +53,7 @@
   },
   "workers_dev": true,
   "preview_urls": false,
-  // Immediate AI jobs run on import; 5-minute Cron is bounded retry/recovery only.
-  "triggers": {"crons": ["*/5 * * * *"]},
+  // Immediate AI jobs run on import; 15-minute Cron is bounded retry/recovery only.
+  "triggers": {"crons": ["*/15 * * * *"]},
   "observability": {"enabled":false}
 }
