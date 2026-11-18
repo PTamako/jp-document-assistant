@@ -2703,6 +2703,7 @@ test('stale static PWA label is corrected without touching OCR files or private 
  const js=await app.fetch(new Request('https://app.example.test/assets/index-old.js?gemini-model-ui-20261118'),env,{});
  const text=await js.text();
  assert.match(text,/Gemini 3.5 Flash-Lite/);
+ assert.doesNotMatch(text,/Gemini 3\.6/);
  assert.match(text,/今日 500 次/);
  assert.match(text,/每分钟最多 15 次/);
  assert.match(text,/最多自动重试一次/);
