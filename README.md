@@ -17,7 +17,7 @@
 - 旧 OPUS-MT 大模型中转 API 已从正在运行的 Worker 路由移除，不再提供手机端下载路径；历史本地模型源文件暂保留供测试与迁移参考。
 - AI 中文解读改为 D1 持久队列后台处理，Google 503 最多自动重试 1 次；同一正式 Worker 使用每 5 分钟 Cron 兜底恢复中断任务，不创建 Preview 资源。
 - Cloudflare Builds 发布命令只运行 JavaScript 语法、单元测试和生产构建，因为构建镜像 Python 3.13 缺少 `_sqlite3`；GitHub PR CI 仍运行完整 Python/D1 测试。
-- Cloudflare 当前资源配置见 [wrangler.jsonc](wrangler.jsonc)；业务代码合并到 `main` 后使用 Cloudflare Builds 发布。PR CI 只做检查、测试、构建，不接触生产数据库、不创建 Preview。
+- 旧静态资源仍由生产 Worker 的临时兼容层仅在首页与 index JS 启动文件中改写 Gemini 模型名称、500/15 限额提示；其他静态资源继续 asset-first。待 Cloudflare Static Assets 完整重新发布后移除此兼容层。\n- Cloudflare 当前资源配置见 [wrangler.jsonc](wrangler.jsonc)；业务代码合并到 `main` 后使用 Cloudflare Builds 发布。PR CI 只做检查、测试、构建，不接触生产数据库、不创建 Preview。
 
 ## 开发和测试
 
