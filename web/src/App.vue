@@ -20,6 +20,7 @@ import { invalidateDocumentLists } from './document-list-cache.js';
 import { chineseExplanation } from './chinese-explanation.js';
 import { aiResultReady, isAiJobPending, aiResultBecameAvailable } from './ai-state.js';
 import { studySyncState } from './study-sync-status.js';
+import {resolveJapaneseReading} from '../../shared/japanese-readings.js';
 import { inferSbiInvestmentKind } from '../../shared/sbi-investment.js';
 import DocumentSwipeRow from './DocumentSwipeRow.vue';
 import OriginalPreview from './OriginalPreview.vue';
@@ -349,7 +350,7 @@ let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
-const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
+const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:'',reading:'',reading_confirmed:false});
 const integrationConfigured=ref(false);
 const candidateApprovalRequired=ref(false);
 const candidatePersonalTransfer=ref(false);
@@ -407,6 +408,11 @@ const candidateActionDisabled=computed(()=>{
  if(needsOtherAssigneeBonus.value&&
     (!Number.isSafeInteger(candidateDraft.bonus_points)||
      candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))return true;
+ if(candidateDraft.kind==='vocabulary'){
+  const checked=resolveJapaneseReading(candidateDraft.redacted_term,candidateDraft.reading);
+  if(!candidateDraft.redacted_term.trim()||!checked.reading||
+     (!checked.verified&&!candidateDraft.reading_confirmed))return true;
+ }
  return false;
 });
 
@@ -1499,6 +1505,8 @@ async function prepareCandidate(item){
   term:item.payload?.term||'',
   sentence:item.payload?.redacted_sentence||item.payload?.sentence||''
  });
+ if(item.candidate_kind==='vocabulary')
+  candidateDraft.reading=resolveJapaneseReading(item.payload?.term,item.payload?.reading).reading;
  // A failed network attempt must reopen with precisely its previously
  // authorized scope and fields, or immutable idempotency rejects the retry.
  if(pendingCandidateRetry.value?.id===item.id)Object.assign(candidateDraft,pendingCandidateRetry.value.body);
@@ -1999,7 +2007,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <span v-else-if="studySyncState(item)==='failed'" class="study-sync-tag error">同步失败</span>
             <span v-else-if="studySyncState(item)==='sending'" class="study-sync-tag neutral">同步中</span>
           </div>
-          <p class="muted">{{item.payload.reading}} · {{item.payload.meaning_zh}}</p>
+          <p class="muted">{{resolveJapaneseReading(item.payload.term,item.payload.reading).reading||'读音待补充'}} · {{item.payload.meaning_zh}}<span v-if="!resolveJapaneseReading(item.payload.term,item.payload.reading).verified"> · AI 读音待核对</span></p>
+          <p v-if="studySyncState(item)==='linked'&&item.payload.reading!==resolveJapaneseReading(item.payload.term,item.payload.reading).reading" class="fine-print">此词条曾同步到知学，旧读音不会自动覆盖，请在知学核对。</p>
           <button v-if="!['linked','sending'].includes(studySyncState(item))" class="secondary small" @click="prepareCandidate(item)">{{studySyncState(item)==='failed'?'重试加入':'脱敏并确认加入'}}</button>
         </div>
         <div class="content-card" v-for="item in detailCandidates.filter(c=>c.candidate_kind==='sentence')" :key="item.id">
@@ -2323,6 +2332,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label v-if="candidateDraft.kind==='homeflow_task'" class="check-row"><input type="checkbox" v-model="candidateDraft.reminder_only" @change="candidateDraft.bonus_points=0"/>仅提醒（不计积分，过零点从今日待办移除）</label>
         <label v-if="candidateDraft.kind==='homeflow_task' && needsOtherAssigneeBonus" class="form-label">指定对方时额外贡献积分（至少 1 分）<input v-model.number="candidateDraft.bonus_points" type="number" inputmode="numeric" min="1" max="10000" /><span class="fine-print">HomeFlow 现有规则要求指定其他成员时投入额外积分；请确认后再提交。余额不足时目标应用会拒绝，不会自动扣分。</span></label>
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
+        <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">日语读音（平假名）<input v-model="candidateDraft.reading" :readonly="resolveJapaneseReading(candidateDraft.redacted_term,candidateDraft.reading).verified" maxlength="100" autocomplete="off" /></label>
+        <label v-if="candidateDraft.kind==='vocabulary'&&!resolveJapaneseReading(candidateDraft.redacted_term,candidateDraft.reading).verified" class="check-row"><input type="checkbox" v-model="candidateDraft.reading_confirmed" /> 已人工核对上述日语读音；AI 猜测未通过词典校验</label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
         <label v-if="['vocabulary','sentence'].includes(candidateDraft.kind)" class="check-row"><input type="checkbox" v-model="candidateDraft.privacy_confirmed" /> 已检查不含姓名、地址、账号及金额</label>
         <p v-if="candidateApprovalRequired&&candidateApprovalSubmitted" class="info-note" role="status">{{candidateApprovalMessage}}</p>
