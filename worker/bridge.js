@@ -2,6 +2,7 @@
 // All requests are authenticated server-to-server and assigned a stable idempotency key.
 import { randomToken, hmacHex, isoNow, hashString } from './security.js';
 import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
+import { isUnsupportedBalanceMovement } from '../shared/balance-movement.js';
 import {personalSbiReady,commitPersonalSbiCandidate,personalSbiReceiptStatus} from './document-personal-sbi.js';
 import { json, bad, readJson, failure } from './http.js';
 const TARGETS={finance:'kakebo',homeflow_task:'homeflow',vocabulary:'zhixue',sentence:'zhixue'};
@@ -111,6 +112,8 @@ export function validatedPayload(target,item,approved,body){
     // Reviewed source fields take precedence; do not trust browser-supplied
     // entry types, merchants or investment purposes.
     const merchant=trim(approved.get('merchant')||x.merchant,100);
+    if(isUnsupportedBalanceMovement(merchant))
+      bad('储值卡充值、积分兑换或余额转移不是家庭收入支出，请使用家計簿资产转移入口核对双方账户','ASSET_MOVEMENT_REQUIRES_TRANSFER',409);
     const type=ledgerEntryType(x,merchant);
     if(!['income','expense','transfer'].includes(type))bad('不支持的财务联动类型','INVALID_ENTRY_TYPE',409);
     const purpose=inferSbiInvestmentKind(merchant);
@@ -281,6 +284,7 @@ export async function candidatePreview(request,env,p,id){
   const payload=JSON.parse(item.payload_json);
   const verifiedMerchant=fields.get('merchant')||payload.merchant;
   const entryType=target==='kakebo'?ledgerEntryType(payload,verifiedMerchant):null;
+  const unsupportedMovement=target==='kakebo'&&isUnsupportedBalanceMovement(verifiedMerchant);
   // Only Kakeibo family-ledger mutations require a household approval.
   // Private tasks and study cards go straight to the verified person's account.
   // Member SBI/asset movements are not family income/expense approvals.
@@ -299,7 +303,7 @@ export async function candidatePreview(request,env,p,id){
     typeof env.HOMEFLOW_BRIDGE_SERVICE?.fetch==='function';
   const preparedApproval=approvalActionEnabled?
     await first(env.DB,'SELECT status,approval_id FROM document_member_sync_intents WHERE candidate_id=?',id):null;
-  const picker=!approvalRequired&&!memberPersonalTransfer&&target==='kakebo'
+  const picker=!unsupportedMovement&&!approvalRequired&&!memberPersonalTransfer&&target==='kakebo'
     ?await ledgerPickerOptions(env,p.user_id,entryType,verifiedMerchant,payload.payment_source_hint):null;
   const members=!approvalRequired&&target==='homeflow'
     ?await homeflowMemberOptions(env,p,id):null;
@@ -307,12 +311,13 @@ export async function candidatePreview(request,env,p,id){
   return json({candidate_id:id,target,kind:item.candidate_kind,payload,entry_type:entryType,
     personal_asset_transfer:memberPersonalTransfer,
     ledger_options:picker?.data||null,
-    ledger_options_error:memberPersonalTransfer&&!personalReady?
+    ledger_options_error:unsupportedMovement?
+      '充值、积分兑换及余额转移不能作为家庭收入支出入账。请在家計簿的资产转移中操作。':memberPersonalTransfer&&!personalReady?
       '本人 SBI 资产转移执行器暂不可用，未自动记账。':picker?.error||null,
     homeflow_members:members?.members||null,homeflow_members_error:members?.error||null,
     confirmed_fields:Object.fromEntries(fields),confirmation_phrase:CONFIRMATIONS[item.candidate_kind],
-    integration:link||null,available:personalReady||(!approvalRequired&&!memberPersonalTransfer&&!!config(env,target)),
-    approval_required:approvalRequired,approval_action_enabled:approvalActionEnabled,
+    integration:link||null,available:!unsupportedMovement&&(personalReady||(!approvalRequired&&!memberPersonalTransfer&&!!config(env,target))),
+    approval_required:approvalRequired,approval_action_enabled:!unsupportedMovement&&approvalActionEnabled,
     approval_submitted:preparedApproval?.status==='submitted',
     approval_prepared:preparedApproval?.status==='prepared',
     approval_id:preparedApproval?.approval_id||null,
@@ -320,7 +325,7 @@ export async function candidatePreview(request,env,p,id){
       preparedApproval?.status==='prepared'?'prepared_unconfirmed':'not_submitted',
     applied:false,
     account_mapping_ready:!approvalRequired&&!!authorizedMapping(env,p,target),
-    note:memberPersonalTransfer?'本人确认后记入个人 SBI 资产转移记录，不计收支、不扣卡、不新增基金份额，无需家庭审批。':approvalRequired
+    note:unsupportedMovement?'这是资金或积分转移，不是收入支出。文书助手不会擅自入账；请使用家計簿已有的资产转移功能。':memberPersonalTransfer?'本人确认后记入个人 SBI 资产转移记录，不计收支、不扣卡、不新增基金份额，无需家庭审批。':approvalRequired
       ?preparedApproval?.status==='submitted'
         ?'已提交 HomeFlow 审批；尚未同步到目标应用，审批结果请到 HomeFlow 查看。'
         :preparedApproval?.status==='prepared'
