@@ -24,7 +24,7 @@ test('My services uses one compact dashboard, four metric tiles and Google quota
  assert.match(ui,/role="progressbar"/);
  assert.match(ui,/translationUsagePercent/);
  assert.equal((ui.match(/class="usage-metric"/g)||[]).length,4);
- for(const provider of ['Gemini 3.6','Workers AI 解读','Workers AI OCR','OCR.space'])
+ for(const provider of ['Gemini 3.5 Flash-Lite','Workers AI 解读','Workers AI OCR','OCR.space'])
   assert.ok(ui.includes(provider));
  assert.doesNotMatch(ui,/<div class="info-note" v-if="usage">/);
 });
