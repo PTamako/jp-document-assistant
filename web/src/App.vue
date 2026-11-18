@@ -295,7 +295,7 @@ let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
-const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
+const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:''});
 const integrationConfigured=ref(false);
 const candidateApprovalRequired=ref(false);
 const candidatePersonalTransfer=ref(false);
@@ -324,7 +324,7 @@ const candidateApprovalMessage=computed(()=>{
  return labels[candidateApprovalStatus.value]||'审批状态尚未确认，目标应用没有同步。';
 });
 const needsOtherAssigneeBonus=computed(()=>
-  candidateDraft.kind==='homeflow_task'&&candidateDraft.visibility==='household'&&
+  candidateDraft.kind==='homeflow_task'&&!candidateDraft.reminder_only&&candidateDraft.visibility==='household'&&
   !!candidateDraft.assignee&&!homeflowMemberChoices.value.some(x=>x.value===candidateDraft.assignee&&x.self===true));
 const candidateActionDisabled=computed(()=>{
  if(busy.value)return true;
@@ -349,6 +349,7 @@ const candidateActionDisabled=computed(()=>{
  }
  if(candidateDraft.kind==='homeflow_task'&&current.value?.visibility==='private'&&
     candidateDraft.visibility==='household'&&!candidateDraft.task_share_confirmed)return true;
+  if(candidateDraft.kind==='homeflow_task'&&candidateDraft.reminder_only&&candidateDraft.bonus_points!==0)return true;
  if(needsOtherAssigneeBonus.value&&
     (!Number.isSafeInteger(candidateDraft.bonus_points)||
      candidateDraft.bonus_points<1||candidateDraft.bonus_points>10000))return true;
@@ -2233,6 +2234,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <label v-if="candidateDraft.kind==='homeflow_task'&&current?.visibility==='private'&&candidateDraft.visibility==='household'" class="check-row"><input type="checkbox" v-model="candidateDraft.task_share_confirmed"/>确认将任务名称、日期等信息分享给家庭成员，原文与附件仍为私人</label>
         <div v-if="candidateDraft.kind==='homeflow_task'" class="choice-form-field"><span class="choice-field-label">负责人</span><button type="button" class="choice-field-control" :disabled="!!homeflowMembersError" @click="openChoice('taskAssignee')"><span>{{choiceLabel('taskAssignee')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <p v-if="candidateDraft.kind==='homeflow_task'&&homeflowMembersError" class="fine-print" role="status">{{homeflowMembersError}}</p>
+        <label v-if="candidateDraft.kind==='homeflow_task'" class="check-row"><input type="checkbox" v-model="candidateDraft.reminder_only" @change="candidateDraft.bonus_points=0"/>仅提醒（不计积分，过零点从今日待办移除）</label>
         <label v-if="candidateDraft.kind==='homeflow_task' && needsOtherAssigneeBonus" class="form-label">指定对方时额外贡献积分（至少 1 分）<input v-model.number="candidateDraft.bonus_points" type="number" inputmode="numeric" min="1" max="10000" /><span class="fine-print">HomeFlow 现有规则要求指定其他成员时投入额外积分；请确认后再提交。余额不足时目标应用会拒绝，不会自动扣分。</span></label>
         <label v-if="candidateDraft.kind==='vocabulary'" class="form-label">确认脱敏后的日文词条<input v-model="candidateDraft.redacted_term" /></label>
         <label v-if="candidateDraft.kind==='sentence'" class="form-label">确认脱敏后的句子<input v-model="candidateDraft.redacted_sentence" /></label>
