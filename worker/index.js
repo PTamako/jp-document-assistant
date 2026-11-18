@@ -644,7 +644,7 @@ async function serveGeminiUiCompatibility(request,env,path){
   const html=path==='/'||path==='/index.html';
   const js=/^\/assets\/index-[A-Za-z0-9_-]+\.js$/.test(path);
   if(!html&&!js)return response;
-  const original=await response.text();
+  const original=await response.clone().text();
   let updated=original;
   if(html){
     updated=original.replace(/(src="\/assets\/index-[A-Za-z0-9_-]+\.js)"/,
