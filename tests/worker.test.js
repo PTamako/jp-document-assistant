@@ -2689,29 +2689,25 @@ test('Gmail rejects HTTP redirects in refresh without following Google token or 
 });
 
 
-test('stale static PWA label is corrected without touching OCR files or private APIs',async()=>{
- const old='Gemini 3.6 Flash · Gemini 今日 20 次已用完（美西午夜重置） · Gemini 每分钟最多 5 次，请稍后重试 · Google 暂时繁忙，已安排自动重试';
+test('native Static Assets pass through without Gemini string rewrites or extra Worker cache busting',async()=>{
+ const raw='Gemini 3.5 Flash-Lite · Gemini 今日 500 次已用完（美西午夜重置；仅统计本应用） · Gemini 每分钟最多 15 次，请稍后重试';
  const env={ASSETS:{fetch:async(request)=>{
   const path=new URL(request.url).pathname;
-  if(path==='/')return new Response('<script type="module" src="/assets/index-old.js"></script>',{headers:{'Content-Type':'text/html'}});
-  return new Response(old,{headers:{'Content-Type':'text/javascript','Cache-Control':'public, max-age=31536000','ETag':'old'}});
+  if(path==='/')return new Response('<script type="module" src="/assets/index-new.js"></script>',{headers:{'Content-Type':'text/html','Cache-Control':'public, max-age=0'}});
+  return new Response(raw,{headers:{'Content-Type':'text/javascript','Cache-Control':'public, max-age=31536000','ETag':'immutable'}});
  }}};
  const html=await app.fetch(new Request('https://app.example.test/'),env,{});
  const body=await html.text();
- assert.match(body,/gemini-model-ui-20261118/);
- assert.equal(html.headers.get('Cache-Control'),'no-store');
- const js=await app.fetch(new Request('https://app.example.test/assets/index-old.js?gemini-model-ui-20261118'),env,{});
+ assert.match(body,/assets\/index-new\.js/);
+ assert.doesNotMatch(body,/gemini-model-ui-20261118/);
+ assert.equal(html.headers.get('Cache-Control'),'public, max-age=0');
+ const js=await app.fetch(new Request('https://app.example.test/assets/index-new.js'),env,{});
  const text=await js.text();
- assert.match(text,/Gemini 3.5 Flash-Lite/);
- assert.doesNotMatch(text,/Gemini 3\.6/);
- assert.match(text,/今日 500 次/);
- assert.match(text,/每分钟最多 15 次/);
- assert.match(text,/最多自动重试一次/);
- assert.doesNotMatch(text,/Gemini 3\.6 Flash/);
- assert.equal(js.headers.get('Cache-Control'),'no-store');
- assert.equal(js.headers.get('ETag'),null);
+ assert.equal(text,raw,'production bundle must be shipped correctly, never rewritten per-request');
+ assert.equal(js.headers.get('ETag'),'immutable');
+ assert.equal(js.headers.get('Cache-Control'),'public, max-age=31536000');
  const untouched=await app.fetch(new Request('https://app.example.test/assets/worker-entry-unit.js'),env,{});
- assert.equal(await untouched.text(),old);
+ assert.equal(await untouched.text(),raw);
 });
 
 test('Gemini quota failure persists an error code and explicit user retry succeeds without an automatic second call',async()=>{
