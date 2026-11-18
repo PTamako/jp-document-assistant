@@ -533,6 +533,25 @@ function clearPrivateWorkspace(){
   loadSerial++;loadingPage.value=false;busy.value=false;detailLoading.value=false;
   swipeOpenId.value='';swipeTrashTarget.value=null;
   clearGmailSession();revokeOriginal();closeSheet();current.value=null;
+  // Session invalidation, account switching and PWA resume failure must erase
+  // ALL private drafts, not only the visible document list. Hidden sheet state
+  // could otherwise reappear under another HomeFlow household member.
+  textDraft.title='';textDraft.text='';textDraft.source_type='text';textDraft.retention='summary';
+  fileDraft.value=null;fileText.value='';fileWarning.value='';localImportNote.value='';
+  fileSource.value='local_file';inputMode.value='text';ocrProgress.value='';
+  importOcrSpaceConsent.value=false;importOcrSpacePage.value=1;importPdfPages.value=1;
+  importOcrEngine.value='local';ocrAttachmentPending.value=null;ocrRetryStale.value=false;
+  ocrRetryEmpty.value=false;ocrSpaceConsent.value=false;
+  salaryAmountDraft.value='';salaryAmountConfirmed.value=false;editTextDraft.value='';
+  passwordDraft.current_password='';passwordDraft.new_password='';passwordDraft.confirm_password='';
+  auth.email='';auth.password='';auth.setup_token='';auth.invite_token='';auth.display_name='';
+  driveQuery.value='';driveBusy.value=false;drivePickerReadyUi.value=false;drivePickerLoadingUi.value=false;
+  gmailIdentityReadyUi.value=false;gmailIdentityLoadingUi.value=false;
+  financeStableAccounts.value=[];financeStableAccountsError.value='';
+  search.value='';category.value='';archivedFilter.value='active';favoriteFilter.value='all';
+  visibilityFilter.value='all';monthFilter.value='';choiceField.value='';choiceSearch.value='';
+  if(fileInput.value)fileInput.value.value='';
+  if(localTextInput.value)localTextInput.value.value='';
   user.value=null;csrf.value='';amountVisible.value=false;detailCandidates.value=[];
   usageLoadSerial++;usageRefreshing.value=false;
   usage.value=null;trashItems.value=[];attachmentTrashItems.value=[];recycleEmptyProgress.value=0;
