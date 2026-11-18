@@ -43,9 +43,9 @@ test('AI field suggestions must be literal source phrases, never fabricated date
  assert.ok(result.field_suggestions.every(x=>x.review_state==='unreviewed'));
 });
 
-test('Gemini uses explicit MEDIUM with enough total thinking/output tokens, without legacy sampling knobs',()=>{
+test('Gemini Flash-Lite uses minimal thinking and bounded JSON output',()=>{
  const cfg=geminiGenerationConfig();
- assert.deepEqual(cfg,{responseMimeType:'application/json',thinkingConfig:{thinkingLevel:'MEDIUM'},maxOutputTokens:8192});
+ assert.deepEqual(cfg,{responseMimeType:'application/json',thinkingConfig:{thinkingLevel:'MINIMAL'},maxOutputTokens:4096});
  assert.equal('temperature' in cfg,false);
  assert.equal('thinkingBudget' in cfg.thinkingConfig,false);
 });
