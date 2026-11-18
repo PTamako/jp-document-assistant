@@ -22,6 +22,6 @@ test('every authenticated API response failure clears visible private state imme
  assert.ok(start>=0&&end>start);
  const route=app.slice(start,end);
  assert.match(route,/documentIdentityExpired\(resp\.status,code\)/);
- assert.match(route,/if\(sessionLost\)\{\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*clearHomeflowSsoPending\(\);\s*clearPrivateWorkspace\(\);/);
+ assert.match(route,/if\(sessionLost\)\{\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*if\(user\.value\)clearHomeflowSsoPending\(\);\s*clearPrivateWorkspace\(\);/);
  assert.ok(route.indexOf('clearPrivateWorkspace()')>route.indexOf('accountEpoch.assertCurrent(epoch)'));
 });
