@@ -226,8 +226,8 @@ const campaignPendingDate=computed(()=>current.value?.category==='campaign'&&
 const aiStatusLabel={success:'AI 已分析',pending:'AI 处理中',failed:'AI 上次分析失败'};
 const aiFailureLabels={
  gemini_quota_or_rate_limited:'Gemini 配额或请求频率受限',
- gemini_daily_limit:'Gemini 今日 20 次已用完（美西午夜重置）',
- gemini_minute_limit:'Gemini 每分钟最多 5 次，请稍后重试',
+ gemini_daily_limit:'Gemini 今日 500 次已用完（美西午夜重置；仅统计本应用）',
+ gemini_minute_limit:'Gemini 每分钟最多 15 次，请稍后重试',
  gemini_budget_unavailable:'Gemini 次数暂无法核验，已停止调用',
  gemini_access_denied:'Gemini 密钥、权限或地区受限',
  gemini_model_unavailable:'Gemini 模型暂不可用',
@@ -266,9 +266,14 @@ const aiFailureMessage=computed(()=>{
  if(job?.state==='retry_wait'){
     const due=Date.parse(job.next_attempt_at||'');
     const when=Number.isFinite(due)?new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'}).format(due):'';
-    return 'Google 暂时繁忙，等待自动重试'+(when?'（最早日本时间 '+when+'）':'')+'；已尝试 '+Math.max(1,Number(job.attempts)||1)+' 次';
+    return 'Google 暂时繁忙，等待自动重试'+(when?'（最早日本时间 '+when+'）':'')+'；已尝试 '+Math.max(1,Number(job.attempts)||1)+' 次（最多自动重试一次）';
   }
- if(job?.state==='failed')return aiFailureLabels[job.last_error]||'AI 解析未完成，可手动重试';
+ if(job?.state==='failed'){
+    const message=aiFailureLabels[job.last_error]||'AI 解析未完成';
+    return job.provider==='gemini'&&Number(job.attempts)>=2
+      ?message+'。已自动重试一次，现已停止；需要你手动点击「AI 解读」才能再次请求'
+      :message+'。已停止自动重试，可手动重试';
+  }
  return current.value?.ai_analysis?.status==='failed'
   ?(aiFailureLabels[current.value.ai_analysis.failure_code]||'AI 分析失败'):'';
 });

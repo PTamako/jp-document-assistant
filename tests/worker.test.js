@@ -15,7 +15,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql','0019_document_translation_cache.sql','0020_homeflow_identity_links.sql','0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql','0019_document_translation_cache.sql','0020_homeflow_identity_links.sql','0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql','0027_gemini_expanded_quota.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -2729,12 +2729,12 @@ test('Gemini quota failure persists an error code and explicit user retry succee
  }finally{globalThis.fetch=existingFetch;}
 });
 
-test('a 20/20 Gemini shared budget blocks imports before Google fetch and is visible in usage',async()=>{
+test('a 500/500 Gemini shared budget blocks imports before Google fetch and is visible in usage',async()=>{
  const env=makeEnv(),owner=await boot(env);
  env.GEMINI_API_KEY='test-key';
  const {dayPt,minuteUtc}=geminiQuotaSlots();
  env.DB.sql.prepare('INSERT INTO gemini_api_daily(model_id,day_pt,calls,minute_utc,minute_calls) VALUES(?,?,?,?,?)')
-  .run(GEMINI_MODEL,dayPt,20,minuteUtc,0);
+  .run(GEMINI_MODEL,dayPt,500,minuteUtc,0);
  const existingFetch=globalThis.fetch;
  let externalCalls=0;
  globalThis.fetch=async()=>{externalCalls++;throw Error('Google must not be called');};
@@ -2751,8 +2751,8 @@ test('a 20/20 Gemini shared budget blocks imports before Google fetch and is vis
   const usage=await req(env,'/api/usage',auth(owner));
   assert.equal(usage.response.status,200);
   assert.equal(usage.data.gemini_daily.model,'gemini-3.5-flash-lite');
-  assert.equal(usage.data.gemini_daily.calls,20);
-  assert.equal(usage.data.gemini_daily.limit,20);
+  assert.equal(usage.data.gemini_daily.calls,500);
+  assert.equal(usage.data.gemini_daily.limit,500);
   assert.equal(usage.data.gemini_daily.remaining,0);
  }finally{globalThis.fetch=existingFetch;}
 });
@@ -2804,6 +2804,49 @@ test('Gemini 503 waits for scheduled one-time recovery without consuming quota d
   const after=await req(env,'/api/usage',auth(owner));
   assert.equal(after.data.gemini_daily.calls,2);
  }finally{globalThis.fetch=previousFetch;}
+});
+
+test('Gemini 503 automatic retry ends after two total attempts, even if Cron runs again',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ env.GEMINI_API_KEY='local-test-key';
+ const original=globalThis.fetch;
+ let googleCalls=0;
+ globalThis.fetch=async()=>{
+  googleCalls++;
+  return new Response(JSON.stringify({error:{message:'temporary service overload'}}),{
+   status:503,headers:{'Content-Type':'application/json'}
+  });
+ };
+ try{
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+   title:'重试有限测试',text:'電気料金の請求書です。金額をご確認ください。',
+   source_type:'text',retention:'summary',ai_provider:'gemini',gemini_consent:true
+  }});
+  assert.equal(imported.response.status,201);
+  const id=imported.data.document_id;
+  assert.equal(googleCalls,1);
+  const first=(await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_job;
+  assert.equal(first.state,'retry_wait');
+  assert.equal(first.attempts,1);
+  assert.ok(Date.parse(first.next_attempt_at)-Date.now()>=14*60*1000);
+  env.DB.sql.prepare('UPDATE document_ai_analyses SET updated_at=? WHERE document_id=?')
+   .run(new Date(Date.now()-16*60*1000).toISOString(),id);
+  env.DB.sql.prepare('UPDATE document_ai_jobs SET next_attempt_at=? WHERE document_id=?')
+   .run(new Date(Date.now()-1000).toISOString(),id);
+  const pending=[];
+  await app.scheduled({},env,{waitUntil:p=>pending.push(p)});
+  await Promise.all(pending);
+  assert.equal(googleCalls,2,'one and only one automatic retry');
+  const second=(await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_job;
+  assert.equal(second.state,'failed');
+  assert.equal(second.attempts,2);
+  for(let i=0;i<3;i++){
+   const remaining=[];
+   await app.scheduled({},env,{waitUntil:p=>remaining.push(p)});
+   await Promise.all(remaining);
+  }
+  assert.equal(googleCalls,2,'later Cron executions do not retry failed jobs');
+ }finally{globalThis.fetch=original;}
 });
 
 test('campaign email rule re-analysis backfills missing deadline without using Gemini, and only explicit year confirmation creates a HomeFlow proposal',async()=>{

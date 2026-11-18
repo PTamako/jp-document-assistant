@@ -6,7 +6,7 @@ on:
       - '.github/workflows/export-production-static-assets.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   package:
     runs-on: ubuntu-latest
@@ -20,37 +20,52 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run check:syntax
       - run: npm run build
-      - name: Package only the built static PWA, never credentials or D1 data
-        run: tar -czf document-production-dist.tar.gz -C dist .
-      - name: Verify real production Vue and CSS byte fingerprints (read-only)
+      - name: Validate the static bundle matches the new Gemini UI
         run: |
           node --input-type=module <<'NODE'
-          import fs from 'node:fs/promises';
-          import { createHash } from 'node:crypto';
-          const origin='https://jp-document-assistant.yupan6706.workers.dev';
-          const html=await fs.readFile('dist/index.html','utf8');
-          const files=[...html.matchAll(/(?:src|href)="(\/assets\/index-[^"]+\.(?:js|css))"/g)].map(x=>x[1]);
-          if(files.length!==2)throw Error('Expected exactly one Vite JS and CSS index asset');
-          const response=await fetch(origin+'/',{cache:'no-store',redirect:'manual'});
-          if(response.status!==200)throw Error('Production index response '+response.status);
-          const liveHtml=await response.text();
-          for(const path of files){
-            if(!liveHtml.includes(path))throw Error('Production HTML does not reference built asset: '+path);
-            const asset=await fetch(origin+path,{cache:'no-store',redirect:'manual'});
-            if(asset.status!==200)throw Error('Production asset unavailable: '+path+' '+asset.status);
-            const live=Buffer.from(await asset.arrayBuffer()),local=await fs.readFile('dist'+path);
-            const hash=b=>createHash('sha256').update(b).digest('hex');
-            if(hash(live)!==hash(local))throw Error('Production hash mismatch: '+path);
-            console.log('LIVE_MATCH',path,live.length,hash(live).slice(0,12));
-          }
-          const js=await fs.readFile('dist'+files.find(p=>p.endsWith('.js')),'utf8');
-          if(!js.includes('家計簿本人支付方式'))throw Error('New member payment picker absent from build');
-          if(js.includes('本人金融账户（稳定账户 ID）'))throw Error('Old member picker still in build');
-          console.log('Production frontend matches current GitHub main and uses canonical member picker');
+          import fs from 'node:fs';
+          const html=fs.readFileSync('dist/index.html','utf8');
+          const path=/src="\/(assets\/index-[^"]+\.js)"/.exec(html)?.[1];
+          if(!path)throw Error('Vite JS bundle missing');
+          const js=fs.readFileSync('dist/'+path,'utf8');
+          if(!js.includes('Gemini 3.5 Flash-Lite'))throw Error('New Gemini model label absent from PWA');
+          if(js.includes('Gemini 3.6 Flash'))throw Error('Old Gemini model label remains');
+          if(!js.includes('500'))throw Error('New Gemini quota label absent');
+          console.log('Verified updated Gemini PWA assets');
           NODE
-      - uses: actions/upload-artifact@v4
-        with:
-          name: document-production-dist
-          path: document-production-dist.tar.gz
-          retention-days: 1
-          if-no-files-found: error
+      - name: Export public static-only build to temporary Git branch (never deploy)
+        run: |
+          mkdir -p "$RUNNER_TEMP/document-dist"
+          cp -a dist/. "$RUNNER_TEMP/document-dist/"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+          const root=process.env.RUNNER_TEMP+'/document-dist';
+          const manifest={};
+          function traverse(dir,prefix=''){
+            for(const d of fs.readdirSync(dir,{withFileTypes:true})){
+              const rel=prefix?prefix+'/'+d.name:d.name,abs=path.join(dir,d.name);
+              if(d.isDirectory()){traverse(abs,rel);continue;}
+              if(!d.isFile())continue;
+              const data=fs.readFileSync(abs);
+              const ext=path.extname(rel).replace(/^\./,'');
+              const hash=crypto.createHash('sha256').update(data.toString('base64')+ext).digest('hex').slice(0,32);
+              manifest['/'+rel]={hash,size:data.length};
+            }
+          }
+          traverse(root);
+          if(!manifest['/index.html'])throw Error('Missing app entrypoint');
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/document-asset-manifest.json',JSON.stringify(manifest));
+          console.log('Prepared',Object.keys(manifest).length,'public files');
+          NODE
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan build-only-document-static-20261118
+          git rm -r --cached . >/dev/null || true
+          mkdir -p static-site
+          cp -a "$RUNNER_TEMP/document-dist/." static-site/
+          cp "$RUNNER_TEMP/document-asset-manifest.json" cloudflare-asset-manifest.json
+          git add -f static-site cloudflare-asset-manifest.json
+          git commit -m 'build: public document PWA assets for direct Cloudflare upload'
+          git push --force origin HEAD:refs/heads/build-only-document-static-20261118

@@ -1,8 +1,9 @@
 // Gemini rate limits are per Google project. This is the application's conservative
-// shared cap for its own requests across model upgrades, not a claim about other API keys or services.
+// shared cap based on the project's 500 RPD / 15 RPM AI Studio free-tier screenshot.
+// This local counter covers only this app, not other clients using the Google project.
 export const GEMINI_MODEL='gemini-3.5-flash-lite';
-export const GEMINI_DAY_LIMIT=20;
-export const GEMINI_MINUTE_LIMIT=5;
+export const GEMINI_DAY_LIMIT=500;
+export const GEMINI_MINUTE_LIMIT=15;
 
 // Google resets RPD at midnight America/Los_Angeles, including DST changes.
 export function geminiQuotaSlots(now=new Date()){
