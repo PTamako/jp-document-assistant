@@ -2729,12 +2729,12 @@ test('Gemini quota failure persists an error code and explicit user retry succee
  }finally{globalThis.fetch=existingFetch;}
 });
 
-test('a 20/20 Gemini shared budget blocks imports before Google fetch and is visible in usage',async()=>{
+test('a 500/500 Gemini shared budget blocks imports before Google fetch and is visible in usage',async()=>{
  const env=makeEnv(),owner=await boot(env);
  env.GEMINI_API_KEY='test-key';
  const {dayPt,minuteUtc}=geminiQuotaSlots();
  env.DB.sql.prepare('INSERT INTO gemini_api_daily(model_id,day_pt,calls,minute_utc,minute_calls) VALUES(?,?,?,?,?)')
-  .run(GEMINI_MODEL,dayPt,20,minuteUtc,0);
+  .run(GEMINI_MODEL,dayPt,500,minuteUtc,0);
  const existingFetch=globalThis.fetch;
  let externalCalls=0;
  globalThis.fetch=async()=>{externalCalls++;throw Error('Google must not be called');};
@@ -2751,8 +2751,8 @@ test('a 20/20 Gemini shared budget blocks imports before Google fetch and is vis
   const usage=await req(env,'/api/usage',auth(owner));
   assert.equal(usage.response.status,200);
   assert.equal(usage.data.gemini_daily.model,'gemini-3.5-flash-lite');
-  assert.equal(usage.data.gemini_daily.calls,20);
-  assert.equal(usage.data.gemini_daily.limit,20);
+  assert.equal(usage.data.gemini_daily.calls,500);
+  assert.equal(usage.data.gemini_daily.limit,500);
   assert.equal(usage.data.gemini_daily.remaining,0);
  }finally{globalThis.fetch=existingFetch;}
 });
