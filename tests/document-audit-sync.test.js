@@ -6,16 +6,17 @@ const read=p=>readFileSync(new URL(p,import.meta.url),'utf8');
 
 test('opening a second document resets all user confirmations and assignee',()=>{
  const draft={title:'旧任务',visibility:'household',assignee:'other-member',
-  bonus_points:80,privacy_confirmed:true,task_share_confirmed:true,
+  bonus_points:80,reminder_only:true,privacy_confirmed:true,task_share_confirmed:true,
   redacted_term:'带个人信息的旧词',redacted_sentence:'旧句子'};
  resetCandidateConfirmation(draft,{title:'新任务',term:'確認',sentence:'確認します。'});
  assert.deepEqual(draft,{title:'新任务',visibility:'private',assignee:'',
-  bonus_points:0,privacy_confirmed:false,task_share_confirmed:false,
+  bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,
   redacted_term:'確認',redacted_sentence:'確認します。'});
  resetCandidateConfirmation(draft,{title:'第三个任务'});
  assert.equal(draft.privacy_confirmed,false);
  assert.equal(draft.task_share_confirmed,false);
  assert.equal(draft.assignee,'');
+ assert.equal(draft.reminder_only,false);
  assert.equal(draft.redacted_term,'');
  assert.equal(draft.redacted_sentence,'');
 });
