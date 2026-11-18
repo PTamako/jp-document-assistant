@@ -1826,8 +1826,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
           </div>
           <div class="usage-metrics">
             <div class="usage-metric">
-              <span>Gemini 3.6</span>
-              <strong>{{usage.gemini_daily?.calls??0}}<small> / {{usage.gemini_daily?.limit??20}}</small></strong>
+              <span>Gemini 3.5 Flash-Lite</span>
+              <strong>{{usage.gemini_daily?.calls??0}}<small> / {{usage.gemini_daily?.limit??500}}</small></strong>
               <small>两人共用 · 美西日</small>
             </div>
             <div class="usage-metric">
