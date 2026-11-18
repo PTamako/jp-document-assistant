@@ -146,9 +146,14 @@ export function validatedPayload(target,item,approved,body){
     // attachments and original text stay private in the document app.
     if(item.visibility==='private'&&body.visibility==='household'&&body.task_share_confirmed!==true)
       bad('私人文书生成家庭共享任务，需要确认共享任务信息','TASK_SHARE_CONFIRM_REQUIRED',409);
+    if(body.reminder_only!==undefined&&typeof body.reminder_only!=='boolean')
+      bad('仅提醒设置无效','INVALID_REMINDER_ONLY',400);
+    const reminderOnly=body.reminder_only===true;
     const bonusPoints=body.bonus_points===undefined?0:Number(body.bonus_points);
     if(!Number.isSafeInteger(bonusPoints)||bonusPoints<0||bonusPoints>10000)bad('额外任务积分必须是 0～10000 的整数','INVALID_BONUS',400);
-    return {operation:'task',title:trim(body.title||x.title,120),dueOn:date,visibility:body.visibility,assignee:trim(body.assignee,60)||null,bonusPoints,remindEnabled:body.remindEnabled!==false};
+    if(reminderOnly&&(bonusPoints!==0||body.remindEnabled===false))
+      bad('仅提醒必须开启提醒且不得设置积分','INVALID_REMINDER_ONLY_BONUS',422);
+    return {operation:'task',title:trim(body.title||x.title,120),dueOn:date,visibility:body.visibility,assignee:trim(body.assignee,60)||null,bonusPoints,remindEnabled:body.remindEnabled!==false,reminderOnly};
   }
   if(target==='zhixue'){
     if(item.candidate_kind==='sentence'){
