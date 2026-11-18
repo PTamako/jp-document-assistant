@@ -3,6 +3,7 @@
 import { randomToken, hmacHex, isoNow, hashString } from './security.js';
 import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
 import { isUnsupportedBalanceMovement } from '../shared/balance-movement.js';
+import {resolveJapaneseReading} from '../shared/japanese-readings.js';
 import {personalSbiReady,commitPersonalSbiCandidate,personalSbiReceiptStatus} from './document-personal-sbi.js';
 import { json, bad, readJson, failure } from './http.js';
 const TARGETS={finance:'kakebo',homeflow_task:'homeflow',vocabulary:'zhixue',sentence:'zhixue'};
@@ -167,7 +168,13 @@ export function validatedPayload(target,item,approved,body){
     if(body.privacy_confirmed!==true)bad('请确认学习内容不包含个人资料','PRIVACY_CONFIRM_REQUIRED',409);
     const redacted=trim(body.redacted_term||x.term,100);
     if(/[\d０-９]{5,}|@|〒/.test(redacted))bad('学习内容疑似含私人信息','PII_WARNING',409);
-    return {operation:'vocabulary',language:'ja',term:redacted,reading:trim(x.reading,100),meaning_zh:trim(x.meaning_zh,200),skip_existing:true};
+    // Existing AI candidates may predate the glossary; validate again at the
+    // final server-to-server boundary instead of trusting stored AI text.
+    const checked=resolveJapaneseReading(redacted,body.reading);
+    if(!checked.reading)bad('请填写正确的日语假名读音','INVALID_READING',422);
+    if(!checked.verified&&body.reading_confirmed!==true)
+      bad('读音尚未经过词典验证，请人工核对后勾选确认','READING_CONFIRM_REQUIRED',409);
+    return {operation:'vocabulary',language:'ja',term:redacted,reading:checked.reading,meaning_zh:trim(x.meaning_zh,200),skip_existing:true};
   }
   bad('不支持的联动目标');
 }

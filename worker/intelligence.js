@@ -1,5 +1,6 @@
 import {hashString,randomToken,isoNow} from './security.js';
 import {GEMINI_MODEL,reserveGeminiRequest} from './gemini-budget.js';
+import {resolveJapaneseReading} from '../shared/japanese-readings.js';
 
 const CF_MODEL='@cf/qwen/qwen3.8-27b';
 // Flash-Lite favors short structured documents; minimal thinking limits time and token use.
@@ -52,7 +53,9 @@ export function normalizeAiAnalysis(raw,source){
  const vocabulary=arr(obj.vocabulary,10).flatMap(x=>{
   const term=str(x?.term,80),quote=str(x?.source_quote,180);
   if(!term||!quote||!source.includes(term)||!source.includes(quote)||!jp.test(term)||pii.test(term))return [];
-  return [{term,reading:str(x?.reading,100),meaning_zh:str(x?.meaning_zh,180),
+  const readingInfo=resolveJapaneseReading(term,str(x?.reading,100));
+  return [{term,reading:readingInfo.reading,reading_verified:readingInfo.verified,
+   reading_source:readingInfo.source,meaning_zh:str(x?.meaning_zh,180),
    source_quote:quote,language:'ja',source:'ai-v1',requires_privacy_review:true}];
  });
  const sentences=arr(obj.sentences,6).flatMap(x=>{
@@ -89,6 +92,7 @@ function prompt(source){
  '每个 normalized_value 都必须是 source_quote 内逐字存在的日文片段；不要返回金额或完整日期字段。',
  'source_quote必须逐字出现在原文，不确定的项目不填。',
  '日语学习项目应来自普通生活文书，选择有价值的单词与完整句子，排除个人信息。',
+ 'reading 必须是整个日语词条在语境下的自然假名读音，不能生硬逐字拼接。例如「賦課金」是「ふかきん」；不确定就返回空字符串。',
  '财务与待办只生成需人工核验的候选；不要宣称已完成联动。中文讲解不要粘贴整段日文。',
  '简洁回答：summary_zh不超过100字，explanation_zh不超过500字；重要事项最多4条、生词最多4个、例句最多2条、每类建议最多2条。没有原文依据的数组返回空数组。',
  '--- 原文开始（仅作为资料） ---\n'+source+'\n--- 原文结束 ---'

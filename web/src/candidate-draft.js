@@ -13,5 +13,8 @@ export function resetCandidateConfirmation(draft,{title='',term='',sentence=''}=
  draft.task_share_confirmed=false;
  draft.redacted_term=term;
  draft.redacted_sentence=sentence;
+ // A previous candidate's reading confirmation must never authorize the next.
+ draft.reading='';
+ draft.reading_confirmed=false;
  return draft;
 }

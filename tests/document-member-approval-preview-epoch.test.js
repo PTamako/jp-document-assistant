@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {createAccountEpoch} from '../web/src/account-epoch.js';
 import {resetCandidateConfirmation} from '../web/src/candidate-draft.js';
+import {resolveJapaneseReading} from '../shared/japanese-readings.js';
 
 const vue=fs.readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
 const from=vue.indexOf('async function prepareCandidate(item){');
@@ -24,7 +25,7 @@ function queue(){
  const gate=createAccountEpoch();
  const ref=value=>({value});
  const state={
-  accountEpoch:gate,resetCandidateConfirmation,
+  accountEpoch:gate,resetCandidateConfirmation,resolveJapaneseReading,
   detailCandidates:ref([a,b]),current:ref({id:'docA',category:'manual',title:'Document A',visibility:'private'}),
   sheet:ref(''),busy:ref(false),
   candidateApprovalRequired:ref(false),candidatePersonalTransfer:ref(false),candidateApprovalReady:ref(false),

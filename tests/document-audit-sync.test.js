@@ -7,11 +7,11 @@ const read=p=>readFileSync(new URL(p,import.meta.url),'utf8');
 test('opening a second document resets all user confirmations and assignee',()=>{
  const draft={title:'旧任务',visibility:'household',assignee:'other-member',
   bonus_points:80,reminder_only:true,privacy_confirmed:true,task_share_confirmed:true,
-  redacted_term:'带个人信息的旧词',redacted_sentence:'旧句子'};
+  redacted_term:'带个人信息的旧词',redacted_sentence:'旧句子',reading:'旧错误',reading_confirmed:true};
  resetCandidateConfirmation(draft,{title:'新任务',term:'確認',sentence:'確認します。'});
  assert.deepEqual(draft,{title:'新任务',visibility:'private',assignee:'',
   bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,
-  redacted_term:'確認',redacted_sentence:'確認します。'});
+  redacted_term:'確認',redacted_sentence:'確認します。',reading:'',reading_confirmed:false});
  resetCandidateConfirmation(draft,{title:'第三个任务'});
  assert.equal(draft.privacy_confirmed,false);
  assert.equal(draft.task_share_confirmed,false);
@@ -19,6 +19,8 @@ test('opening a second document resets all user confirmations and assignee',()=>
  assert.equal(draft.reminder_only,false);
  assert.equal(draft.redacted_term,'');
  assert.equal(draft.redacted_sentence,'');
+ assert.equal(draft.reading,'');
+ assert.equal(draft.reading_confirmed,false);
 });
 test('the Vue candidate preview invokes reset before immutable retry restoration',()=>{
  const app=read('../web/src/App.vue');
