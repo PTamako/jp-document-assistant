@@ -90,7 +90,14 @@ export async function processDocumentAiJob(env,id){
 
 export async function runDueDocumentAiJobs(env){
   const now=isoNow(),stale=new Date(Date.now()-STALE_RUNNING_MS).toISOString();
-  // Process once per cron, avoiding a stuck 'running' state after a Worker timeout.
+  // Most runs are idle: check indexed due/stale work before issuing any UPDATE.
+  // Normal imports start processing immediately via ctx.waitUntil in index.js.
+  const pending=await get(env.DB,`SELECT document_id FROM document_ai_jobs
+    WHERE (state IN ('queued','retry_wait') AND next_attempt_at<=?)
+       OR (state='running' AND updated_at<?)
+    LIMIT 1`,now,stale);
+  if(!pending)return 0;
+  // Recover timed-out jobs only when a queued/retry/stale row exists.
   await run(env.DB,`UPDATE document_ai_jobs SET state='queued',next_attempt_at=?,updated_at=?
     WHERE state='running' AND updated_at<? AND attempts<2`,now,now,stale);
   await run(env.DB,`UPDATE document_ai_jobs SET state='failed',last_error='processing_timeout',updated_at=?
