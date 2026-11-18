@@ -227,6 +227,38 @@ function invalidCallback(code='SSO_CALLBACK_INVALID',status=403){
  });
 }
 // An OAuth redirect may land in Safari rather than the original standalone
+// The original installed PWA can safely check whether Safari delivered the
+// callback before trying the one-time code exchange. Require the original
+// unredirected resume secret; no OAuth code, session or user details are
+// returned. A waiting callback must not consume the pending transaction.
+export async function homeflowSsoProgress(request,env,url){
+ if(request.method!=='POST')return json({ok:false,code:'METHOD_NOT_ALLOWED'},405);
+ if(!homeflowSsoEnabled(env,url))return json({ok:false,code:'SSO_DISABLED'},503);
+ const reject=()=>json({ok:false,code:'SSO_INVALID_PROOF'},403,{'Cache-Control':'no-store'});
+ if(request.headers.get('origin')!==url.origin ||
+    !(request.headers.get('content-type')||'').toLowerCase().startsWith('application/json'))
+   return reject();
+ let input;
+ try{
+   const raw=await request.text();
+   if(raw.length>2048)return reject();
+   input=JSON.parse(raw);
+ }catch{return reject();}
+ if(!input||Object.keys(input).sort().join(',')!=='resume_secret,state'||
+    !/^[a-f0-9]{64}$/.test(input.state||'')||
+    !/^[a-f0-9]{64}$/.test(input.resume_secret||''))
+   return reject();
+ const row=await dbFirst(env.DB,`SELECT status,code_cipher,expires_at,resume_secret_hash
+   FROM homeflow_oauth_pending WHERE state_hash=? AND origin=?`,
+   await hashString(input.state),url.origin);
+ if(!row||!safeEqual(await hashString(input.resume_secret),row.resume_secret_hash||''))
+   return reject();
+ const expired=Date.parse(row.expires_at)<=Date.now()||row.status!=='pending';
+ return json({ok:true,ready:!expired&&!!row.code_cipher,
+   progress:expired?'expired':row.code_cipher?'ready':'waiting'},
+   200,{'Cache-Control':'no-store'});
+}
+
 // iPhone PWA. Park an encrypted authorization code, NEVER a login session.
 // Only the original PWA (holding a separate unredirected 256-bit proof) can
 // complete the code exchange and receive its own HttpOnly cookie.

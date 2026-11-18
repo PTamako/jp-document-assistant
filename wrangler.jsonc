@@ -13,7 +13,7 @@
   // Dynamic API requests must reach worker/index.js, including POST /api/auth/login;
   // OCR module-worker assets also need the Worker to attach their isolated CSP.
   // Everything else remains asset-first to minimize Cloudflare Worker requests.
-  "assets": {"directory":"./dist", "binding":"ASSETS", "not_found_handling":"single-page-application", "run_worker_first":["/api/*","/","/index.html","/assets/index-*.js","/assets/worker-entry-*.js"]},
+  "assets": {"directory":"./dist", "binding":"ASSETS", "not_found_handling":"single-page-application", "run_worker_first":["/api/*","/assets/worker-entry-*.js"]},
   "d1_databases": [{"binding":"DB", "database_name":"jp-document-assistant", "database_id":"22a671c0-3f6c-4707-adf1-b24ac95330c6", "migrations_dir":"migrations"}],
   "r2_buckets": [{"binding":"DOCUMENTS", "bucket_name":"jp-document-assistant-private"}],
   // Calls to the two existing Workers use same-account Service Bindings (zero extra Workers).
@@ -26,6 +26,7 @@
     {"binding":"KAKEIBO_DOCUMENT_FINANCE_SERVICE","service":"kakeibo-homeflow-bridge"},
     {"binding":"KAKEIBO_DOCUMENT_ACCOUNT_SERVICE","service":"kakeibo-homeflow-bridge"}
   ],
+  "version_metadata": {"binding":"CF_VERSION_METADATA"},
   "ai": {"binding":"AI"},
   "vars": {
     "APP_ENV":"production",
