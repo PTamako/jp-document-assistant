@@ -915,3 +915,7 @@ input[type="date"],input[type="month"],input[type="datetime-local"]{
     -webkit-backdrop-filter:none;backdrop-filter:none;background:var(--panel)
   }
 }
+
+/* Rule-based field refresh belongs to the field tab, not AI interpretation. */
+.field-refresh-action{display:flex;justify-content:flex-end;margin:0 0 12px}
+.field-refresh-action .secondary{min-height:40px;white-space:nowrap}
