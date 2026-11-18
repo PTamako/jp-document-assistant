@@ -13,6 +13,8 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.equal(wrangler.main,'worker/index.js');
  assert.equal(wrangler.assets?.directory,'./dist');
  assert.equal(wrangler.assets?.binding,'ASSETS');
+ assert.ok(wrangler.assets?.run_worker_first?.includes('/assets/index-*.js'));
+ assert.ok(wrangler.assets?.run_worker_first?.includes('/'));
  assert.equal(wrangler.d1_databases?.length,1);
  assert.equal(wrangler.d1_databases[0].binding,'DB');
  assert.equal(wrangler.d1_databases[0].database_name,'jp-document-assistant');
