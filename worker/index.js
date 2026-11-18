@@ -654,6 +654,7 @@ async function serveGeminiUiCompatibility(request,env,path){
       ['Gemini 3.6 Flash','Gemini 3.5 Flash-Lite'],
       ['Gemini 今日 20 次已用完（美西午夜重置）','Gemini 今日 500 次已用完（美西午夜重置；仅统计本应用）'],
       ['Gemini 每分钟最多 5 次，请稍后重试','Gemini 每分钟最多 15 次，请稍后重试'],
+      ['Gemini 3.6','Gemini 3.5 Flash-Lite'],
       ['Google 暂时繁忙，已安排自动重试','Google 暂时繁忙，约 15 分钟后最多自动重试一次']
     ];
     for(const [from,to] of changes)updated=updated.replaceAll(from,to);
