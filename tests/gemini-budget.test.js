@@ -7,6 +7,7 @@ import {GEMINI_MODEL,GEMINI_DAY_LIMIT,GEMINI_MINUTE_LIMIT,geminiQuotaSlots,gemin
 function fixture(){
  const sql=new DatabaseSync(':memory:');
  sql.exec(fs.readFileSync(new URL('../migrations/0016_gemini_daily_budget.sql',import.meta.url),'utf8'));
+ sql.exec(fs.readFileSync(new URL('../migrations/0027_gemini_expanded_quota.sql',import.meta.url),'utf8'));
  const db={prepare(query){return {bind(...args){return {
    first:async()=>sql.prepare(query).get(...args)||null,
    run:async()=>({meta:{changes:sql.prepare(query).run(...args).changes}})
