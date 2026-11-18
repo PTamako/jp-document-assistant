@@ -265,7 +265,9 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  const old=await first(env.DB,'SELECT * FROM document_ai_analyses WHERE document_id=?',doc.id);
  // Another active shared document may already contain the exact model/result.
  // Check BEFORE reserving scarce Gemini/Workers AI requests.
- if(doc.visibility==='shared'&&doc.household_id){
+ if(doc.visibility==='shared'&&doc.household_id&&
+    !(old?.state==='success'&&old.provider===provider&&old.source_sha===sourceHash&&
+      old.model_id===model&&SUCCESS_PROMPT_VERSIONS.has(old.prompt_version))){
   const reused=await getDocumentAiCache(env.DB,doc);
   if(reused?.status==='success')return {ai_status:'cached',result:reused.result,added_fields:0};
  }
