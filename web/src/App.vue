@@ -204,6 +204,15 @@ function invalidateStaleTranslation(){
    translationSource.value!==String(current.value?.extracted_text_ja||'').trim())
   stopTranslation({clear:true});
 }
+// Keep the original visible by default. Only an explicit tap opens the AI
+// interpretation; a completed personal/family result is shown without inference.
+function showAiExplanation(){
+ if(!current.value)return;
+ detailTab.value='explain';
+ if(canManageCurrent.value&&current.value.ai_provider!=='none'&&
+    !aiResultReady(current.value)&&!isAiJobPending(current.value.ai_job)&&!busy.value)
+  void runAiForCurrent();
+}
 // Preserve exact retry fields in memory while the app stays open.
 const pendingCandidateRetry=ref(null);
 const ledgerOptions=ref({categories:[],paymentSources:[]}),ledgerOptionsError=ref(''),ledgerAttempted=ref(false),ledgerMappingChangeConfirmed=ref(false),candidateMerchant=ref('');
@@ -1970,6 +1979,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <div class="original-section-heading">
               <h3>OCR 文字</h3>
               <div class="original-translate-actions">
+                <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="busy" @click="showAiExplanation"><UiIcon name="sparkles" :size="17"/>AI 解读</button>
                 <button v-if="current.extracted_text_ja" class="text-button icon-label" type="button" :disabled="translationBusy" @click="translateOriginal" :aria-pressed="translationVisible" aria-label="切换日文原文与 Google 中文机翻">
                   <UiIcon name="languages" :size="17"/>{{translationBusy?'翻译中':translationVisible?'看原文':localTranslation&&translationSource===current.extracted_text_ja.trim()?'看译文':'翻译全文'}}
                 </button>
