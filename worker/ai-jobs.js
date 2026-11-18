@@ -61,7 +61,7 @@ export async function processDocumentAiJob(env,id){
        AND next_attempt_at<=?`,now,now,id,now);
     if(claim.meta?.changes!==1)return {ai_status:'in_progress'};
     const job=await get(env.DB,'SELECT * FROM document_ai_jobs WHERE document_id=?',id);
-    const doc=await get(env.DB,`SELECT id,category,ai_provider,ai_consent_at,extracted_text_ja
+    const doc=await get(env.DB,`SELECT id,category,household_id,visibility,ai_provider,ai_consent_at,extracted_text_ja
        FROM documents WHERE id=? AND lifecycle='active'`,id);
     if(!doc||doc.ai_provider!==job.provider||!doc.extracted_text_ja||
        await hashString(doc.extracted_text_ja)!==job.source_sha){

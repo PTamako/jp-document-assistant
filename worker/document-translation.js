@@ -60,6 +60,19 @@ async function cachedTranslation(db,doc){
    WHERE document_id=?`).bind(doc.id).first();
  if(row?.source_sha===sourceSha&&typeof row.translation_zh==='string'&&row.translation_zh.trim())
   return {translation:row.translation_zh,sourceSha};
+ // Reuse only another explicitly shared, still-active document in this household.
+ // Read through the donor's current visibility so revoking sharing revokes reuse.
+ if(doc.visibility==='shared'&&doc.household_id){
+  const donor=await db.prepare(`SELECT t.translation_zh FROM document_translations t
+    JOIN documents d ON d.id=t.document_id
+    WHERE d.household_id=? AND d.visibility='shared' AND d.lifecycle='active'
+      AND d.id<>? AND t.source_sha=? AND t.provider=?
+      AND TRIM(d.extracted_text_ja)=?
+    ORDER BY t.updated_at DESC LIMIT 1`)
+    .bind(doc.household_id,doc.id,sourceSha,provider,text).first();
+  if(typeof donor?.translation_zh==='string'&&donor.translation_zh.trim())
+   return {translation:donor.translation_zh,sourceSha};
+ }
  return {translation:null,sourceSha};
 }
 async function fromZhixue(chunk,env){
