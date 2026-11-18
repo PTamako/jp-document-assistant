@@ -8,6 +8,7 @@ export function resetCandidateConfirmation(draft,{title='',term='',sentence=''}=
  draft.visibility='private';
  draft.assignee='';
  draft.bonus_points=0;
+ draft.reminder_only=false;
  draft.privacy_confirmed=false;
  draft.task_share_confirmed=false;
  draft.redacted_term=term;
