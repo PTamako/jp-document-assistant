@@ -12,6 +12,7 @@ import { exportBatch,readBackup,restoreBatch } from './backup-client.js';
 import { createAccountEpoch } from './account-epoch.js';
 import {resetCandidateConfirmation} from './candidate-draft.js';
 import {verifyDocumentPwaSessionOnResume} from './pwa-session-resume.js';
+import {documentIdentityExpired} from './session-auth.js';
 import TabIcon from './TabIcon.vue';
 import UiIcon from './UiIcon.vue';
 import { invalidateDocumentLists } from './document-list-cache.js';
@@ -514,7 +515,19 @@ async function api(path,{method='GET',body,form=false,signal,idempotencyKey}={})
   const contentType=resp.headers.get('Content-Type')||'';
   const data=contentType.includes('application/json')?await resp.json():null;
   accountEpoch.assertCurrent(epoch);
-  if(!resp.ok){const err=new Error(data?.message||`HTTP ${resp.status}`);err.code=data?.code||'';err.status=resp.status;throw err;}
+  if(!resp.ok){
+    const code=data?.code||'';
+    const sessionLost=documentIdentityExpired(resp.status,code);
+    const err=new Error(sessionLost?'HomeFlow 登录已失效，请重新登录':data?.message||`HTTP ${resp.status}`);
+    err.code=code;err.status=resp.status;
+    if(sessionLost){
+      // A revoked HomeFlow session must not leave an already opened private
+      // document, raw OCR text, Gmail import or attachment preview onscreen.
+      clearHomeflowSsoPending();
+      clearPrivateWorkspace();
+    }
+    throw err;
+  }
   return data;
 }
 function accountApi(snapshot){
