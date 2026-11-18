@@ -17,7 +17,7 @@ test('study status keeps errors and in-flight operations distinct',()=>{
 });
 test('both vocabulary and sentence cards use the server link status',()=>{
   const vue=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
-  assert.equal((vue.match(/studySyncState\(item\)==='linked'/g)||[]).length,2);
+  assert.equal((vue.match(/studySyncState\(item\)==='linked'/g)||[]).length,3); // two badges plus legacy reading warning
   assert.equal((vue.match(/class="study-sync-tag"/g)||[]).length,2);
   assert.equal((vue.match(/v-if="!\['linked','sending'\]\.includes\(studySyncState\(item\)\)"/g)||[]).length,2);
   assert.match(vue,/openDoc\(docId\)/);
