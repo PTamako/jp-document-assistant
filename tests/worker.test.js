@@ -2697,8 +2697,8 @@ test('Gemini quota failure persists an error code and explicit user retry succee
   calls++;
   assert.match(String(url),/generativelanguage\.googleapis\.com/);
   const body=JSON.parse(options.body);
-  assert.equal(body.generationConfig.thinkingConfig.thinkingLevel,'MEDIUM');
-  assert.equal(body.generationConfig.maxOutputTokens,8192);
+  assert.equal(body.generationConfig.thinkingConfig.thinkingLevel,'MINIMAL');
+  assert.equal(body.generationConfig.maxOutputTokens,4096);
   if(calls===1)return new Response(JSON.stringify({error:{status:'RESOURCE_EXHAUSTED',message:'secret should not be shown'}}),{status:429,headers:{'Content-Type':'application/json'}});
   return new Response(JSON.stringify({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({
    summary_zh:'工资文书已经识别，请核对。',
@@ -2729,7 +2729,7 @@ test('Gemini quota failure persists an error code and explicit user retry succee
  }finally{globalThis.fetch=existingFetch;}
 });
 
-test('a 20/20 Gemini 3.6 budget blocks imports before Google fetch and is visible in usage',async()=>{
+test('a 20/20 Gemini shared budget blocks imports before Google fetch and is visible in usage',async()=>{
  const env=makeEnv(),owner=await boot(env);
  env.GEMINI_API_KEY='test-key';
  const {dayPt,minuteUtc}=geminiQuotaSlots();
@@ -2746,11 +2746,11 @@ test('a 20/20 Gemini 3.6 budget blocks imports before Google fetch and is visibl
   assert.equal(imported.data.ai_status,'queued');
   assert.equal(externalCalls,0);
   const doc=(await req(env,'/api/documents/'+imported.data.document_id,auth(owner))).data.document;
-  assert.equal(doc.ai_analysis.model,'gemini-3.6-flash');
+  assert.equal(doc.ai_analysis.model,'gemini-3.5-flash-lite');
   assert.equal(doc.ai_analysis.failure_code,'gemini_daily_limit');
   const usage=await req(env,'/api/usage',auth(owner));
   assert.equal(usage.response.status,200);
-  assert.equal(usage.data.gemini_daily.model,'gemini-3.6-flash');
+  assert.equal(usage.data.gemini_daily.model,'gemini-3.5-flash-lite');
   assert.equal(usage.data.gemini_daily.calls,20);
   assert.equal(usage.data.gemini_daily.limit,20);
   assert.equal(usage.data.gemini_daily.remaining,0);
