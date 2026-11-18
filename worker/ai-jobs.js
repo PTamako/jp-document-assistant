@@ -3,7 +3,7 @@ import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 
 const MAX_AUTO_ATTEMPTS=2; // initial call + one transient 5xx/network retry
 const STALE_RUNNING_MS=120000;
-const RETRY_BASE_MS=90000;
+const RETRY_BASE_MS=15*60*1000; // Wait about 15 minutes before one Google 5xx retry.
 const active=new Set();
 const get=(db,sql,...args)=>db.prepare(sql).bind(...args).first();
 const run=(db,sql,...args)=>db.prepare(sql).bind(...args).run();

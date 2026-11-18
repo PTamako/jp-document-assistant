@@ -2779,6 +2779,11 @@ test('Gemini 503 waits for scheduled one-time recovery without consuming quota d
   assert.equal(imported.data.ai_status,'queued');
   assert.equal(googleCalls,1);
   const id=imported.data.document_id;
+  const queued=(await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_job;
+  const remaining=Date.parse(queued.next_attempt_at)-Date.now();
+  assert.equal(queued.state,'retry_wait');
+  assert.ok(remaining>=14*60*1000 && remaining<=16*60*1000,
+   '503 retry must be roughly 15 minutes later, not 90 seconds');
   const failed=(await req(env,'/api/documents/'+id,auth(owner))).data.document.ai_analysis;
   assert.equal(failed.failure_code,'gemini_service_overloaded');
   assert.doesNotMatch(JSON.stringify(failed),/sensitive information/);
