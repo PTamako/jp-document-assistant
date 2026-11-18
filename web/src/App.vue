@@ -263,7 +263,11 @@ const aiFailureMessage=computed(()=>{
  if(aiResultReady(current.value))return '';
  const job=current.value?.ai_job;
  if(job?.state==='queued'||job?.state==='running')return 'AI 正在后台解析，可继续使用文书';
- if(job?.state==='retry_wait')return 'Google 暂时繁忙，已安排自动重试';
+ if(job?.state==='retry_wait'){
+    const due=Date.parse(job.next_attempt_at||'');
+    const when=Number.isFinite(due)?new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'}).format(due):'';
+    return 'Google 暂时繁忙，等待自动重试'+(when?'（最早日本时间 '+when+'）':'')+'；已尝试 '+Math.max(1,Number(job.attempts)||1)+' 次';
+  }
  if(job?.state==='failed')return aiFailureLabels[job.last_error]||'AI 解析未完成，可手动重试';
  return current.value?.ai_analysis?.status==='failed'
   ?(aiFailureLabels[current.value.ai_analysis.failure_code]||'AI 分析失败'):'';
@@ -402,8 +406,8 @@ const choices={
  visibility:{title:'可见范围',items:[{value:'all',label:'全部'},{value:'mine',label:'我拥有的'},{value:'shared',label:'家庭共享'}]},
  archived:{title:'归档状态',items:[{value:'active',label:'未归档'},{value:'archived',label:'已归档'},{value:'all',label:'全部'}]},
  favorite:{title:'收藏',items:[{value:'all',label:'全部'},{value:'yes',label:'仅收藏'}]},
- aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 3.6 Flash'}]},
- docAiProvider:{title:'当前文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 3.6 Flash'}]},
+ aiProvider:{title:'本份文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 3.5 Flash-Lite'}]},
+ docAiProvider:{title:'当前文书 AI 引擎',items:[{value:'none',label:'仅规则'},{value:'cloudflare',label:'Cloudflare Workers AI'},{value:'gemini',label:'Gemini 3.5 Flash-Lite'}]},
  textSource:{title:'文书来源',items:[{value:'text',label:'粘贴文本'},{value:'mail_forward',label:'苹果邮件复制 / 转发'},{value:'gmail',label:'Gmail 逐封选择'},{value:'google_drive',label:'Google Drive 复制'},{value:'local_file',label:'本地文档文本'}]},
  textRetention:{title:'保存方式',items:[{value:'summary',label:'保存文字和分析结果'},{value:'analyze_only',label:'仅分析，不保存'}]},
  importOcrEngine:{title:'识别方式',items:[{value:'local',label:'本机 PaddleOCR'},{value:'workers_ai',label:'Workers AI 图片 OCR'},{value:'ocr_space',label:'OCR.space'}]},
@@ -1871,7 +1875,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div class="content-card explain-panel">
           <div class="explain-heading">
             <h3>中文讲解</h3>
-            <button v-if="canManageCurrent" class="explain-provider" type="button" @click="openDocAiProvider" aria-label="选择这份文书的 AI 引擎">{{({cloudflare:'Workers AI',gemini:'Gemini 3.6 Flash',none:'仅规则'})[current.ai_provider]||'仅规则'}}<UiIcon name="chevron-right" :size="15"/></button>
+            <button v-if="canManageCurrent" class="explain-provider" type="button" @click="openDocAiProvider" aria-label="选择这份文书的 AI 引擎">{{({cloudflare:'Workers AI',gemini:'Gemini 3.5 Flash-Lite',none:'仅规则'})[current.ai_provider]||'仅规则'}}<UiIcon name="chevron-right" :size="15"/></button>
           </div>
           <div class="explain-actions">
             <button v-if="canManageCurrent&&current.ai_provider!=='none'" class="primary icon-label" type="button" :disabled="busy||!current.extracted_text_ja" @click="runAiForCurrent"><UiIcon name="sparkles" :size="17"/>AI 解读</button>

@@ -2,9 +2,9 @@ import {hashString,randomToken,isoNow} from './security.js';
 import {GEMINI_MODEL,reserveGeminiRequest} from './gemini-budget.js';
 
 const CF_MODEL='@cf/qwen/qwen3.8-27b';
-// Thinking tokens count toward maxOutputTokens; MEDIUM balances quality and cost.
-export const GEMINI_THINKING_LEVEL='MEDIUM';
-export const GEMINI_MAX_OUTPUT_TOKENS=8192;
+// Flash-Lite favors short structured documents; minimal thinking limits time and token use.
+export const GEMINI_THINKING_LEVEL='MINIMAL';
+export const GEMINI_MAX_OUTPUT_TOKENS=4096;
 // The immediate AI job runs in ctx.waitUntil(), whose post-response
 // lifetime is capped at 30 s. Leave a margin for D1 writes and cleanup.
 export const GEMINI_REQUEST_TIMEOUT_MS=26000;
