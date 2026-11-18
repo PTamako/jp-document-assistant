@@ -78,7 +78,7 @@ test('original PWA resumes SSO automatically without storing proof in URL',()=>{
  const app=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8');
  assert.match(app,/async function resumeHomeflowSsoIfReady\(\)/);
  assert.match(app,/status\.ready===true\)\{\s*await completeHomeflowSso\(\)/);
- assert.match(app,/if\(!user\.value\)\{void resumeHomeflowSsoIfReady\(\);return;\}/);
+ assert.match(app,/if\(!user\.value\)\{void refreshHomeflowSsoAvailability\(\)\.then\(\(\)=>resumeHomeflowSsoIfReady\(\)\);return;\}/);
  assert.match(app,/await resumeHomeflowSsoIfReady\(\);if\(!user\.value\)await refreshInitStatus\(\)/);
  assert.doesNotMatch(app,/authorization_url\s*\+\s*resume_secret/);
 });
