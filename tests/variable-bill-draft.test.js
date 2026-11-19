@@ -13,7 +13,7 @@ test('verified document bill creates draft payload, never direct entry',()=>{
   variable_bill_plan_id:planId,variable_bill_period:'2026-10'})
  assert.deepEqual(data,{
   operation:'variable_bill_draft',planId,periodMonth:'2026-10',
-  amount:5500,billDate:'2026-11-18',merchant:'東京ガス',source_kind:'document_assistant'
+  amount:5500,billDate:null,expenseDate:'2026-11-18',serviceStart:null,serviceEnd:null,merchant:'東京ガス',source_kind:'document_assistant'
  })
  assert.equal(data.paymentSource,undefined)
 })
@@ -38,3 +38,15 @@ test('candidate user interface distinctly displays a draft mode without direct p
  assert.match(ui,/仅同步到账单草稿/)
  assert.match(ui,/不会直接记账、扣款/)
 })
+
+test('verified metering dates travel to the recurring draft without claiming invoice issue',()=>{
+ const dates=new Map([...checked,['meter_period_start','2026-10-16'],
+  ['meter_period_end','2026-11-15'],['card_advance_date','2026-11-27']]);
+ const payload=validatedPayload('kakebo',item,dates,{
+  date:'2026-11-27',variable_bill_plan_id:planId,variable_bill_period:'2026-10'
+ });
+ assert.equal(payload.expenseDate,'2026-11-27');
+ assert.equal(payload.billDate,null);
+ assert.equal(payload.serviceStart,'2026-10-16');
+ assert.equal(payload.serviceEnd,'2026-11-15');
+});

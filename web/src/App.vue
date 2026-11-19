@@ -1585,6 +1585,20 @@ async function verifyLedgerStatus(item){
  }catch(e){financeTargetStatus[item.id]='unavailable';problem(e);}
  finally{busy.value=false;}
 }
+function chooseVariableBillPlan(){
+ if(!candidateDraft.variable_bill_plan_id){
+  candidateDraft.variable_bill_period='';return;
+ }
+ // The card advance day is an editable proposal, not the invoice issue date.
+ const fields=Array.isArray(current.value?.fields)?current.value.fields:[];
+ const sourceValue=key=>fields.find(f=>f.field_key===key&&f.review_state!=='rejected')?.normalized_value||'';
+ const advance=sourceValue('card_advance_date');
+ const start=sourceValue('meter_period_start');
+ if(current.value?.category==='utility'&&/^20\d\d-\d\d-\d\d$/.test(advance))
+  candidateDraft.date=advance;
+ candidateDraft.variable_bill_period=/^20\d\d-\d\d-\d\d$/.test(start)
+  ?start.slice(0,7):current.value?.category==='utility'?'':candidateDraft.date.slice(0,7);
+}
 async function commitApprovedCandidate(){
  if(busy.value||!current.value)return;
  const memberApproval=candidateApprovalRequired.value;
@@ -2320,7 +2334,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <template v-else-if="sheet==='restoreBackup'"><h2>确认恢复备份</h2><p>检查恢复内容。仅在点击确认后写入 D1 和私有 R2，不重发三个 App 的历史财务/任务/学习记录。</p><div v-for="(x,i) in restorePreview" :key="i" class="recycle-row"><div class="item-info"><strong>{{x.title}}</strong><small>{{x.action==='skip_duplicate'?'已存在 · 跳过':'恢复资料'}}{{x.has_original_reference?' · 原件按备份内容恢复':''}}</small></div></div><div class="sheet-actions"><button class="secondary" @click="sheet='backup'">取消</button><button class="primary" :disabled="busy" @click="confirmRestore">确认恢复</button></div></template>
       <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2>
         <p v-if="candidateDraft.kind==='finance'&&candidateMerchant" class="muted">交易商户：{{candidateMerchant}}</p>
-        <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.variable_bill_plan_id?'账单日期（不是实际扣款日）':candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
+        <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.variable_bill_plan_id?'记账日（建议采用卡垫付日，可修改）':candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
         <div v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateApprovalPrepared||candidateApprovalSubmitted" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
@@ -2330,7 +2344,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&candidateDraft.entry_type==='transfer'" class="fine-print">SBI 等非现金业务需要独立审批执行器，不能使用现金账目代替。</p>
         <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer&&!candidateDraft.variable_bill_plan_id" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <label v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='expense'&&!candidateApprovalRequired&&ledgerOptions.variablePlans?.length" class="form-label">同步方式
-         <select v-model="candidateDraft.variable_bill_plan_id" @change="candidateDraft.variable_bill_period=candidateDraft.variable_bill_plan_id&&current?.category!=='utility'?candidateDraft.date.slice(0,7):''">
+         <select v-model="candidateDraft.variable_bill_plan_id" @change="chooseVariableBillPlan">
           <option value="">普通支出（仅确认已经付款后直接记账）</option>
           <option v-for="p in ledgerOptions.variablePlans" :key="p.value" :value="p.value">变动定期费用草稿：{{p.label}}</option>
          </select>
@@ -2342,8 +2356,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
             <button v-if="candidateDraft.variable_bill_period" class="date-clear" type="button" aria-label="清空账单月份" @click="candidateDraft.variable_bill_period=''"><UiIcon name="x" :size="17"/></button>
           </div>
         </div>
-        <p v-if="candidateDraft.variable_bill_plan_id&&current?.category==='utility'&&current?.fields?.some(f=>f.field_key==='card_advance_date'&&f.review_state!=='rejected')" class="fine-print">原文中的「カード立替日」是信用卡垫付日，不等于账单日期或账单所属月份；请按账单内容分别核对。</p>
-        <p v-if="candidateDraft.variable_bill_plan_id" class="fine-print">仅把识别金额和账单日期填到家計簿的「变动定期费用」。不会直接记账、扣款，也不会标记已支付；需在家計簿确认后手动记账。</p>
+        <p v-if="candidateDraft.variable_bill_plan_id&&current?.category==='utility'&&current?.fields?.some(f=>f.field_key==='card_advance_date'&&f.review_state!=='rejected')" class="fine-print">已自动建议采用「カード立替日」作为记账日，可手动修改；它不是账单发行日，未来日期尚未到达时不能确认已付款。</p>
+        <p v-if="candidateDraft.variable_bill_plan_id" class="fine-print">把识别金额、利用期间和建议记账日填到家計簿的「变动定期费用」草稿。不代表已经扣款；日期到达且核对后才能确认记账。</p>
         <p v-if="candidatePersonalTransfer" class="fine-print">此处只同步本人 SBI 资产转移记录，不新增账户、不改变卡片或现金余额、不创建基金份额，也不需要家庭审批。</p>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
         <label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>已尝试同步，同意核对旧记录并防止重复记账</label>

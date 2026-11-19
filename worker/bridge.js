@@ -95,8 +95,20 @@ async function lookupKakeboIdempotency(dest,{key,actor,documentId,candidateId,op
 }
 
 async function checkedFields(env,docId){
-  const rs=(await env.DB.prepare('SELECT field_key,normalized_value,review_state FROM document_fields WHERE document_id=?').bind(docId).all()).results||[];
-  return new Map(rs.filter(x=>['confirmed','corrected'].includes(x.review_state)).map(x=>[x.field_key,x.normalized_value]));
+  const rs=(await env.DB.prepare('SELECT field_key,normalized_value,review_state,source_quote FROM document_fields WHERE document_id=?').bind(docId).all()).results||[];
+  const approved=new Map(rs.filter(x=>['confirmed','corrected'].includes(x.review_state)).map(x=>[x.field_key,x.normalized_value]));
+  // Optional, explicitly quoted utility dates are suggestions, never proof of payment.
+  // An audited/corrected value always wins over a machine-extracted suggestion.
+  const suggested=new Set(['meter_period_start','meter_period_end','card_advance_date']);
+  for(const f of rs){
+    const date=String(f.normalized_value||'');
+    const quote=String(f.source_quote||'');
+    if(f.review_state!=='unreviewed'||!suggested.has(f.field_key)||approved.has(f.field_key)||
+      !/^20\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(date))continue;
+    if(quote.includes(date)||quote.includes(date.replaceAll('-','/'))||
+      quote.includes(date.replaceAll('-','.')))approved.set(f.field_key,date);
+  }
+  return approved;
 }
 function ledgerEntryType(x,merchant=x.merchant){
   if(['expense','transfer'].includes(x.kind)&&inferSbiInvestmentKind(merchant))return 'transfer';
@@ -122,8 +134,19 @@ export function validatedPayload(target,item,approved,body){
       const merchant=trim(approved.get('merchant')||x.merchant,100);
       if(!merchant||isUnsupportedBalanceMovement(merchant))
         bad('当前文书不能作为定期费用账单','VARIABLE_BILL_INVALID',422);
+      const sourceDate=key=>{
+        const value=String(approved.get(key)||'');
+        return /^20\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)?value:null;
+      };
+      const serviceStart=sourceDate('meter_period_start');
+      const serviceEnd=sourceDate('meter_period_end');
+      const validServiceRange=serviceStart&&serviceEnd&&serviceStart<=serviceEnd;
       return {operation:'variable_bill_draft',planId:body.variable_bill_plan_id,
-        periodMonth:body.variable_bill_period,amount,billDate:body.date,
+        periodMonth:body.variable_bill_period,amount,
+        billDate:null, // Card advance date is NOT a documented invoice issue date.
+        expenseDate:body.date, // Editable proposed ledger date; not a payment confirmation.
+        serviceStart:validServiceRange?serviceStart:null,
+        serviceEnd:validServiceRange?serviceEnd:null,
         merchant,source_kind:'document_assistant'};
     }
     if(!trim(body.category,80)||!trim(body.payment_source,100))bad('请选择目标账本的类别与支付账户','MISSING_MAPPING',422);
