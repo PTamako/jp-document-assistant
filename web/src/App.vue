@@ -1643,7 +1643,9 @@ async function commitApprovedCandidate(){
     ?'已提交 HomeFlow 待审批，尚未同步到目标应用'
     :'原审批申请已存在，请在 HomeFlow 查看状态；目标应用尚未写入';
   }else{
-   feedback=d.recovered_prior?'家計簿已有该候选的旧记账；未重复写入，请核对分类':
+   feedback=body.variable_bill_plan_id?
+    (d.already_synced?'该定期账单草稿已存在，不会重复创建':'已同步为家計簿待确认账单草稿，尚未计入支出'):
+    d.recovered_prior?'家計簿已有该候选的旧记账；未重复写入，请核对分类':
     d.already_synced?'已关联已有记录，不重复记账':'目标 App 已确认同步成功';
   }
   confirmed=true;pendingCandidateRetry.value=null;
@@ -2318,7 +2320,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <template v-else-if="sheet==='restoreBackup'"><h2>确认恢复备份</h2><p>检查恢复内容。仅在点击确认后写入 D1 和私有 R2，不重发三个 App 的历史财务/任务/学习记录。</p><div v-for="(x,i) in restorePreview" :key="i" class="recycle-row"><div class="item-info"><strong>{{x.title}}</strong><small>{{x.action==='skip_duplicate'?'已存在 · 跳过':'恢复资料'}}{{x.has_original_reference?' · 原件按备份内容恢复':''}}</small></div></div><div class="sheet-actions"><button class="secondary" @click="sheet='backup'">取消</button><button class="primary" :disabled="busy" @click="confirmRestore">确认恢复</button></div></template>
       <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2>
         <p v-if="candidateDraft.kind==='finance'&&candidateMerchant" class="muted">交易商户：{{candidateMerchant}}</p>
-        <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
+        <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.variable_bill_plan_id?'账单日期（不是实际扣款日）':candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
         <div v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateApprovalPrepared||candidateApprovalSubmitted" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
