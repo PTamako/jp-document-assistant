@@ -38,5 +38,7 @@ test('rule-based re-extraction is named and displayed only on the field tab',()=
  assert.match(fields,/重新提取字段/);
  assert.match(fields,/:disabled="busy\|\|!current\.extracted_text_ja"/);
  assert.match(app,/\x60\/api\/documents\/\$\{id\}\/reinterpret\x60/);
- assert.match(css,/\.field-refresh-action\{display:flex;justify-content:flex-end/);
+ assert.match(css,/\.field-action-row\{display:flex;align-items:center;justify-content:flex-end/);
+ assert.match(fields,/class="field-action-row"/);
+ assert.match(fields,/@click="amountVisible=!amountVisible"/);
 });
