@@ -2116,6 +2116,47 @@ test('electricity mail import previews only invoiced 1770 JPY, not 1966 metering
 });
 
 
+test('legacy bank-labelled electricity notice backfills one finance candidate without changing verified amount',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const text=[
+  '電気料金のお知らせ',
+  '今回のご請求金額合計 1,987円（税込）',
+  'ご利用請求書は添付のPDFにてご確認ください',
+  'カード立替日：2026/11/25'
+ ].join('\\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),
+  data:{source_type:'text',retention:'summary',text}});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(doc.category,'utility');
+ const amount=doc.fields.find(f=>f.field_key==='amount_jpy');
+ assert.equal(amount?.normalized_value,'1987');
+ const reviewed=await req(env,'/api/fields/'+amount.id,{method:'PATCH',...auth(owner),
+  data:{normalized_value:'1987',review_state:'confirmed'}});
+ assert.equal(reviewed.response.status,200);
+ // Recreate the user's pre-fix state: reviewed amount, bank label, no ledger suggestion.
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='finance'").run(id);
+ env.DB.sql.prepare("UPDATE documents SET category='bank' WHERE id=?").run(id);
+ const candidates=async()=>(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ assert.equal((await candidates()).filter(x=>x.candidate_kind==='finance').length,0);
+ const refreshed=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ assert.equal(refreshed.response.status,200,JSON.stringify(refreshed.data));
+ const fixed=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(fixed.category,'utility');
+ assert.equal(fixed.fields.find(f=>f.field_key==='amount_jpy')?.id,amount.id);
+ assert.equal(fixed.fields.find(f=>f.field_key==='amount_jpy')?.review_state,'confirmed');
+ const financial=(await candidates()).filter(x=>x.candidate_kind==='finance');
+ assert.equal(financial.length,1);
+ assert.equal(financial[0].payload.amount_jpy,1987);
+ assert.equal(financial[0].payload.merchant,'電気料金');
+ assert.equal(financial[0].payload.category,'utility');
+ assert.equal((await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}})).response.status,200);
+ assert.equal((await candidates()).filter(x=>x.candidate_kind==='finance')[0].id,financial[0].id);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+});
+
+
 test('future delivery notice creates one HomeFlow suggestion; only confirmed delivery date authorizes bridge',async()=>{
  const env=makeEnv(),owner=await boot(env);
  const original=['佐川急便 お届け予定日時','2099/10/12　AM8:00～12:00','※ご都合の良い日時をご指定ください。'].join('\n');

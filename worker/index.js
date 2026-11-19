@@ -214,6 +214,13 @@ async function ownedDocument(db,id,p,lifecycle=null){
   return doc;
 }
 function listShape(d,p){return {id:d.id,category:d.category,title:d.title,visibility:d.visibility,can_manage:!!p&&d.owner_id===p.user_id,analysis_status:d.analysis_status,review_status:d.review_status,lifecycle:d.lifecycle,created_at:d.created_at,updated_at:d.updated_at,version:d.version,favorite:!!d.favorite,archived_at:d.archived_at||null,tags:JSON.parse(d.tags_json||'[]')};}
+// A bill type is not proof of which company charged the household.
+// Use a neutral utility label until the person selects the actual Kakeibo plan.
+function utilityLedgerLabel(text){
+  if(/(?:ガス料金|都市ガス)/.test(text))return 'ガス料金';
+  if(/(?:水道料金|水道局)/.test(text))return '水道料金';
+  return '電気料金';
+}
 async function analyzeStored(env,doc,force=false){
   if(doc.analysis_status==='needs_review' && !force)return {cached:true};
   if(doc.import_mode==='analyze_only')bad('仅分析内容不长期保存');
@@ -247,7 +254,7 @@ async function analyzeStored(env,doc,force=false){
         transaction_date:stamp?.normalized_value?.slice(0,10)||null,
         transaction_at:stamp?.value_type==='datetime'?stamp.normalized_value:null,
         payment_source_hint:result.category==='card_spend'&&/Olive/i.test(doc.extracted_text_ja.normalize('NFKC'))?'Olive':null,
-        merchant:merchant?.normalized_value||null,note}),now,now]);
+        merchant:merchant?.normalized_value||(result.category==='utility'?utilityLedgerLabel(doc.extracted_text_ja):null),note}),now,now]);
   }
   const due=result.fields.find(f=>f.field_key==='due_date'&&!f.source_quote?.startsWith('年份自动补全'));
   const deliveryTask=deliveryTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
@@ -1008,7 +1015,7 @@ ELSE 'unreviewed' END review_status,
       // Add only previously missing fields: never overwrite approved/corrected/
       // rejected values, destroy candidates, or regenerate remote idempotency keys.
       const added=parsed.fields.filter(x=>!keys.has(x.field_key));
-      const nextCategory=doc.category==='other'||(doc.category==='bank'&&parsed.category==='card_spend')?parsed.category:doc.category;
+      const nextCategory=doc.category==='other'||(doc.category==='bank'&&['card_spend','utility'].includes(parsed.category))?parsed.category:doc.category;
       const nextVisibility=requiresPrivateDefault(nextCategory,doc.extracted_text_ja)?'private':doc.visibility;
       const manualSalary=existing.find(x=>x.field_key==='net_salary'&&x.review_state==='corrected'&&parsed.category==='salary');
       const explanation=manualSalary?parsed.explanation_zh+'\n金额说明：已根据银行明细人工填写工资金额，原文未提供此数额，请在字段中核对。':parsed.explanation_zh;
@@ -1016,22 +1023,22 @@ ELSE 'unreviewed' END review_status,
         parsed.summary_zh,explanation,nextCategory,nextVisibility,'rules-v4-payments',now,id,p.user_id,'active']];
       for(const f of added)statements.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
         randomToken(16),id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);
-      // Explicit re-interpretation of a legacy bank-labelled card purchase may
-      // safely ADD a missing expense proposal, but never replace existing IDs.
-      const cardAmount=parsed.category==='card_spend'?parsed.fields.find(x=>x.field_key==='amount_jpy'):null;
+      // Legacy bank-labelled card/utility notices may receive one missing expense
+      // candidate. Keep reviewed values and any existing sync/idempotency ID.
+      const invoiceAmount=['card_spend','utility'].includes(parsed.category)?parsed.fields.find(x=>x.field_key==='amount_jpy'):null;
       const previousAmount=existing.find(x=>x.field_key==='amount_jpy');
-      const usableAmount=cardAmount&&(!previousAmount||(previousAmount.review_state!=='rejected'&&previousAmount.normalized_value===cardAmount.normalized_value));
+      const usableAmount=invoiceAmount&&(!previousAmount||(previousAmount.review_state!=='rejected'&&previousAmount.normalized_value===invoiceAmount.normalized_value));
       if(usableAmount){
         const merchant=parsed.fields.find(x=>x.field_key==='merchant');
         const date=parsed.fields.find(x=>x.field_key==='transaction_at'||x.field_key==='transaction_date');
         statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
           SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='finance')`,
-          randomToken(16),id,'finance',JSON.stringify({kind:'expense',amount_jpy:Number(cardAmount.normalized_value),currency:'JPY',
-            category:'card_spend',payment_confirmed:false,transaction_date:date?.normalized_value?.slice(0,10)||null,
+          randomToken(16),id,'finance',JSON.stringify({kind:'expense',amount_jpy:Number(invoiceAmount.normalized_value),currency:'JPY',
+            category:parsed.category,payment_confirmed:false,transaction_date:date?.normalized_value?.slice(0,10)||null,
             transaction_at:date?.value_type==='datetime'?date.normalized_value:null,
             payment_source_hint:/Olive/i.test(doc.extracted_text_ja.normalize('NFKC'))?'Olive':null,
-            merchant:merchant?.normalized_value||null,
-            note:'信用卡消费通知，核对金额、卡片、是否已入账，避免与月度账单重复记账'}),now,now,id]);
+            merchant:merchant?.normalized_value||(parsed.category==='utility'?utilityLedgerLabel(doc.extracted_text_ja):null),
+            note:parsed.category==='utility'?'公共料金账单仅确认应缴金额，尚未证明实际扣款；优先同步为定期费用待确认草稿，避免重复支出':'信用卡消费通知，核对金额、卡片、是否已入账，避免与月度账单重复记账'}),now,now,id]);
       }
       // Backfill one missing *future* delivery suggestion for an old imported mail.
       // Do not recreate existing linked task IDs or override a rejected/corrected date.

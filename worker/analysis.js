@@ -28,6 +28,9 @@ export function classifyText(text) {
   if (storedValueTopup(text)) return 'topup';
   if (isSalaryDepositNotice(text)) return 'salary';
   if (isCardPurchaseNotice(text)) return 'card_spend';
+  // A utility bill mentioning a credit card, payment date, or ご請求額 is
+  // still a utility invoice, not an independent bank/card transaction.
+  if (/(電気料金|ガス料金|水道料金|電力使用量|検針期間)/.test(text)) return 'utility';
   if (/(?:口座引[き]?落[とし]?|口座振替|引落(?:し)?(?:予定日|金額|額))/.test(text)) return 'bank';
   if (/(?:お届け予定日時|配達予定日|配送予定日|お荷物のお届け)/.test(text)) return 'delivery';
   if (/(給与明細|差引支給|支給総額|賞与明細)/.test(text)) return 'salary';
@@ -36,7 +39,6 @@ export function classifyText(text) {
   if (/(保険金請求|給付金請求|保険証券|保険契約)/.test(text)) return 'insurance';
   if (/(診療予約|処方箋|受診案内|健診結果)/.test(text)) return 'medical';
   if (/(住民票|区役所|市役所|行政手続)/.test(text)) return 'government';
-  if (/(電気料金|ガス料金|水道料金|使用量)/.test(text)) return 'utility';
   if (/(契約更新|家賃|賃貸借)/.test(text)) return 'housing';
   if (/(キャンペーン|ポイント還元|併用不可|対象商品|対象外|エントリー)/.test(text)) return 'campaign';
   if (/(利用規約|自動更新条項|解約手数料|違約金)/.test(text)) return 'terms';
