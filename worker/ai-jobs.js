@@ -47,8 +47,9 @@ export async function getDocumentAiJob(db,id,doc=null){
 
 async function finish(db,id,attempts,sourceSha,state,error=null,at=isoNow()){
   await run(db,`UPDATE document_ai_jobs SET state=?,next_attempt_at=?,last_error=?,updated_at=?
-    WHERE document_id=? AND state='running' AND attempts=? AND source_sha=?`,
-    state,at,error,isoNow(),id,attempts,sourceSha);
+    WHERE document_id=? AND attempts=? AND source_sha=?
+      AND (state='running' OR (state='failed' AND last_error='processing_timeout_unconfirmed' AND ?='done'))`,
+    state,at,error,isoNow(),id,attempts,sourceSha,state);
 }
 
 export async function processDocumentAiJob(env,id){
@@ -97,11 +98,18 @@ export async function runDueDocumentAiJobs(env){
        OR (state='running' AND updated_at<?)
     LIMIT 1`,now,stale);
   if(!pending)return 0;
-  // Recover timed-out jobs only when a queued/retry/stale row exists.
-  await run(env.DB,`UPDATE document_ai_jobs SET state='queued',next_attempt_at=?,updated_at=?
-    WHERE state='running' AND updated_at<? AND attempts<2`,now,now,stale);
-  await run(env.DB,`UPDATE document_ai_jobs SET state='failed',last_error='processing_timeout',updated_at=?
-    WHERE state='running' AND updated_at<? AND attempts>=2`,now,stale);
+  // A stale running request could already have reached the provider.
+  // Never auto-resend an ambiguous Gemini/Workers AI request: fail closed.
+  // Reconcile a persisted matching success without making another AI call.
+  const completed=`EXISTS (
+    SELECT 1 FROM document_ai_analyses a
+    WHERE a.document_id=document_ai_jobs.document_id
+      AND a.provider=document_ai_jobs.provider
+      AND a.source_sha=document_ai_jobs.source_sha AND a.state='success')`;
+  await run(env.DB,`UPDATE document_ai_jobs SET
+    state=CASE WHEN ${completed} THEN 'done' ELSE 'failed' END,
+    last_error=CASE WHEN ${completed} THEN NULL ELSE 'processing_timeout_unconfirmed' END,
+    updated_at=? WHERE state='running' AND updated_at<?`,now,stale);
   const rows=(await env.DB.prepare(`SELECT document_id FROM document_ai_jobs
      WHERE state IN ('queued','retry_wait') AND next_attempt_at<=?
      ORDER BY next_attempt_at LIMIT 2`).bind(now).all()).results||[];

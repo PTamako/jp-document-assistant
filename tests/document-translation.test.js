@@ -4,7 +4,7 @@ import {createHmac} from 'node:crypto';
 import {splitJapaneseDocument,handleDocumentTranslation,documentTranslationBudgetUsage,MAX_GOOGLE_CALLS_PER_JST_DAY} from '../worker/document-translation.js';
 
 class FakeDb{
- constructor(){this.cache=new Map();this.budget=new Map();this.docs=new Map();}
+ constructor(){this.cache=new Map();this.budget=new Map();this.docs=new Map();this.jobs=new Map();}
  prepare(sql){const db=this;return {bind(...args){return {
   async first(){
    if(sql.includes('FROM document_translations'))return db.cache.get(args[0])||null;
@@ -12,6 +12,20 @@ class FakeDb{
    throw Error('unknown SQL read '+sql);
   },
   async run(){
+   if(sql.includes('INSERT INTO document_translation_jobs')){
+    const [sourceSha,claimId,startedAt,updatedAt,id,original,staleBefore]=args;
+    if(db.docs.get(id)!==original)return {meta:{changes:0}};
+    const old=db.jobs.get(id);
+    if(old?.state==='running'&&old.updatedAt>=staleBefore)return {meta:{changes:0}};
+    db.jobs.set(id,{sourceSha,claimId,state:'running',startedAt,updatedAt});
+    return {meta:{changes:1}};
+   }
+   if(sql.includes('UPDATE document_translation_jobs')){
+    const [state,error,updatedAt,id,claimId]=args,job=db.jobs.get(id);
+    if(!job||job.claimId!==claimId||job.state!=='running')return {meta:{changes:0}};
+    Object.assign(job,{state,error,updatedAt});
+    return {meta:{changes:1}};
+   }
    if(sql.includes('INSERT OR IGNORE INTO document_translation_daily_budget')){
     if(!db.budget.has(args[0]))db.budget.set(args[0],0);
     return {meta:{changes:1}};
@@ -23,8 +37,10 @@ class FakeDb{
     return {meta:{changes:1}};
    }
    if(sql.includes('INSERT INTO document_translations')){
-    const [sha,translation,provider,created,updated,id,original]=args;
-    if(db.docs.get(id)!==original)return {meta:{changes:0}};
+    const [sha,translation,provider,created,updated,id,original,claimId,claimSource]=args;
+    const job=db.jobs.get(id);
+    if(db.docs.get(id)!==original||job?.state!=='running'||
+      job?.claimId!==claimId||job?.sourceSha!==claimSource)return {meta:{changes:0}};
     db.cache.set(id,{source_sha:sha,translation_zh:translation,provider,created_at:created,updated_at:updated});
     return {meta:{changes:1}};
    }
@@ -162,4 +178,40 @@ test('JST daily quota endpoint reports the authoritative reserved budget, not Go
  assert.equal(after.japan_day,'2026-11-14');
  assert.equal(after.calls,0);
  assert.equal(after.remaining,80);
+});
+
+test('simultaneous devices do not each translate or reserve another chunk',async()=>{
+ const {db,calls,env}=create();
+ let release;
+ const blocked=new Promise(resolve=>{release=resolve;});
+ const original=env.ZHIXUE_BRIDGE_SERVICE.fetch;
+ env.ZHIXUE_BRIDGE_SERVICE.fetch=async request=>{
+  await blocked;
+  return original(request);
+ };
+ const first=handleDocumentTranslation(post(),env,doc);
+ // Allow first to reserve and reach the remote request.
+ for(let i=0;i<20&&!db.jobs.has(doc.id);i++)await new Promise(r=>setTimeout(r,0));
+ assert.equal(db.jobs.get(doc.id)?.state,'running');
+ const second=await handleDocumentTranslation(post(),env,doc);
+ assert.equal(second.status,409);
+ assert.equal((await second.json()).code,'TRANSLATION_IN_PROGRESS');
+ assert.equal([...db.budget.values()][0],1,'only one budget reservation');
+ release();
+ assert.equal((await (await first).json()).cached,false);
+ assert.equal(calls.length,1);
+ assert.equal((await (await handleDocumentTranslation(post(),env,doc)).json()).cached,true);
+ assert.equal([...db.budget.values()][0],1);
+});
+test('failed first translation releases claim for an explicit retry',async()=>{
+ const {db,env,calls}=create();
+ const original=env.ZHIXUE_BRIDGE_SERVICE.fetch;
+ env.ZHIXUE_BRIDGE_SERVICE.fetch=async()=>new Response(
+  JSON.stringify({ok:false,error:'translation_unavailable'}),{status:503});
+ assert.equal((await handleDocumentTranslation(post(),env,doc)).status,503);
+ assert.equal(db.jobs.get(doc.id).state,'failed');
+ env.ZHIXUE_BRIDGE_SERVICE.fetch=original;
+ const retried=await handleDocumentTranslation(post(),env,doc);
+ assert.equal(retried.status,200);
+ assert.equal(calls.length,1);
 });
