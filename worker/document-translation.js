@@ -1,7 +1,7 @@
 // Reuse the existing private HMAC Service Binding to 知学, which already owns
 // the free Google Apps Script LanguageApp secrets. No Google credentials or
 // private text are put into browser bundles, R2, third-party fallbacks, or logs.
-import {hashString,hmacHex,isoNow} from './security.js';
+import {hashString,hmacHex,isoNow,randomToken} from './security.js';
 import {json,readJson,bad} from './http.js';
 
 export const MAX_TRANSLATION_CHARS=8000;
@@ -52,6 +52,15 @@ export function splitJapaneseDocument(text,max=MAX_CHUNK_CHARS){
  return chunks;
 }
 const status=(code,message,http)=>json({ok:false,code,message},http);
+// A crashed or disconnected request must not automatically rerun paid/quota-limited
+// translation. A *new explicit user click* may acquire a five-minute stale lease.
+const TRANSLATION_LEASE_MS=5*60*1000;
+async function finishTranslationJob(db,id,claimId,state,error=null){
+ await db.prepare(`UPDATE document_translation_jobs
+   SET state=?,last_error=?,updated_at=?
+   WHERE document_id=? AND claim_id=? AND state='running'`)
+  .bind(state,error,isoNow(),id,claimId).run();
+}
 async function cachedTranslation(db,doc){
  const text=String(doc.extracted_text_ja||'').trim();
  if(!text)return null;
@@ -118,14 +127,34 @@ export async function handleDocumentTranslation(request,env,doc){
  const chunks=splitJapaneseDocument(source);
  if(typeof env.ZHIXUE_BRIDGE_SERVICE?.fetch!=='function'||!env.ZHIXUE_BRIDGE_SECRET)
   return status('NOT_CONFIGURED','知学翻译联动尚未配置',503);
+ // D1 atomic claim across all Workers/isolate instances and both family devices.
+ // A second request cannot reserve quota or call Google while the first is active.
+ const claimId=randomToken(16),startedAt=isoNow();
+ const staleBefore=new Date(Date.now()-TRANSLATION_LEASE_MS).toISOString();
+ const claim=await env.DB.prepare(`INSERT INTO document_translation_jobs
+   (document_id,source_sha,claim_id,state,started_at,updated_at,last_error)
+   SELECT id,?,?,'running',?,?,NULL FROM documents
+   WHERE id=? AND lifecycle='active' AND extracted_text_ja=?
+   ON CONFLICT(document_id) DO UPDATE SET
+     source_sha=excluded.source_sha,claim_id=excluded.claim_id,state='running',
+     started_at=excluded.started_at,updated_at=excluded.updated_at,last_error=NULL
+   WHERE document_translation_jobs.state IN ('done','failed')
+      OR (document_translation_jobs.state='running'
+          AND document_translation_jobs.updated_at<?)`)
+   .bind(cached.sourceSha,claimId,startedAt,startedAt,doc.id,doc.extracted_text_ja,staleBefore).run();
+ if(claim.meta?.changes!==1)
+  return status('TRANSLATION_IN_PROGRESS',
+   '这份文书已有翻译任务处理中，请稍后再点以复用结果；没有重复调用 Google',409);
  const day=jstDay();
  await env.DB.prepare(`INSERT OR IGNORE INTO document_translation_daily_budget(japan_day,calls)
    VALUES(?,0)`).bind(day).run();
  const reserved=await env.DB.prepare(`UPDATE document_translation_daily_budget
    SET calls=calls+? WHERE japan_day=? AND calls+?<=?`)
    .bind(chunks.length,day,chunks.length,MAX_GOOGLE_CALLS_PER_JST_DAY).run();
- if(reserved.meta?.changes!==1)
+ if(reserved.meta?.changes!==1){
+  await finishTranslationJob(env.DB,doc.id,claimId,'failed','daily_budget_exhausted');
   return status('DAILY_BUDGET_EXHAUSTED','文书机翻今日免费调用预算已用完，明天再试',429);
+ }
  // Run at most two Google Script calls simultaneously. Long documents never
  // download ONNX/WASM to the iPhone and the Worker never buffers model weights.
  const translated=new Array(chunks.length);
@@ -135,6 +164,9 @@ export async function handleDocumentTranslation(request,env,doc){
    for(let j=0;j<segment.length;j++)translated[i+j]=segment[j];
   }
  }catch(e){
+  // The explicit call has finished in an error; another explicit click may retry.
+  // Never silently resubmit partial/uncertain Google calls.
+  await finishTranslationJob(env.DB,doc.id,claimId,'failed',e?.code||'provider_unavailable');
   // Provider outages cannot commit partial translations to D1.
   // Never return raw provider exceptions, text, or secret-bearing URLs.
   return status(e?.code||'PROVIDER_UNAVAILABLE',
@@ -145,13 +177,19 @@ export async function handleDocumentTranslation(request,env,doc){
  // Do not resurrect deleted documents or commit stale text after manual edits.
  const saved=await env.DB.prepare(`INSERT INTO document_translations
    (document_id,source_sha,translation_zh,provider,created_at,updated_at)
-   SELECT id,?,?,?, ?,? FROM documents
-   WHERE id=? AND lifecycle='active' AND extracted_text_ja=?
+   SELECT d.id,?,?,?, ?,? FROM documents d
+   WHERE d.id=? AND d.lifecycle='active' AND d.extracted_text_ja=?
+     AND EXISTS (SELECT 1 FROM document_translation_jobs j
+       WHERE j.document_id=d.id AND j.claim_id=? AND j.state='running' AND j.source_sha=?)
    ON CONFLICT(document_id) DO UPDATE SET
    source_sha=excluded.source_sha,translation_zh=excluded.translation_zh,
    provider=excluded.provider,updated_at=excluded.updated_at`)
-  .bind(cached.sourceSha,result,provider,isoNow(),isoNow(),doc.id,doc.extracted_text_ja).run();
- if(saved.meta?.changes!==1)
+  .bind(cached.sourceSha,result,provider,isoNow(),isoNow(),
+    doc.id,doc.extracted_text_ja,claimId,cached.sourceSha).run();
+ if(saved.meta?.changes!==1){
+  await finishTranslationJob(env.DB,doc.id,claimId,'failed','source_changed');
   return status('SOURCE_CHANGED','文书原文已更新，请重新点翻译',409);
+ }
+ await finishTranslationJob(env.DB,doc.id,claimId,'done');
  return json({ok:true,cached:false,translation:result,provider});
 }
