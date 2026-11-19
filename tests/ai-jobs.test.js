@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import fs from 'node:fs';
-import {enqueueDocumentAi,getDocumentAiJob,processDocumentAiJob} from '../worker/ai-jobs.js';
+import {enqueueDocumentAi,getDocumentAiJob,processDocumentAiJob,runDueDocumentAiJobs} from '../worker/ai-jobs.js';
 
 function setup(){
  const sql=new DatabaseSync(':memory:');
@@ -45,5 +45,37 @@ test('edited source replaces stale queued work without losing document',async()=
  assert.equal(state.ai_status,'stale_or_deleted');
  assert.equal((await getDocumentAiJob(env.DB,'doc1')).state,'failed');
  assert.equal(sql.prepare("SELECT COUNT(*) c FROM documents").get().c,1);
+ sql.close();
+});
+
+test('Cron fail-closes an uncertain stale running request without a second model call',async()=>{
+ const {sql,env}=setup();
+ const past=new Date(Date.now()-10*60*1000).toISOString();
+ sql.prepare(`INSERT INTO document_ai_jobs
+  (document_id,provider,source_sha,state,attempts,next_attempt_at,started_at,updated_at)
+  VALUES('doc1','gemini',?,'running',1,?,?,?)`).run('a'.repeat(64),past,past,past);
+ const n=await runDueDocumentAiJobs(env);
+ assert.equal(n,0,'Cron never invokes a second provider call');
+ const job=sql.prepare("SELECT state,attempts,last_error FROM document_ai_jobs WHERE document_id='doc1'").get();
+ assert.equal(job.state,'failed');
+ assert.equal(job.attempts,1);
+ assert.equal(job.last_error,'processing_timeout_unconfirmed');
+ sql.close();
+});
+test('Cron reconciles a persisted successful AI response instead of retrying',async()=>{
+ const {sql,env}=setup();
+ const past=new Date(Date.now()-10*60*1000).toISOString();
+ const hash='b'.repeat(64);
+ sql.prepare(`INSERT INTO document_ai_jobs
+  (document_id,provider,source_sha,state,attempts,next_attempt_at,started_at,updated_at)
+  VALUES('doc1','gemini',?,'running',1,?,?,?)`).run(hash,past,past,past);
+ sql.prepare(`INSERT INTO document_ai_analyses
+  (document_id,provider,source_sha,model_id,prompt_version,state,updated_at)
+  VALUES('doc1','gemini',?,'m','v','success',?)`).run(hash,past);
+ assert.equal(await runDueDocumentAiJobs(env),0);
+ const job=sql.prepare("SELECT state,attempts,last_error FROM document_ai_jobs WHERE document_id='doc1'").get();
+ assert.equal(job.state,'done');
+ assert.equal(job.attempts,1);
+ assert.equal(job.last_error,null);
  sql.close();
 });
