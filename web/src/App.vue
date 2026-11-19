@@ -350,7 +350,7 @@ let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
-const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:'',reading:'',reading_confirmed:false});
+const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',variable_bill_plan_id:'',variable_bill_period:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:'',reading:'',reading_confirmed:false});
 const integrationConfigured=ref(false);
 const candidateApprovalRequired=ref(false);
 const candidatePersonalTransfer=ref(false);
@@ -390,6 +390,11 @@ const candidateActionDisabled=computed(()=>{
    (ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value);
   if(!candidateDraft.date||
    (candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date))return true;
+  if(candidateDraft.variable_bill_plan_id){
+   return candidateApprovalRequired.value||candidateDraft.entry_type!=='expense'||
+    !ledgerOptions.value.variablePlans?.some(x=>x.value===candidateDraft.variable_bill_plan_id)||
+    !/^20\d\d-(0[1-9]|1[0-2])$/.test(candidateDraft.variable_bill_period)
+  }
   if(candidateApprovalRequired.value){
    if(candidateDraft.entry_type==='transfer'||
       !financeStableAccounts.value.some(x=>x.account_id===candidateDraft.account_id&&
@@ -1481,7 +1486,8 @@ async function prepareCandidate(item){
  candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';
  const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
  candidateDraft.date=String(verifiedDate||item.payload?.transaction_date||'').slice(0,10);
- ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[]};
+ ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[],variablePlans:[]};
+  candidateDraft.variable_bill_plan_id='';candidateDraft.variable_bill_period='';
  ledgerOptionsError.value=d.ledger_options_error||'';
  homeflowMembersError.value=d.homeflow_members_error||'';
  homeflowMemberChoices.value=[{value:'',label:'未指定'},...(d.homeflow_members||[]).map(x=>({
@@ -1613,6 +1619,7 @@ async function commitApprovedCandidate(){
   busy.value=false;return;
  }
  if(!resumeApproval&&body.kind==='finance'&&!memberApproval&&!candidatePersonalTransfer.value&&
+   !body.variable_bill_plan_id&&
    (!ledgerOptions.value.categories.some(x=>x.value===body.category)||
     !ledgerOptions.value.paymentSources.some(x=>x.value===body.payment_source))){
   problem(new Error('请从家計簿同步的分类和支付方式中选择'));
@@ -2315,11 +2322,21 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
         <div v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateApprovalPrepared||candidateApprovalSubmitted" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
-        <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer&&!candidateDraft.variable_bill_plan_id" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">家計簿本人支付方式<select v-model="candidateDraft.account_id" :disabled="candidateApprovalPrepared||candidateApprovalSubmitted||candidateDraft.entry_type==='transfer'" @change="chooseFinanceStableAccount"><option value="">请选择支付方式</option><option v-for="account in financeStableAccounts" :key="account.account_id" :value="account.account_id">{{account.label}}</option></select></label>
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&financeStableAccountsError" class="fine-print" role="status">{{financeStableAccountsError}}</p>
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&candidateDraft.entry_type==='transfer'" class="fine-print">SBI 等非现金业务需要独立审批执行器，不能使用现金账目代替。</p>
-        <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer&&!candidateDraft.variable_bill_plan_id" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <label v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='expense'&&!candidateApprovalRequired&&ledgerOptions.variablePlans?.length" class="form-label">同步方式
+         <select v-model="candidateDraft.variable_bill_plan_id" @change="candidateDraft.variable_bill_period=candidateDraft.variable_bill_plan_id?candidateDraft.date.slice(0,7):''">
+          <option value="">普通支出：确认后直接记账</option>
+          <option v-for="p in ledgerOptions.variablePlans" :key="p.value" :value="p.value">变动定期费用草稿：{{p.label}}</option>
+         </select>
+        </label>
+        <label v-if="candidateDraft.variable_bill_plan_id" class="form-label">账单所属月份（请与原文核对）
+         <input type="month" v-model="candidateDraft.variable_bill_period" />
+        </label>
+        <p v-if="candidateDraft.variable_bill_plan_id" class="fine-print">仅把识别金额和账单日期填到家計簿的「变动定期费用」。不会直接记账、扣款，也不会标记已支付；需在家計簿确认后手动记账。</p>
         <p v-if="candidatePersonalTransfer" class="fine-print">此处只同步本人 SBI 资产转移记录，不新增账户、不改变卡片或现金余额、不创建基金份额，也不需要家庭审批。</p>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
         <label v-if="candidateDraft.kind==='finance'&&ledgerAttempted" class="check-row"><input type="checkbox" v-model="ledgerMappingChangeConfirmed"/>已尝试同步，同意核对旧记录并防止重复记账</label>
@@ -2342,7 +2359,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <p v-else-if="candidateApprovalRequired&&candidateApprovalReady" class="info-note" role="status">将请求家庭管理员审批。这里只提交家庭账本明细审批申请，不直接记账。</p>
         <p v-else-if="candidateApprovalRequired" class="info-note" role="status">家庭账本审批入口暂未启用，没有提交申请或写入目标应用。</p>
         <p v-else-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':candidateApprovalPrepared?'重试原申请':'提交 HomeFlow 审批'):ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
+        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':candidateApprovalPrepared?'重试原申请':'提交 HomeFlow 审批'):candidateDraft.variable_bill_plan_id?'仅同步到账单草稿':ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <OriginalPreview v-else-if="sheet==='original'" :file="originalBlob" :mime="originalMime" :url="originalUrl" :filename="originalFileName" @close="revokeOriginal();sheet=''" />
     </section>
   </div>
