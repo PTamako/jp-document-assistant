@@ -8,7 +8,7 @@ const item={
 const checked=new Map([['amount_jpy','5500'],['merchant','東京ガス']])
 const planId='11111111-1111-4111-8111-111111111111'
 test('verified document bill creates draft payload, never direct entry',()=>{
- const data=validatedPayload('kakeibo',item,checked,{
+ const data=validatedPayload('kakebo',item,checked,{
   payment_confirmed:true,date:'2026-11-18',
   variable_bill_plan_id:planId,variable_bill_period:'2026-10'})
  assert.deepEqual(data,{
@@ -18,17 +18,17 @@ test('verified document bill creates draft payload, never direct entry',()=>{
  assert.equal(data.paymentSource,undefined)
 })
 test('without an explicit plan the existing direct entry remains unchanged',()=>{
- const x=validatedPayload('kakeibo',item,checked,{
+ const x=validatedPayload('kakebo',item,checked,{
   payment_confirmed:true,date:'2026-11-18',
   category:'光熱費',payment_source:'AEON Card'})
  assert.equal(x.operation,'entry')
  assert.equal(x.amount,5500)
 })
 test('requires verified amount and explicit month before import',()=>{
- assert.throws(()=>validatedPayload('kakeibo',item,new Map([['amount_jpy','5300']]),{
+ assert.throws(()=>validatedPayload('kakebo',item,new Map([['amount_jpy','5300']]),{
   payment_confirmed:true,date:'2026-11-18',variable_bill_plan_id:planId,
   variable_bill_period:'2026-11'}),/金额/)
- assert.throws(()=>validatedPayload('kakeibo',item,checked,{
+ assert.throws(()=>validatedPayload('kakebo',item,checked,{
   payment_confirmed:true,date:'2026-11-18',
   variable_bill_plan_id:planId,variable_bill_period:'2026-00'}),/月份/)
 })
