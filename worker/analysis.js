@@ -163,7 +163,7 @@ function extractElectricityFields(text) {
     const v=parseMoney(total[1]);
     if(v)add('amount_jpy','money',v,total[0]);
   }
-  const periodRe=new RegExp('(?:電気料金の[ \t　]*)?(?:検針期間|ご使用期間|使用期間)[ \t　:：]*(?:\\r?\\n[ \t　]*)?('+dateText+')[ \t]*(?:~|〜|～|–|—|から|至)[ \t]*('+dateText+')[^\\r\\n]{0,80}');
+  const periodRe=new RegExp('(?:\\[|【)?[ \\t　]*(?:電気料金の[ \\t　]*)?(?:検針期間|ご使用期間|使用期間)[ \\t　]*(?:\\]|】)?[ \\t　:：]*(?:\\r?\\n[ \\t　]*)?('+dateText+')[ \\t]*(?:~|〜|～|–|—|から|至)[ \\t]*('+dateText+')[^\\r\\n]{0,80}');
   const period=periodRe.exec(text);
   if(period){
     const start=parsedDate(period[1]),end=parsedDate(period[2]);

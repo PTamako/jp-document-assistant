@@ -23,7 +23,9 @@ test('date and month controls stay within the iPhone sheet and preserve a separa
   assert.match(css,/\.date-control \.date-clear\{[\s\S]*?width:44px;height:44px;min-width:44px;min-height:44px/);
 });
 
-test('utility bill period is never automatically guessed from a card advance date',()=>{
-  assert.match(candidate,/candidateDraft\.variable_bill_plan_id&&current\?\.category!=='utility'\?candidateDraft\.date\.slice\(0,7\):''/);
-  assert.match(candidate,/「カード立替日」是信用卡垫付日，不等于账单日期/);
+test('utility bill month is sourced from metering rather than card advance month',()=>{
+  assert.match(candidate,/@change="chooseVariableBillPlan"/);
+  assert.match(app,/const start=sourceValue\('meter_period_start'\)/);
+  assert.match(app,/candidateDraft\.variable_bill_period=/);
+  assert.match(candidate,/它不是账单发行日/);
 });

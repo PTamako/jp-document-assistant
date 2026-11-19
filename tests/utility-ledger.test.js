@@ -28,7 +28,9 @@ test('reviewed utility invoice can create a recurring bill draft without asserti
   });
   assert.equal(output.operation,'variable_bill_draft');
   assert.equal(output.amount,1987);
-  assert.equal(output.billDate,'2026-11-19');
+  assert.equal(output.billDate,null);
+  assert.equal(output.expenseDate,'2026-11-19');
+  assert.equal(output.serviceStart,null);
   assert.equal(output.planId,planId);
   assert.equal(output.merchant,'電気料金');
 });
@@ -47,4 +49,20 @@ test('unreviewed or mismatched amount cannot be sent as a utility draft',()=>{
     date:'2026-11-19',variable_bill_plan_id:'11111111-1111-4111-8111-111111111111',
     variable_bill_period:'2026-11'
   }),/必须先核对金额/);
+});
+
+test('Octopus bracketed multiline meter period is extracted separately from card advance',()=>{
+ const source=[
+  '電気料金のお知らせ',
+  '[電気料金の検針期間]',
+  ' 2026/10/16 ~ 2026/11/15 : 2,176円 (税込) 62.00kWh',
+  '今回のご請求金額合計 1,987円（税込）',
+  'カード立替日: 2026/11/27'
+ ].join('\n');
+ const parsed=parseJapaneseText(source);
+ const find=k=>parsed.fields.find(x=>x.field_key===k)?.normalized_value;
+ assert.equal(find('amount_jpy'),'1987');
+ assert.equal(find('meter_period_start'),'2026-10-16');
+ assert.equal(find('meter_period_end'),'2026-11-15');
+ assert.equal(find('card_advance_date'),'2026-11-27');
 });
