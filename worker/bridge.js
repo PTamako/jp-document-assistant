@@ -108,7 +108,12 @@ export function validatedPayload(target,item,approved,body){
     const amountText=approved.get(x.kind==='income'?'net_salary':'amount_jpy');
     const amount=Number(amountText);
     if(!safeVal(amount)||amount!==x.amount_jpy)bad('必须先核对金额；金额修改后请重新生成候选','REVIEW_REQUIRED',409);
-    if(body.payment_confirmed!==true||!/^(?:19|20)\d\d-\d\d-\d\d$/.test(body.date||''))bad('请确认真实付款或到账日期','CONFIRM_REQUIRED',409);
+    // Variable-bill drafts record an invoice, NOT a completed payment.
+    // They must never require or imply a payment confirmation.
+    if(!/^(?:19|20)\d\d-\d\d-\d\d$/.test(body.date||''))
+      bad('请选择有效的账单或交易日期','CONFIRM_REQUIRED',409);
+    if(!body.variable_bill_plan_id&&body.payment_confirmed!==true)
+      bad('请确认真实付款或到账','CONFIRM_REQUIRED',409);
     // A document can fill a recurring bill without posting any expense yet.
     if(body.variable_bill_plan_id){
       if(x.kind!=='expense'||!/^[a-f0-9]{8}-[a-f0-9-]{27,28}$/i.test(body.variable_bill_plan_id)||
