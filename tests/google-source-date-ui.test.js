@@ -44,12 +44,13 @@ test('Drive search sits in a single horizontal form and Gmail still supports fiv
 });
 
 test('every native date and month control is responsive and independently clearable',()=>{
-  assert.equal((app.match(/class="date-control"/g)||[]).length,4);
+  assert.equal((app.match(/class="date-control"/g)||[]).length,5);
   for(const [field,aria] of [
     ['missingYearDateDraft','清空完整截止日期'],
     ['monthFilter','清空创建月份'],
     ['candidateDraft.date','清空交易日期'],
-    ['candidateDraft.transfer_date','清空 SBI 资金生效日']
+    ['candidateDraft.transfer_date','清空 SBI 资金生效日'],
+    ['candidateDraft.variable_bill_period','清空账单月份']
   ]){
     assert.ok(app.includes('v-model="'+field+'"'),'missing date model '+field);
     assert.ok(app.includes('aria-label="'+aria+'"'),'missing clear action '+field);
@@ -63,7 +64,7 @@ test('every native date and month control is responsive and independently cleara
 
 test('date controls do not duplicate the Vue confirm-deadline conditional during rebases',()=>{
   assert.equal((app.match(/<template v-else-if="sheet==='confirmDeadline'">/g)||[]).length,1);
-  assert.equal((app.match(/class="date-clear"/g)||[]).length,4);
+  assert.equal((app.match(/class="date-clear"/g)||[]).length,5);
 });
 
 test('Google picker headings blend into the frosted sheet without a white sticky banner',()=>{

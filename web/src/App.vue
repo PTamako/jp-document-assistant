@@ -2330,14 +2330,19 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&candidateDraft.entry_type==='transfer'" class="fine-print">SBI 等非现金业务需要独立审批执行器，不能使用现金账目代替。</p>
         <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer&&!candidateDraft.variable_bill_plan_id" class="choice-form-field"><span class="choice-field-label">家計簿支付方式</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.paymentSources.length" @click="openChoice('ledgerPaymentSource')"><span>{{choiceLabel('ledgerPaymentSource')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <label v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='expense'&&!candidateApprovalRequired&&ledgerOptions.variablePlans?.length" class="form-label">同步方式
-         <select v-model="candidateDraft.variable_bill_plan_id" @change="candidateDraft.variable_bill_period=candidateDraft.variable_bill_plan_id?candidateDraft.date.slice(0,7):''">
+         <select v-model="candidateDraft.variable_bill_plan_id" @change="candidateDraft.variable_bill_period=candidateDraft.variable_bill_plan_id&&current?.category!=='utility'?candidateDraft.date.slice(0,7):''">
           <option value="">普通支出（仅确认已经付款后直接记账）</option>
           <option v-for="p in ledgerOptions.variablePlans" :key="p.value" :value="p.value">变动定期费用草稿：{{p.label}}</option>
          </select>
         </label>
-        <label v-if="candidateDraft.variable_bill_plan_id" class="form-label">账单所属月份（请与原文核对）
-         <input type="month" v-model="candidateDraft.variable_bill_period" />
-        </label>
+        <div v-if="candidateDraft.variable_bill_plan_id" class="form-label">
+          <label for="candidate-bill-period">账单所属月份（请与原文核对）</label>
+          <div class="date-control">
+            <input id="candidate-bill-period" type="month" v-model="candidateDraft.variable_bill_period" />
+            <button v-if="candidateDraft.variable_bill_period" class="date-clear" type="button" aria-label="清空账单月份" @click="candidateDraft.variable_bill_period=''"><UiIcon name="x" :size="17"/></button>
+          </div>
+        </div>
+        <p v-if="candidateDraft.variable_bill_plan_id&&current?.category==='utility'&&current?.fields?.some(f=>f.field_key==='card_advance_date'&&f.review_state!=='rejected')" class="fine-print">原文中的「カード立替日」是信用卡垫付日，不等于账单日期或账单所属月份；请按账单内容分别核对。</p>
         <p v-if="candidateDraft.variable_bill_plan_id" class="fine-print">仅把识别金额和账单日期填到家計簿的「变动定期费用」。不会直接记账、扣款，也不会标记已支付；需在家計簿确认后手动记账。</p>
         <p v-if="candidatePersonalTransfer" class="fine-print">此处只同步本人 SBI 资产转移记录，不新增账户、不改变卡片或现金余额、不创建基金份额，也不需要家庭审批。</p>
         <p v-if="candidateDraft.kind==='finance'&&ledgerOptionsError" class="fine-print" role="status">{{ledgerOptionsError}}</p>
