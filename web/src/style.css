@@ -917,5 +917,13 @@ input[type="date"],input[type="month"],input[type="datetime-local"]{
 }
 
 /* Rule-based field refresh belongs to the field tab, not AI interpretation. */
-.field-refresh-action{display:flex;justify-content:flex-end;margin:0 0 12px}
-.field-refresh-action .secondary{min-height:40px;white-space:nowrap}
+/* The visibility and extract controls share one compact line on small iPhones. */
+.field-section-heading{margin-bottom:3px}
+.field-action-row{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:nowrap;min-width:0;margin:0 0 12px}
+.field-action-row>button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:40px;white-space:nowrap;font-size:13px;padding:7px 9px;flex:none}
+.field-action-row>.text-button{padding-inline:8px}
+.field-action-row .ui-icon{flex:none}
+.field-ledger-link{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--soft);border:1px solid var(--line);border-radius:14px;padding:12px;margin:12px 0;color:var(--ink);font-size:13px;line-height:1.55}
+.field-ledger-link>span{min-width:0}
+.field-ledger-link>button{flex:none;min-height:40px;white-space:nowrap}
+@media(max-width:400px){.field-ledger-link{flex-direction:column;align-items:stretch}.field-ledger-link>button{align-self:flex-end}}
