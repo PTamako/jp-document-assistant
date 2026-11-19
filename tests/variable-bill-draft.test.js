@@ -36,7 +36,7 @@ test('candidate user interface distinctly displays a draft mode without direct p
  const ui=readFileSync(new URL('../web/src/App.vue',import.meta.url),'utf8')
  assert.match(ui,/variable_bill_plan_id/)
  assert.match(ui,/仅同步到账单草稿/)
- assert.match(ui,/不会直接记账、扣款/)
+ assert.match(ui,/不代表已经扣款/)
 })
 
 test('verified metering dates travel to the recurring draft without claiming invoice issue',()=>{
