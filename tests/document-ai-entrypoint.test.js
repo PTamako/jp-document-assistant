@@ -38,7 +38,12 @@ test('rule-based re-extraction is named and displayed only on the field tab',()=
  assert.match(fields,/重新提取字段/);
  assert.match(fields,/:disabled="busy\|\|!current\.extracted_text_ja"/);
  assert.match(app,/\x60\/api\/documents\/\$\{id\}\/reinterpret\x60/);
- assert.match(css,/\.field-action-row\{display:flex;align-items:center;justify-content:flex-end/);
- assert.match(fields,/class="field-action-row"/);
+ assert.match(css,/\.field-toolbar\{display:flex;align-items:center;justify-content:space-between/);
+ assert.match(fields,/class="field-toolbar"/);
+ assert.match(fields,/<h3>提取字段<\/h3>/);
+ assert.equal((fields.match(/class="field-icon-action/g)||[]).length,2);
  assert.match(fields,/@click="amountVisible=!amountVisible"/);
+ assert.match(fields,/:aria-label="amountVisible\?'隐藏金额':'显示金额'"/);
+ assert.match(fields,/aria-label="重新提取字段"/);
+ assert.match(css,/width:44px;height:44px;min-width:44px;min-height:44px/);
 });
