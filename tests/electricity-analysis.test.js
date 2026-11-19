@@ -56,3 +56,26 @@ test('invalid or reversed meter range is never accepted as a legitimate period',
  assert.equal(get(p,'period_charge_jpy'),undefined);
  assert.equal(get(p,'amount_jpy')?.normalized_value,'1770');
 });
+
+
+test('electricity invoice with bank debit text keeps utility-specific Chinese explanation',()=>{
+ const raw=[
+  'オクトパスエナジー 電気料金のお知らせ',
+  '電気料金の検針期間 2026/09/16 ～ 2026/10/15 1,966円',
+  '使用電力量 56.00kWh',
+  '今回のご請求金額合計：1,770円',
+  'お支払い方法：口座振替',
+  'カード立替日：2026/10/28'
+ ].join('\n');
+ const p=parseJapaneseText(raw);
+ assert.equal(p.category,'utility');
+ assert.equal(p.summary_zh,'电费账单／用电量通知');
+ assert.match(p.explanation_zh,/电费检针期间/);
+ assert.match(p.explanation_zh,/本次请款金额/);
+ assert.match(p.explanation_zh,/56/);
+ assert.doesNotMatch(p.explanation_zh,/这是一份银行账户自动扣款相关通知/);
+});
+test('bank debit without utility remains a bank notice',()=>{
+ const p=parseJapaneseText('銀行口座振替のお知らせ\nお引落予定日：2026/11/27\n請求金額：1,770円');
+ assert.equal(p.summary_zh,'银行账户扣款通知');
+});
