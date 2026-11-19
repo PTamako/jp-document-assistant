@@ -109,6 +109,18 @@ export function validatedPayload(target,item,approved,body){
     const amount=Number(amountText);
     if(!safeVal(amount)||amount!==x.amount_jpy)bad('必须先核对金额；金额修改后请重新生成候选','REVIEW_REQUIRED',409);
     if(body.payment_confirmed!==true||!/^(?:19|20)\d\d-\d\d-\d\d$/.test(body.date||''))bad('请确认真实付款或到账日期','CONFIRM_REQUIRED',409);
+    // A document can fill a recurring bill without posting any expense yet.
+    if(body.variable_bill_plan_id){
+      if(x.kind!=='expense'||!/^[a-f0-9]{8}-[a-f0-9-]{27,28}$/i.test(body.variable_bill_plan_id)||
+        !/^20\d\d-(0[1-9]|1[0-2])$/.test(body.variable_bill_period||''))
+        bad('请选择有效的定期费用和所属月份','VARIABLE_BILL_INVALID',422);
+      const merchant=trim(approved.get('merchant')||x.merchant,100);
+      if(!merchant||isUnsupportedBalanceMovement(merchant))
+        bad('当前文书不能作为定期费用账单','VARIABLE_BILL_INVALID',422);
+      return {operation:'variable_bill_draft',planId:body.variable_bill_plan_id,
+        periodMonth:body.variable_bill_period,amount,billDate:body.date,
+        merchant,source_kind:'document_assistant'};
+    }
     if(!trim(body.category,80)||!trim(body.payment_source,100))bad('请选择目标账本的类别与支付账户','MISSING_MAPPING',422);
     // Reviewed source fields take precedence; do not trust browser-supplied
     // entry types, merchants or investment purposes.
@@ -219,7 +231,8 @@ export async function ledgerPickerOptions(env,userId,kind,merchant='',recognized
   const suggested=parsed.suggested&&typeof parsed.suggested==='object'?parsed.suggested:{};
   const category=categories.some(x=>x.value===suggested.category)?suggested.category:'';
   const payment_source=paymentSources.some(x=>x.value===suggested.payment_source)?suggested.payment_source:'';
-  return {data:{categories,paymentSources,suggested:{category,payment_source}}};
+  const variablePlans=safeList(parsed.variable_plans,160);
+  return {data:{categories,paymentSources,variablePlans,suggested:{category,payment_source}}};
  }catch(e){
   const reason=String(e?.message||'');
   if(stage==='sign')return {error:'家計簿联动签名失败，请检查服务端配置'};
