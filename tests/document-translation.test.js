@@ -13,8 +13,8 @@ class FakeDb{
   },
   async run(){
    if(sql.includes('INSERT INTO document_translation_jobs')){
-    const [id,sourceSha,claimId,startedAt,updatedAt,staleBefore]=args;
-    if(db.docs.get(id)===undefined)return {meta:{changes:0}};
+    const [sourceSha,claimId,startedAt,updatedAt,id,original,staleBefore]=args;
+    if(db.docs.get(id)!==original)return {meta:{changes:0}};
     const old=db.jobs.get(id);
     if(old?.state==='running'&&old.updatedAt>=staleBefore)return {meta:{changes:0}};
     db.jobs.set(id,{sourceSha,claimId,state:'running',startedAt,updatedAt});
