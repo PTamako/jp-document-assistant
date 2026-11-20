@@ -91,7 +91,7 @@ test('503 overload is distinct from generic 5xx and manual retry has a short bou
 
 test('Cloudflare JSON-only mode keeps inference bounded and deterministic',()=>{
  const cfg=cloudflareGenerationConfig();
- assert.deepEqual(cfg,{response_format:{type:'json_object'},chat_template_kwargs:{enable_thinking:false},max_completion_tokens:2600,stream:false});
+ assert.deepEqual(cfg,{response_format:{type:'json_object'},chat_template_kwargs:{enable_thinking:false},reasoning_effort:'low',max_completion_tokens:2200,stream:false});
  const answer=extractCloudflareResponseText({choices:[{message:{content:'{"summary_zh":"已分析"}'},finish_reason:'stop'}]});
  assert.deepEqual(JSON.parse(answer),{summary_zh:'已分析'});
  assert.throws(()=>extractCloudflareResponseText({choices:[{finish_reason:'length',message:{content:'{"incomplete":'}}]}),/cloudflare_output_truncated/);
