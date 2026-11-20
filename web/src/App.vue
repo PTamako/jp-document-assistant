@@ -199,6 +199,10 @@ async function translateOriginal(){
    localTranslation.value=data.translation;
    translationSource.value=text;
    translationVisible.value=true;
+  }else if(!canManageCurrent.value){
+   // Shared viewers may read a cached translation but must never initiate
+   // Google calls on behalf of the original document owner.
+   translationError.value='这份共享文书尚无译文，请由文书所有者翻译后再查看。';
   }else{
    translationConsent.value=false;
    sheet.value='translateConfirm';
@@ -214,7 +218,7 @@ async function translateOriginal(){
 async function confirmTranslateOriginal(){
  const text=String(current.value?.extracted_text_ja||'').trim();
  const id=current.value?.id;
- if(!id||!text||!translationConsent.value||translationBusy.value)return;
+ if(!id||!text||!canManageCurrent.value||!translationConsent.value||translationBusy.value)return;
  if(text.length>8000){translationError.value='全文翻译单次最多 8000 字';return;}
  const serial=++translationSerial;
  const controller=new AbortController();

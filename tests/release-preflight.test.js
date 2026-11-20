@@ -52,7 +52,13 @@ test('approved production Wrangler only targets dedicated D1/R2 and excludes pre
  assert.equal(wrangler.vars?.DOCUMENT_STUDY_EXECUTION_ENABLED,'true');
  assert.equal(wrangler.workers_dev,true); // Approved ONLY for the one live Worker. No preview.
  assert.equal(wrangler.preview_urls,false);
- assert.equal(wrangler.observability?.enabled,false);
+ assert.equal(wrangler.observability?.enabled,true);
+ assert.equal(wrangler.observability?.head_sampling_rate,0.01);
+ // Calendar subscription URLs contain bearer tokens. Never persist URL-bearing
+ // invocation logs; only bounded sanitized server-error events are recorded.
+ assert.equal(wrangler.observability?.logs?.invocation_logs,false);
+ assert.match(worker,/event:'jpda_server_error'/);
+ assert.doesNotMatch(worker,/console\.(?:error|log)\([^)]*(?:request\.url|document\.text|extracted_text_ja)/);
  assert.deepEqual(wrangler.triggers,{crons:['*/15 * * * *']});
  for(const unwanted of ['kv_namespaces','queues','durable_objects','dispatch_namespaces','unsafe','containers','workflows','routes','route'])
    assert.equal(wrangler[unwanted],undefined,'unexpected billable/preview/routing setting '+unwanted);

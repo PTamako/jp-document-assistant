@@ -934,7 +934,12 @@ ELSE 'unreviewed' END review_status,
       return json({ok:true,deadline_year_user_confirmed:true,remote_sync:false});
     }
     if((method==='GET'||method==='POST')&&rest==='translation'){
-      const doc=await visibleDocument(env.DB,id,p);
+      // Viewing a household-shared document does not grant permission to send
+      // its private source to an external translation provider. The owner
+      // alone may initiate a translation or update the shared cache.
+      const doc=method==='POST'
+        ?await ownedDocument(env.DB,id,p,'active')
+        :await visibleDocument(env.DB,id,p);
       if(!doc)bad('文书不存在或没有查看权限','NOT_FOUND',404);
       return handleDocumentTranslation(request,env,doc);
     }
@@ -1152,9 +1157,20 @@ export default {
   async fetch(request,env,ctx){
     try{return protectedResponse(await route(request,env,ctx),request);}
     catch(err){
-      if(err?.status)return failure(err.code||'ERROR',err.message,err.status);
-      // Intentionally no PII/details in logs.
-      return failure('INTERNAL_ERROR','服务暂时不可用',500);
+      // Error paths must retain the same CSP, referrer and frame restrictions
+      // as successful API responses. Never log private text or provider errors.
+      const response=err?.status
+        ?failure(err.code||'ERROR',err.message,err.status)
+        :failure('INTERNAL_ERROR','服务暂时不可用',500);
+      // Only log a bounded, sanitized error code and HTTP status on server
+      // failures. Never log URLs (calendar bearer tokens), identities, input
+      // text, provider exceptions, request headers or credentials.
+      if(response.status>=500){
+        const code=typeof err?.code==='string'&&/^[A-Z][A-Z0-9_]{0,47}$/.test(err.code)
+          ?err.code:'INTERNAL_ERROR';
+        console.error(JSON.stringify({event:'jpda_server_error',status:response.status,code}));
+      }
+      return protectedResponse(response,request);
     }
   },
   async scheduled(controller,env,ctx){
