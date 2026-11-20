@@ -1503,6 +1503,7 @@ async function prepareCandidate(item){
  candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';candidateDraft.transfer_target='';
  const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
  candidateDraft.date=String(verifiedDate||item.payload?.transaction_date||'').slice(0,10);
+ if(item.payload?.transfer_kind==='prepaid')candidateDraft.transfer_date=candidateDraft.date;
  ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[],variablePlans:[]};
   candidateDraft.variable_bill_plan_id='';candidateDraft.variable_bill_period='';
  ledgerOptionsError.value=d.ledger_options_error||'';
