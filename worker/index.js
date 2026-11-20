@@ -1001,7 +1001,7 @@ ELSE 'unreviewed' END review_status,
       const stamp=String(approved('transaction_at'));
       const date=stamp.slice(0,10);
       if(!Number.isSafeInteger(amount)||amount<1||amount>10000000||
-        !validCivilDate(date)||!/^\\d{4}-\\d{2}-\\d{2} (?:[01]\\d|2[0-3]):[0-5]\\d/.test(stamp))
+        !validCivilDate(date)||!/^\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d/.test(stamp))
         bad('请先在字段页核验充值金额与完成时间','TOPUP_REVIEW_REQUIRED',409);
       const today=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
       if(date>today)bad('未来充值不能作为已到账资金登记','TOPUP_DATE_IN_FUTURE',409);
