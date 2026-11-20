@@ -354,10 +354,12 @@ let accountController=new AbortController();
 const archivedFilter=ref('active'),favoriteFilter=ref('all'),visibilityFilter=ref('all'),monthFilter=ref('');
 const editTextDraft=ref(''),backupFile=ref(null),backupPass=ref(''),backupScope=ref('all'),backupMonth=ref(''),backupIncludeOriginals=ref(true),backupOffset=ref(0),restoreArchive=ref(null),restorePreview=ref([]),attachmentTrashItems=ref([]);
 const extraFileInput=ref(null),backupInput=ref(null),recycleNext=ref(null),recycleOffset=ref(0),recycleEmptyProgress=ref(0);
-const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',variable_bill_plan_id:'',variable_bill_period:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:'',reading:'',reading_confirmed:false});
+const pendingAttachment=ref(null),ocrAttachmentPending=ref(null),ocrRetryStale=ref(false),ocrRetryEmpty=ref(false),ocrSpaceConsent=ref(false),candidateDraft=reactive({id:'',kind:'',entry_type:'',confirm:'',date:'',transfer_date:'',transfer_target:'',variable_bill_plan_id:'',variable_bill_period:'',category:'',payment_source:'',account_id:'',note:'',visibility:'private',title:'',assignee:'',bonus_points:0,reminder_only:false,privacy_confirmed:false,task_share_confirmed:false,redacted_term:'',redacted_sentence:'',reading:'',reading_confirmed:false});
 const integrationConfigured=ref(false);
 const candidateApprovalRequired=ref(false);
 const candidatePersonalTransfer=ref(false);
+const candidatePrepaidTopup=computed(()=>candidateDraft.kind==='finance'&&
+  candidateDraft.entry_type==='transfer'&&current.value?.category==='topup');
 const financeStableAccounts=ref([]),financeStableAccountsError=ref('');
 function chooseFinanceStableAccount(){
  const selected=financeStableAccounts.value.find(x=>x.account_id===candidateDraft.account_id);
@@ -394,6 +396,8 @@ const candidateActionDisabled=computed(()=>{
    (ledgerAttempted.value&&!ledgerMappingChangeConfirmed.value);
   if(!candidateDraft.date||
    (candidateDraft.entry_type==='transfer'&&!candidateDraft.transfer_date))return true;
+  if(candidatePrepaidTopup.value&&(!ledgerOptions.value.prepaidTargets?.some(x=>x.value===candidateDraft.transfer_target)||
+    candidateDraft.payment_source===candidateDraft.transfer_target.slice('prepaid:'.length)))return true;
   if(candidateDraft.variable_bill_plan_id){
    return candidateApprovalRequired.value||candidateDraft.entry_type!=='expense'||
     !ledgerOptions.value.variablePlans?.some(x=>x.value===candidateDraft.variable_bill_plan_id)||
@@ -1462,6 +1466,15 @@ async function selectBackup(event){
 }
 async function confirmRestore(){busy.value=true;try{const r=await restoreBatch(accountApi(accountEpoch.snapshot()),restoreArchive.value,true);sheet.value='';backupFile.value=null;restoreArchive.value=null;restorePreview.value=[];for(const page of Object.values(pages))page.loaded=false;flash(`已恢复 ${r.metadata_restored} 份资料、${r.originals_restored} 个原件；失败 ${r.failures.length} 件`);}catch(e){problem(e);}finally{busy.value=false;}}
 async function toggleDocument(key,value){if(!current.value)return;busy.value=true;try{const id=current.value.id;await api(`/api/documents/${id}`,{method:'PATCH',body:{[key]:value,version:current.value.version}});sheet.value='';await openDoc(id);for(const page of Object.values(pages))page.loaded=false;flash('文书状态已更新');}catch(e){problem(e);}finally{busy.value=false;}}
+async function prepareTopupCandidate(){
+  if(busy.value||!canManageCurrent.value||!current.value||!topupAdvice.value)return;
+  const id=current.value.id;busy.value=true;
+  try{
+    await api('/api/documents/'+id+'/topup/prepare',{method:'POST',body:{}});
+    await openDoc(id);
+    flash('已生成 Suica 资产转移候选。请确认金额、扣款来源和到账日期后再同步。');
+  }catch(e){problem(e);}finally{busy.value=false;}
+}
 async function prepareCandidate(item){
  if(busy.value||!current.value||!item?.id||
     !detailCandidates.value.some(c=>c.id===item.id))return;
@@ -1487,7 +1500,7 @@ async function prepareCandidate(item){
  candidateApprovalStatus.value=d.approval_status||'not_submitted';
  candidateApprovalChecked.value=false;
  candidateDraft.id=item.id;candidateDraft.kind=item.candidate_kind;candidateDraft.confirm=d.confirmation_phrase;
- candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';
+ candidateDraft.entry_type=d.entry_type||item.payload?.kind||'';candidateDraft.transfer_date='';candidateDraft.transfer_target='';
  const verifiedDate=d.confirmed_fields?.transaction_at||d.confirmed_fields?.transaction_date||d.confirmed_fields?.[item.payload?.date_field_key||'due_date'];
  candidateDraft.date=String(verifiedDate||item.payload?.transaction_date||'').slice(0,10);
  ledgerOptions.value=d.ledger_options||{categories:[],paymentSources:[],variablePlans:[]};
@@ -1502,7 +1515,9 @@ async function prepareCandidate(item){
  candidateDraft.category=candidatePersonalTransfer.value?'投資・資産移動':
   ledgerOptions.value.suggested?.category||
   (candidateApprovalRequired.value&&candidateDraft.entry_type==='transfer'?'投資・資産移動':'');
- candidateDraft.payment_source=ledgerOptions.value.suggested?.payment_source||'';
+ candidateDraft.payment_source=item.payload?.transfer_kind==='prepaid'?'':(ledgerOptions.value.suggested?.payment_source||'');
+ candidateDraft.transfer_target=item.payload?.transfer_kind==='prepaid'?
+  (ledgerOptions.value.prepaidTargets||[]).find(x=>x.value==='prepaid:'+item.payload?.topup_destination)?.value||'':'sbi';
  financeStableAccounts.value=[];financeStableAccountsError.value='';candidateDraft.account_id='';
  // Explanatory warnings are not a real transaction memo. Leave the
  // accounting note blank for card purchase; the user can add their own.
@@ -1627,7 +1642,12 @@ async function commitApprovedCandidate(){
   busy.value=false;return;
  }
  if(!resumeApproval&&body.kind==='finance'&&body.entry_type==='transfer'&&!body.transfer_date){
-  problem(new Error('请选择 SBI 资金实际生效日'));busy.value=false;return;
+  problem(new Error('请核对资产转移实际生效日期'));busy.value=false;return;
+ }
+ if(!resumeApproval&&body.kind==='finance'&&candidatePrepaidTopup.value&&
+   (!ledgerOptions.value.prepaidTargets?.some(x=>x.value===body.transfer_target)||
+     body.transfer_target!=='prepaid:Suica'||body.payment_source==='Suica')){
+  problem(new Error('请选择已登记的 Suica 账户及不同的扣款来源'));busy.value=false;return;
  }
  if(!resumeApproval&&body.kind==='finance'&&memberApproval&&
    (!ledgerOptions.value.categories.some(x=>x.value===body.category)||
@@ -2011,7 +2031,9 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
           <p>充值目标：{{topupAdvice.destination}}（请确认家計簿中已登记的充值卡）</p>
           <p>充值服务：{{topupAdvice.service}}</p>
           <p>扣款来源：<strong>待本人选择</strong>（不能从充值服务名称推断）</p>
-          <p class="fine-print">当前家計簿安全接口只支持收入／支出，还不能接收资金转移。请先在家計簿手动选择「资产转移／充值」并核对是否已记账；此建议不会自动写入、不会重复记账。</p>
+          <p class="fine-print">通过已登记的 Suica 预付费账户以资产转移方式记账，不算收入或消费。必须手动确认真实到账、来源账户，并检查是否曾经记账；不会自动入账。</p>
+          <button v-if="canManageCurrent&&!detailCandidates.some(c=>c.candidate_kind==='finance')" class="secondary small" type="button" :disabled="busy||!topupAdvice.reviewed" @click="prepareTopupCandidate">生成 Suica 充值记账候选</button>
+          <p v-if="!topupAdvice.reviewed" class="fine-print">先在「字段」核验充值金额与完成时间，再生成候选。</p>
         </div>
         <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted" v-if="item.candidate_kind==='finance'">{{financeTypeLabel(item)}} ¥{{Number(item.payload.amount_jpy).toLocaleString('ja-JP')}} · {{item.payload.merchant||'商户待确认'}} · {{item.payload.transaction_at||item.payload.transaction_date||'日期待确认'}}</p><p v-if="item.integration_state==='failed'" class="detail-note" role="status">上次同步未成功，未确认已记账。请核对后重试。</p>
           <p v-if="item.candidate_kind==='homeflow_task'" class="muted">{{(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p>
@@ -2339,8 +2361,15 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
       <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2>
         <p v-if="candidateDraft.kind==='finance'&&candidateMerchant" class="muted">交易商户：{{candidateMerchant}}</p>
         <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.variable_bill_plan_id?'记账日（建议采用卡垫付日，可修改）':candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
-        <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">SBI 资金生效日</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
-        <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
+        <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">{{candidatePrepaidTopup?'Suica 实际到账日':'SBI 资金生效日'}}</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
+        <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'&&!candidatePrepaidTopup" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
+         <label v-if="candidatePrepaidTopup&&!candidateApprovalRequired" class="form-label">转入预付费账户
+           <select v-model="candidateDraft.transfer_target" :disabled="busy">
+             <option value="">请选择家計簿登记的充值账户</option>
+             <option v-for="x in ledgerOptions.prepaidTargets||[]" :key="x.value" :value="x.value">{{x.label}}</option>
+           </select>
+         </label>
+         <p v-if="candidatePrepaidTopup&&!candidateApprovalRequired" class="fine-print">扣款来源请在下方「家計簿支付方式」中亲自选择。不会凭楽天ペイ服务名猜测银行卡，也不会自动执行实际扣款。</p>
         <div v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateApprovalPrepared||candidateApprovalSubmitted" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer&&!candidateDraft.variable_bill_plan_id" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">家計簿本人支付方式<select v-model="candidateDraft.account_id" :disabled="candidateApprovalPrepared||candidateApprovalSubmitted||candidateDraft.entry_type==='transfer'" @change="chooseFinanceStableAccount"><option value="">请选择支付方式</option><option v-for="account in financeStableAccounts" :key="account.account_id" :value="account.account_id">{{account.label}}</option></select></label>
