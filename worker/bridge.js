@@ -12,6 +12,11 @@ const first=(db,s,...a)=>db.prepare(s).bind(...a).first();
 const run=(db,s,...a)=>db.prepare(s).bind(...a).run();
 const trim=(s,max)=>typeof s==='string'?s.trim().slice(0,max):'';
 const safeVal=(v)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0;
+// Reject impossible calendar dates before reaching an external finance/task app.
+const validCivilDate=value=>typeof value==='string'&&
+  /^(?:19|20)\d\d-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/.test(value)&&
+  Number.isFinite(Date.parse(value+'T00:00:00Z'))&&
+  new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
 function authorizedMapping(env,user,target){
   // The verified HomeFlow identity from requireSession is authoritative for
   // private task and study sync. Static maps remain only for legacy owner and
@@ -124,7 +129,7 @@ export function validatedPayload(target,item,approved,body){
     if(!safeVal(amount)||amount!==x.amount_jpy)bad('必须先核对金额；金额修改后请重新生成候选','REVIEW_REQUIRED',409);
     // Variable-bill drafts record an invoice, NOT a completed payment.
     // They must never require or imply a payment confirmation.
-    if(!/^(?:19|20)\d\d-\d\d-\d\d$/.test(body.date||''))
+    if(!validCivilDate(body.date))
       bad('请选择有效的账单或交易日期','CONFIRM_REQUIRED',409);
     if(!body.variable_bill_plan_id&&body.payment_confirmed!==true)
       bad('请确认真实付款或到账','CONFIRM_REQUIRED',409);
@@ -138,7 +143,7 @@ export function validatedPayload(target,item,approved,body){
         bad('当前文书不能作为定期费用账单','VARIABLE_BILL_INVALID',422);
       const sourceDate=key=>{
         const value=String(approved.get(key)||'');
-        return /^20\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)?value:null;
+        return validCivilDate(value)?value:null;
       };
       const serviceStart=sourceDate('meter_period_start');
       const serviceEnd=sourceDate('meter_period_end');
@@ -159,7 +164,7 @@ export function validatedPayload(target,item,approved,body){
       const timestamp=String(approved.get('transaction_at')||'');
       const target=trim(body.transfer_target,100);
       const source=trim(body.payment_source,100);
-      if(timestamp!==x.transaction_at||timestamp.slice(0,10)!==body.date||
+      if(timestamp!==x.transaction_at||!validCivilDate(timestamp.slice(0,10))||timestamp.slice(0,10)!==body.date||
         body.transfer_date!==body.date||target!=='prepaid:'+x.topup_destination||
         source===x.topup_destination||!source||trim(body.category,80)!=='投資・資産移動')
         bad('请核对实际完成时间、本人扣款来源与 Suica 充值账户','TOPUP_MAPPING_INVALID',409);
@@ -176,9 +181,7 @@ export function validatedPayload(target,item,approved,body){
     if(type==='transfer'&&(!purpose||trim(body.category,80)!=='投資・資産移動'))
       bad('证券资金转移必须使用正确的投资类型与资产转移分类','INVALID_TRANSFER',422);
     const transferDate=type==='transfer'?trim(body.transfer_date,10):'';
-    if(type==='transfer'&&(!/^(?:19|20)\d\d-\d\d-\d\d$/.test(transferDate)||
-      !Number.isFinite(Date.parse(transferDate+'T00:00:00Z'))||
-      new Date(transferDate+'T00:00:00Z').toISOString().slice(0,10)!==transferDate))
+    if(type==='transfer'&&!validCivilDate(transferDate))
       bad('请先确认 SBI 证券资金实际生效日','TRANSFER_DATE_REQUIRED',422);
     const approvedTimestamp=String(approved.get('transaction_at')||'');
     const time=approvedTimestamp.slice(0,10)===body.date&&
@@ -192,7 +195,7 @@ export function validatedPayload(target,item,approved,body){
   if(target==='homeflow'){
     const dateField=x.task_type==='delivery'?'event_date':'due_date';
     const date=approved.get(dateField);
-    if(!date||date!==x.due_on)bad(dateField==='event_date'?'配送日期未经人工核验':'截止日期未经人工核验','REVIEW_REQUIRED',409);
+    if(!validCivilDate(date)||date!==x.due_on)bad(dateField==='event_date'?'配送日期未经人工核验':'截止日期未经人工核验','REVIEW_REQUIRED',409);
     if(x.task_type==='delivery'){
       const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
       if(date<today)bad('配送日期已过期，不允许创建过期配送待办','DELIVERY_DATE_PASSED',409);
