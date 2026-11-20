@@ -57,5 +57,10 @@
   "triggers": {"crons": ["*/15 * * * *"]},
   // Privacy-conscious diagnostic sample. No request bodies or document text
   // are written to console; do not turn on 100% logs without reviewing costs.
-  "observability": {"enabled":true, "head_sampling_rate":0.01}
+  "observability": {
+    "enabled":true, "head_sampling_rate":0.01,
+    // Disallow URL-bearing invocation logs: ICS subscription URLs contain
+    // bearer tokens, and private document IDs must not appear in stored logs.
+    "logs":{"invocation_logs":false}
+  }
 }
