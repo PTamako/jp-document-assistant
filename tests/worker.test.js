@@ -3245,3 +3245,96 @@ test('household finance remains approval-gated for members while personal destin
   assert.equal(repeated.response.status,409);
   assert.equal(calls,0);
 });
+
+
+test('household shared reader cannot initiate external translation, but can read owner-approved cache',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const invite=await req(env,'/api/household/invites',{
+    method:'POST',...auth(owner),data:{invitee_email:'shared-translation@example.invalid'}
+  });
+  assert.equal(invite.response.status,201);
+  const joined=await req(env,'/api/household/join',{method:'POST',data:{
+    invite_token:invite.data.invite_token,email:'shared-translation@example.invalid',
+    password:'member-secret-for-translation',display_name:'共享只读者'
+  }});
+  assert.equal(joined.response.status,201);
+  const member={cookie:joined.response.headers.get('set-cookie').split(';')[0],csrf:joined.data.csrf_token};
+  const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{
+    source_type:'text',retention:'summary',text:'お知らせです。来週の交流会についてお伝えします。'
+  }});
+  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+  const id=imported.data.document_id;
+  const detail=await req(env,'/api/documents/'+id,auth(owner));
+  assert.equal(detail.response.status,200);
+  const shared=await req(env,'/api/documents/'+id,{method:'PATCH',...auth(owner),data:{
+    visibility:'shared',confirm_sensitive_share:true,version:detail.data.document.version
+  }});
+  assert.equal(shared.response.status,200,JSON.stringify(shared.data));
+  const viewed=await req(env,'/api/documents/'+id,auth(member));
+  assert.equal(viewed.response.status,200);
+  assert.equal(viewed.data.document.can_manage,false);
+
+  let externalCalls=0;
+  env.ZHIXUE_BRIDGE_SECRET='safe-test-secret-sufficient-entropy-value-123456789';
+  env.ZHIXUE_BRIDGE_SERVICE={async fetch(){
+    externalCalls++;
+    return Response.json({ok:true,translation:'通知：下周的交流会。'});
+  }};
+  const endpoint='/api/documents/'+id+'/translation';
+  const empty=await req(env,endpoint,auth(member));
+  assert.equal(empty.response.status,200);
+  assert.equal(empty.data.cached,false);
+  const unauthorized=await req(env,endpoint,{method:'POST',...auth(member),data:{
+    confirm_google_translation:true
+  }});
+  assert.equal(unauthorized.response.status,404);
+  assert.equal(externalCalls,0);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM document_translation_jobs').get().n,0);
+  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM document_translation_daily_budget').get().n,0);
+
+  const translated=await req(env,endpoint,{method:'POST',...auth(owner),data:{
+    confirm_google_translation:true
+  }});
+  assert.equal(translated.response.status,200,JSON.stringify(translated.data));
+  assert.equal(externalCalls,1);
+  const cached=await req(env,endpoint,auth(member));
+  assert.equal(cached.response.status,200);
+  assert.equal(cached.data.cached,true);
+  assert.match(cached.data.translation,/交流会/);
+  const repeated=await req(env,endpoint,{method:'POST',...auth(member),data:{
+    confirm_google_translation:true
+  }});
+  assert.equal(repeated.response.status,404);
+  assert.equal(externalCalls,1,'shared reader never sends text or reserves another quota');
+});
+
+test('auth, CSRF and unhandled 500 errors all retain the same safe API headers',async()=>{
+  const env=makeEnv(),owner=await boot(env);
+  const request=async(path,options)=>req(env,path,options);
+  const responses=[
+    (await request('/api/me')).response,
+    (await request('/api/documents/import/text',{method:'POST',cookie:owner.cookie,
+      data:{text:'test'}})).response
+  ];
+  assert.deepEqual(responses.map(r=>r.status),[401,403]);
+  env.DB.sql.exec('DROP TABLE documents');
+  const serverError=await request('/api/documents',auth(owner));
+  assert.equal(serverError.response.status,500);
+  assert.equal(serverError.data.code,'INTERNAL_ERROR');
+  assert.equal(serverError.data.message,'服务暂时不可用');
+  responses.push(serverError.response);
+  for(const response of responses){
+    assert.match(response.headers.get('content-security-policy')||'',/default-src 'self'/);
+    assert.equal(response.headers.get('x-frame-options'),'DENY');
+    assert.equal(response.headers.get('x-content-type-options'),'nosniff');
+    assert.equal(response.headers.get('referrer-policy'),'no-referrer');
+    assert.match(response.headers.get('permissions-policy')||'',/microphone=\(\)/);
+    assert.equal(response.headers.get('cache-control'),'no-store');
+  }
+});
+
+test('shared PWA reader can request cached translation but never opens Google consent UI',()=>{
+  const source=fs.readFileSync(new URL('web/src/App.vue',root),'utf8');
+  assert.match(source,/else if\(!canManageCurrent\.value\)\{\s*\/\/ Shared viewers/);
+  assert.match(source,/if\(!id\|\|!text\|\|!canManageCurrent\.value\|\|!translationConsent\.value\|\|translationBusy\.value\)return;/);
+});
