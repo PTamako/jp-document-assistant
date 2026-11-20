@@ -483,6 +483,7 @@ const choices={
  reviewState:{title:'审核操作',items:[{value:'confirmed',label:'确认无误'},{value:'corrected',label:'修正为此值'},{value:'rejected',label:'无法确认 / 废弃候选'}]},
  ledgerCategory:{title:'家計簿分类',items:[]},
  ledgerPaymentSource:{title:'家計簿支付方式',items:[]},
+ ledgerPrepaidTarget:{title:'转入预付费账户',items:[]},
  taskAssignee:{title:'HomeFlow 负责人',items:[]},
  taskVisibility:{title:'同步到 HomeFlow',items:[{value:'private',label:'私人任务'},{value:'household',label:'家庭共享任务'}]}
 };
@@ -504,12 +505,14 @@ function choiceValue(field){
   case 'taskAssignee':return candidateDraft.assignee;
   case 'ledgerCategory':return candidateDraft.category;
   case 'ledgerPaymentSource':return candidateDraft.payment_source;
+  case 'ledgerPrepaidTarget':return candidateDraft.transfer_target;
   default:return '';
  }
 }
 function choiceItems(field){
  const items=field==='ledgerCategory'?ledgerOptions.value.categories:
   field==='ledgerPaymentSource'?ledgerOptions.value.paymentSources:
+  field==='ledgerPrepaidTarget'?(ledgerOptions.value.prepaidTargets||[]):
   field==='taskAssignee'?homeflowMemberChoices.value:(choices[field]?.items||[]);
  if(field==='taskAssignee'&&candidateDraft.visibility==='private')return items.filter(x=>!x.value||x.self===true);
  if(field==='fileRetention'&&!fileHasTextLayer.value)return items.filter(o=>o.value==='original');
@@ -545,6 +548,7 @@ function selectChoice(value){
   case 'taskAssignee':candidateDraft.assignee=value;candidateDraft.bonus_points=0;break;
   case 'ledgerCategory':candidateDraft.category=value;break;
   case 'ledgerPaymentSource':candidateDraft.payment_source=value;break;
+  case 'ledgerPrepaidTarget':candidateDraft.transfer_target=value;break;
  }
  backChoice();
 }
@@ -2114,7 +2118,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
   </div>
 
   <div v-if="sheet" class="sheet-overlay" @click.self="sheet==='original'?(revokeOriginal(),sheet=''):closeNestedSheet()">
-    <section class="bottom-sheet" :class="{'recycle-sheet':sheet==='recycle','confirmation-sheet':['emptyRecycleConfirm','permanent','permanentAttachment','trashConfirm'].includes(sheet) ,'google-source-sheet':['drive','gmail'].includes(sheet)}" role="dialog" aria-modal="true" :aria-label="sheet">
+    <section class="bottom-sheet" :class="{'recycle-sheet':sheet==='recycle','confirmation-sheet':['emptyRecycleConfirm','permanent','permanentAttachment','trashConfirm'].includes(sheet) ,'google-source-sheet':['drive','gmail'].includes(sheet),'candidate-sheet':sheet==='candidate'}" role="dialog" aria-modal="true" :aria-label="sheet">
       <div class="grabber"></div>
       <template v-if="sheet==='import'"><h2>扫描 / 导入文书</h2>
   <!-- Import source is common to both modes; keep it ABOVE the mode selector. -->
@@ -2361,19 +2365,19 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <div class="sheet-actions"><button class="secondary full" @click="closeSheet">完成</button></div></template>
       <template v-else-if="sheet==='restoreBackup'"><h2>确认恢复备份</h2><p>检查恢复内容。仅在点击确认后写入 D1 和私有 R2，不重发三个 App 的历史财务/任务/学习记录。</p><div v-for="(x,i) in restorePreview" :key="i" class="recycle-row"><div class="item-info"><strong>{{x.title}}</strong><small>{{x.action==='skip_duplicate'?'已存在 · 跳过':'恢复资料'}}{{x.has_original_reference?' · 原件按备份内容恢复':''}}</small></div></div><div class="sheet-actions"><button class="secondary" @click="sheet='backup'">取消</button><button class="primary" :disabled="busy" @click="confirmRestore">确认恢复</button></div></template>
       <template v-else-if="sheet==='candidate'"><h2>确认跨 App 联动</h2>
-        <p v-if="candidateDraft.kind==='finance'&&candidateMerchant" class="muted">交易商户：{{candidateMerchant}}</p>
+        <p v-if="candidateDraft.kind==='finance'&&candidateMerchant" class="candidate-merchant">{{candidatePrepaidTopup?'Suicaチャージ · 资产转移':'交易商户：'+candidateMerchant}}</p>
+        <div class="candidate-form-body">
         <div v-if="candidateDraft.kind==='finance'" class="form-label"><label for="candidate-finance-date">{{candidateDraft.variable_bill_plan_id?'记账日（建议采用卡垫付日，可修改）':candidateDraft.entry_type==='transfer'||current?.category==='card_spend'?'交易日期':'实际付款 / 到账日期'}}</label><div class="date-control"><input id="candidate-finance-date" v-model="candidateDraft.date" type="date" /><button v-if="candidateDraft.date" type="button" class="date-clear" aria-label="清空交易日期" @click="candidateDraft.date=''"><UiIcon name="x" :size="17"/></button></div></div>
-        <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">{{candidatePrepaidTopup?'Suica 实际到账日':'SBI 资金生效日'}}</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" aria-label="清空 SBI 资金生效日" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
+        <div v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'" class="form-label"><label for="candidate-transfer-date">{{candidatePrepaidTopup?'Suica 实际到账日':'SBI 资金生效日'}}</label><div class="date-control"><input id="candidate-transfer-date" v-model="candidateDraft.transfer_date" type="date" /><button v-if="candidateDraft.transfer_date" type="button" class="date-clear" :aria-label="candidatePrepaidTopup?'清空 Suica 实际到账日':'清空 SBI 资金生效日'" @click="candidateDraft.transfer_date=''"><UiIcon name="x" :size="17"/></button></div></div>
         <p v-if="candidateDraft.kind==='finance'&&candidateDraft.entry_type==='transfer'&&!candidatePrepaidTopup" class="muted">SBI証券 · {{inferSbiInvestmentKind(candidateMerchant)==='monthly'?'定期積立':'追加買付'}} · 不计入日常消费</p>
-         <label v-if="candidatePrepaidTopup&&!candidateApprovalRequired" class="form-label">转入预付费账户
-           <select v-model="candidateDraft.transfer_target" :disabled="busy">
-             <option value="">请选择家計簿登记的充值账户</option>
-             <option v-for="x in ledgerOptions.prepaidTargets||[]" :key="x.value" :value="x.value">{{x.label}}</option>
-           </select>
-         </label>
-         <p v-if="candidatePrepaidTopup&&!candidateApprovalRequired" class="fine-print">扣款来源请在下方「家計簿支付方式」中亲自选择。不会凭楽天ペイ服务名猜测银行卡，也不会自动执行实际扣款。</p>
+        <div v-if="candidatePrepaidTopup&&!candidateApprovalRequired" class="choice-form-field">
+          <span class="choice-field-label">转入预付费账户</span>
+          <button type="button" class="choice-field-control" :disabled="busy||!ledgerOptions.prepaidTargets?.length" @click="openChoice('ledgerPrepaidTarget')"><span>{{choiceLabel('ledgerPrepaidTarget')}}</span><UiIcon name="chevron-right" :size="18"/></button>
+        </div>
+        <p v-if="candidatePrepaidTopup&&!candidateApprovalRequired" class="candidate-helper">扣款来源请本人选择；不会按充值服务名猜测卡片或执行扣款。</p>
+        <div v-if="candidatePrepaidTopup&&!candidateApprovalRequired" class="candidate-static-field"><span>家計簿分类</span><strong>资产转移</strong></div>
         <div v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateApprovalPrepared||candidateApprovalSubmitted" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
-        <div v-else-if="candidateDraft.kind==='finance'&&!candidatePersonalTransfer&&!candidateDraft.variable_bill_plan_id" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
+        <div v-else-if="candidateDraft.kind==='finance'&&!candidatePrepaidTopup&&!candidatePersonalTransfer&&!candidateDraft.variable_bill_plan_id" class="choice-form-field"><span class="choice-field-label">家計簿分类</span><button type="button" class="choice-field-control" :disabled="!ledgerOptions.categories.length||candidateDraft.entry_type==='transfer'" @click="openChoice('ledgerCategory')"><span>{{choiceLabel('ledgerCategory')}}</span><UiIcon name="chevron-right" :size="18"/></button></div>
         <label v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired" class="form-label">家計簿本人支付方式<select v-model="candidateDraft.account_id" :disabled="candidateApprovalPrepared||candidateApprovalSubmitted||candidateDraft.entry_type==='transfer'" @change="chooseFinanceStableAccount"><option value="">请选择支付方式</option><option v-for="account in financeStableAccounts" :key="account.account_id" :value="account.account_id">{{account.label}}</option></select></label>
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&financeStableAccountsError" class="fine-print" role="status">{{financeStableAccountsError}}</p>
          <p v-if="candidateDraft.kind==='finance'&&candidateApprovalRequired&&candidateDraft.entry_type==='transfer'" class="fine-print">SBI 等非现金业务需要独立审批执行器，不能使用现金账目代替。</p>
@@ -2415,7 +2419,8 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
         <p v-else-if="candidateApprovalRequired&&candidateApprovalReady" class="info-note" role="status">将请求家庭管理员审批。这里只提交家庭账本明细审批申请，不直接记账。</p>
         <p v-else-if="candidateApprovalRequired" class="info-note" role="status">家庭账本审批入口暂未启用，没有提交申请或写入目标应用。</p>
         <p v-else-if="!integrationConfigured" class="info-note">{{ledgerOptionsError||'目标安全桥接暂不可用，未写入目标 App。'}}</p>
-        <div class="sheet-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':candidateApprovalPrepared?'重试原申请':'提交 HomeFlow 审批'):candidateDraft.variable_bill_plan_id?'仅同步到账单草稿':ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
+        </div>
+        <div class="sheet-actions candidate-actions"><button class="secondary" @click="sheet=''">取消</button><button class="primary" :disabled="candidateActionDisabled||candidateApprovalSubmitted" @click="commitApprovedCandidate">{{candidateApprovalRequired?(candidateApprovalSubmitted?'已提交待审批':candidateApprovalPrepared?'重试原申请':'提交 HomeFlow 审批'):candidateDraft.variable_bill_plan_id?'仅同步到账单草稿':ledgerAttempted&&candidateDraft.kind==='finance'?'核对后同步':'本人确认后同步'}}</button></div></template>
       <OriginalPreview v-else-if="sheet==='original'" :file="originalBlob" :mime="originalMime" :url="originalUrl" :filename="originalFileName" @close="revokeOriginal();sheet=''" />
     </section>
   </div>

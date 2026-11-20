@@ -53,7 +53,11 @@ test('every native date and month control is responsive and independently cleara
     ['candidateDraft.variable_bill_period','清空账单月份']
   ]){
     assert.ok(app.includes('v-model="'+field+'"'),'missing date model '+field);
-    assert.ok(app.includes('aria-label="'+aria+'"'),'missing clear action '+field);
+    if(field==='candidateDraft.transfer_date'){
+      assert.match(app,/:aria-label="candidatePrepaidTopup\?'清空 Suica 实际到账日':'清空 SBI 资金生效日'"/);
+    }else{
+      assert.ok(app.includes('aria-label="'+aria+'"'),'missing clear action '+field);
+    }
     assert.ok(app.includes('@click="'+field+'=\'\'"'),'clear action must reset model '+field);
   }
   assert.match(css,/input\[type="date"\],input\[type="month"\],input\[type="datetime-local"\]\{[^}]*min-width:0;max-width:100%/);

@@ -781,27 +781,31 @@ body{
   font-size:14px;
 }
 /* iOS Safari gives native date/month inputs a large intrinsic inline size.
-   A zero-min grid track contains both pickers and their independent clear button. */
+   The clear control now floats INSIDE the full-width picker, with room
+   reserved on the right so dates and their 44px touch target never collide. */
 input[type="date"],input[type="month"],input[type="datetime-local"]{
   display:block;min-width:0;max-width:100%;box-sizing:border-box;
 }
 .form-label{min-width:0;max-width:100%}
 .form-label>label{display:block;margin-bottom:6px;font-size:14px;font-weight:600}
 .date-control{
-  display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;
+  position:relative;display:block;
   width:100%;min-width:0;max-width:100%;margin-top:6px;
 }
 .date-control>input[type="date"],.date-control>input[type="month"],
 .date-control>input[type="datetime-local"]{
   display:block;width:100%;min-width:0;max-width:100%;
-  min-height:46px;margin:0;padding:10px 9px;
-  overflow:hidden;-webkit-appearance:auto;appearance:auto;
+  min-height:50px;margin:0;padding:11px 56px 11px 13px;
+  text-align:left;overflow:hidden;-webkit-appearance:auto;appearance:auto;
 }
+.date-control>input::-webkit-date-and-time-value{text-align:left}
 .date-control .date-clear{
-  display:grid;place-items:center;
+  position:absolute;top:50%;right:4px;z-index:1;
+  display:grid;place-items:center;transform:translateY(-50%);
   width:44px;height:44px;min-width:44px;min-height:44px;padding:0;
-  border:1px solid var(--glass-outline);border-radius:12px;
-  background:var(--glass-card);color:var(--secondary);
+  border:0;border-radius:11px;
+  background:color-mix(in srgb,var(--glass-outline) 42%,transparent);
+  color:var(--secondary);
 }
 .date-control .date-clear:active{background:var(--glass-blue)}
 @media(max-width:390px){
@@ -929,3 +933,44 @@ input[type="date"],input[type="month"],input[type="datetime-local"]{
 .field-ledger-link>span{min-width:0}
 .field-ledger-link>button{flex:none;min-height:40px;white-space:nowrap}
 @media(max-width:400px){.field-ledger-link{flex-direction:column;align-items:stretch}.field-ledger-link>button{align-self:flex-end}}
+
+/* Cross-app confirmation: fields scroll independently of the footer.
+   No input or memo can slip behind the fixed action row on mobile Safari. */
+.bottom-sheet.candidate-sheet{
+  display:flex;flex-direction:column;
+  max-height:min(90dvh,860px);overflow:hidden;
+}
+.candidate-sheet>.grabber{flex:none}
+.candidate-sheet>h2{flex:none;margin:9px 0 5px;font-size:19px}
+.candidate-merchant{
+  flex:none;margin:0 0 9px;color:var(--secondary);
+  font-size:13px;line-height:1.45;overflow-wrap:anywhere;
+}
+.candidate-form-body{
+  flex:1 1 auto;min-height:0;min-width:0;
+  overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+  padding:0 3px 15px 0;scroll-padding-bottom:18px;
+}
+.candidate-form-body .form-label,
+.candidate-form-body .choice-form-field{margin:10px 0}
+.candidate-form-body .form-label>label,
+.candidate-form-body .choice-field-label{font-size:13px;font-weight:650}
+.candidate-form-body .form-label>input{min-height:48px}
+.candidate-form-body .choice-field-control{min-height:48px;border-radius:12px}
+.candidate-static-field{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  min-height:48px;padding:11px 13px;margin:10px 0;
+  border:1px solid var(--glass-outline);border-radius:12px;
+  background:var(--glass-input);font-size:14px;
+}
+.candidate-static-field span{color:var(--secondary)}
+.candidate-static-field strong{font-size:14px;font-weight:600}
+.candidate-helper{
+  margin:4px 0 12px;color:var(--secondary);font-size:12px;line-height:1.5;
+}
+.candidate-sheet .candidate-actions{
+  flex:none;position:static;z-index:auto;
+  margin:0;padding:12px 0 2px;
+  border-top:1px solid var(--glass-outline);
+  background:var(--glass-sheet);
+}
