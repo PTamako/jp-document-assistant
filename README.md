@@ -2,22 +2,23 @@
 
 以手机为先的日本生活私人文书 PWA（Vue 3 + Cloudflare Workers Static Assets + D1 + 私有 R2）。双人独立账户，默认私人，所有财务记账、HomeFlow 任务和知学生词/句卡写入必须本人确认。文字识别出的金额、支付状态或日期不自动当作已付款、已到账事实。
 
-## 当前正式环境（截至 2026-11-18）
+## 当前正式环境（截至 2026-11-20）
 
 - Cloudflare 正式 Worker：[jp-document-assistant](https://jp-document-assistant.yupan6706.workers.dev/)；专用 D1 `jp-document-assistant`；专用私有 R2 `jp-document-assistant-private`。Worker Preview URLs 关闭，没有任何本项目 Preview 数据库或 R2。
-- 正式 D1 已核对 27 条迁移记录；支持文书、字段人工核验、回收站、附件清理、备份/恢复、家庭权限及 Google OAuth 授权记录。
+- 正式 D1 已核对 28 条迁移记录；支持文书、字段人工核验、回收站、附件清理、备份/恢复、家庭权限及 Google OAuth 授权记录。
 - Gmail、Google Drive：服务器端加密 refresh token，iPhone PWA 通过浏览器授权并在回到原 App 后用本地临时凭证安全检查并完成登录；若 Safari 尚未回调，则保留待完成状态。Gmail 搜索全邮箱，每页 5 封；不读取 iPhone Apple Mail 全部邮箱。
-- 历史记录中曾有知学和家計簿联动成功，但本次只读查询文书助手的 `integration_links` 现为 0。远端是否仍保有记录需经用户主动签名核对；目标的删除/回收站记录不自动重建或新增。
+- 2026-11-20 只读核验：`integration_links` 有 1 条 `synced` 记录；仅证明本应用保存过成功回执，不代表目标端记录目前仍有效。目标的删除/回收站记录不自动重建或新增；必须由用户主动签名查询核对。
 - HomeFlow 允许本人选择私人或家庭共享任务；私人文书要共享任务元数据需要再次确认。家庭成员选项来自签名、当前家庭限定的 HomeFlow 只读接口，不能假冒其他账号。
 - R2 文件保管：在 iPhone 浏览器内临时尝试图片 WebP/JPEG 压缩；一般图片以 300KiB 为目标，含日文小字的文书在安全清晰度下允许最多 900KiB。长边上限 2600px，压缩质量不低于 0.82，不为了达标强迫缩小到无法 OCR 的低分辨率；超过 900KiB 且无法保证清晰时明确提示分拆或改用 PDF。小于 300KiB 的图片原样上传，PDF、备份原件和非图片不重新编码。前端不将图片数据写入 IndexedDB/CacheStorage/相册，压缩过程仅临时占用 RAM，关闭导入界面即释放文件引用；浏览器/PWA 自身静态资源和 OCR 模型缓存另计。单文件真实上传仍受 Worker 8MiB 限制。R2 按用户与 SHA 去重，避免重复存储。
 - OCR：PDF 有文字层时优先本机解析；扫描 PDF 和照片可选本机 PaddleOCR、Workers AI 或 OCR.space。Gemini 3.5 Flash-Lite 为用户逐份确认的外部 AI，应用内跨模型合计日限 500 次、分钟限 15 次（依据 2026-11-18 Google AI Studio 项目截图；此仅统计文书助手调用，其他应用用量不包含）；这些上限**不等于** Google/Cloudflare 实际免费余额。
-- 文书详情按「原文 → 中文解释 → 字段 → 待办 → 学习」排序；全文日中机翻现在使用**知学既有 Google Apps Script LanguageApp**，通过 `ZHIXUE_BRIDGE_SERVICE` 与 `ZHIXUE_BRIDGE_SECRET` 在两个正式 Worker 之间进行 HMAC 签名调用。iPhone 不运行 227 MB OPUS-MT/ONNX 模型。仅在用户逐份勾选同意后发送已保存的日文文字，不发送照片、PDF 原件、密钥，不自动降级到 MyMemory、非正式 Google 译源或 Workers AI。每份最多 8000 字，拆成至多 8 段；文书助手按日本时间全站每日最多预留 80 次 Google 翻译调用（与知学词典共用 Google 账号免费额度，但并非全局精准余量）。译文仅在已有 D1 私有文书下按文本 SHA 复用；修改原文时失效，删除文书时级联删除缓存。机翻结果只用于对照，不影响原文、字段核验或 AI 中文解释。首次真机端到端翻译还需验收。
+- 文书详情按「原文 → 中文解释 → 字段 → 待办 → 学习」排序；**仅原文书所有者能触发外部 Google 翻译，家庭共享成员只可读取现有译文缓存**；全文日中机翻使用**知学既有 Google Apps Script LanguageApp**，通过 `ZHIXUE_BRIDGE_SERVICE` 与 `ZHIXUE_BRIDGE_SECRET` 在两个正式 Worker 之间进行 HMAC 签名调用。iPhone 不运行 227 MB OPUS-MT/ONNX 模型。仅在用户逐份勾选同意后发送已保存的日文文字，不发送照片、PDF 原件、密钥，不自动降级到 MyMemory、非正式 Google 译源或 Workers AI。每份最多 8000 字，拆成至多 8 段；文书助手按日本时间全站每日最多预留 80 次 Google 翻译调用（与知学词典共用 Google 账号免费额度，但并非全局精准余量）。译文仅在已有 D1 私有文书下按文本 SHA 复用；修改原文时失效，删除文书时级联删除缓存。机翻结果只用于对照，不影响原文、字段核验或 AI 中文解释。首次真机端到端翻译还需验收。
 - OCR.space 已加入失败后五分钟冷却、同一原件最多一次明确重试、D1 原子抢占与每日预算保护；成功结果命中缓存时不重复调用。失败不自动重试。
 - Google Drive 为全盘**只读搜索权限**（`drive.readonly`），而不是 Picker 的 `drive.file`；仅用户点击导入时才读取指定文件，不做后台全盘镜像。用户需理解授权范围。
 - 旧 OPUS-MT 大模型中转 API 已从正在运行的 Worker 路由移除，不再提供手机端下载路径；历史本地模型源文件暂保留供测试与迁移参考。
-- AI 中文解读改为 D1 持久队列后台处理，Google 503 最多自动重试 1 次；同一正式 Worker 使用每 5 分钟 Cron 兜底恢复中断任务，不创建 Preview 资源。
-- Cloudflare Builds 发布命令只运行 JavaScript 语法、单元测试和生产构建，因为构建镜像 Python 3.13 缺少 `_sqlite3`；GitHub PR CI 仍运行完整 Python/D1 测试。
-- 新版正式静态文件由 Cloudflare Workers Static Assets 直接提供，除 `/api/*` 与专用 OCR worker-entry 外无需运行 Worker；由 `web/public/_headers` 保留原先的安全 CSP、X-Frame-Options 等响应头。健康接口显示 Worker 实际版本 ID。\n- Cloudflare 当前资源配置见 [wrangler.jsonc](wrangler.jsonc)；业务代码合并到 `main` 后使用 Cloudflare Builds 发布。PR CI 只做检查、测试、构建，不接触生产数据库、不创建 Preview。
+- AI 中文解读使用 D1 持久队列，Google 503 最多自动重试 1 次；同一正式 Worker 使用**每 15 分钟** Cron 兜底恢复中断任务，导入时仍通过 `waitUntil` 立即触发处理。疑似超时且结果不明的 AI 请求不会自动重发。不创建 Preview 资源。
+- GitHub PR CI 运行 JavaScript 语法、Node 单元测试、Python/D1 测试及前端构建；Cloudflare Builds 使用已配置的 main 发布流程。持续集成不触及生产文书或真实账务。
+- 新版正式静态文件由 Cloudflare Workers Static Assets 直接提供，除 `/api/*` 与专用 OCR worker-entry 外无需运行 Worker；由 `web/public/_headers` 保留原先的安全 CSP、X-Frame-Options 等响应头。成功与失败的动态 API 响应统一应用防护响应头，健康接口显示 Worker 实际版本 ID。
+- Cloudflare 当前资源配置见 [wrangler.jsonc](wrangler.jsonc)；使用 1% 采样的 Workers Observability（仅供无正文诊断，日志容量及费用须持续审查）。业务代码合并到 `main` 后使用既有正式构建流程发布。PR CI 只做检查、测试、构建，不接触生产数据库、不创建 Preview。
 
 ## 开发和测试
 
