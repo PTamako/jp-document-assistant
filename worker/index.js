@@ -986,6 +986,49 @@ ELSE 'unreviewed' END review_status,
       const result=await analyzeStored(env,updated,true);
       return json({ok:true,analysis_status:result.result?.analysis_status||'needs_review',fields:result.result?.fields||[],privacy_auto_private:nextVisibility==='private'&&d.visibility==='shared',message:'文字已保存为待人工核对的分析结果'});
     }
+    if(method==='POST'&&rest==='topup/prepare'){
+      // A user-triggered, idempotent backfill for already reviewed Suica
+      // receipts. Never re-analyze an audited document or replace its sync key.
+      const doc=await ownedDocument(env.DB,id,p,'active');
+      const raw=String(doc.extracted_text_ja||'');
+      if(doc.category!=='topup'||!/Suica/i.test(raw)||!/(?:チャージ|充值)/i.test(raw))
+        bad('目前仅支持有原文凭据的 Suica 充值','NOT_SUPPORTED_TOPUP',409);
+      const fields=await dbAll(env.DB,
+        'SELECT field_key,normalized_value,review_state FROM document_fields WHERE document_id=?',id);
+      const approved=key=>fields.find(x=>x.field_key===key&&
+        ['confirmed','corrected'].includes(x.review_state))?.normalized_value||'';
+      const amount=Number(approved('amount_jpy'));
+      const stamp=String(approved('transaction_at'));
+      const date=stamp.slice(0,10);
+      if(!Number.isSafeInteger(amount)||amount<1||amount>10000000||
+        !validCivilDate(date)||!/^\\d{4}-\\d{2}-\\d{2} (?:[01]\\d|2[0-3]):[0-5]\\d/.test(stamp))
+        bad('请先在字段页核验充值金额与完成时间','TOPUP_REVIEW_REQUIRED',409);
+      const today=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+      if(date>today)bad('未来充值不能作为已到账资金登记','TOPUP_DATE_IN_FUTURE',409);
+      const existing=await dbFirst(env.DB,
+        "SELECT id,payload_json FROM action_candidates WHERE document_id=? AND candidate_kind='finance'",id);
+      if(existing){
+        const previous=JSON.parse(existing.payload_json);
+        if(previous.kind!=='transfer'||previous.transfer_kind!=='prepaid'||previous.amount_jpy!==amount||
+          previous.transaction_date!==date||previous.topup_destination!=='Suica')
+          bad('已有不同的财务联动候选，请先核对','CANDIDATE_EXISTS',409);
+        return json({ok:true,candidate_id:existing.id,reused:true});
+      }
+      const candidateId=randomToken(16),now=isoNow();
+      const payload={kind:'transfer',transfer_kind:'prepaid',topup_destination:'Suica',
+        amount_jpy:amount,currency:'JPY',category:'topup',
+        transaction_date:date,transaction_at:stamp,
+        merchant:'Suicaチャージ',note:'Suica 充值（资金转移，不计日常消费）'};
+      await dbRun(env.DB,`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
+        SELECT ?,?,'finance',?,?,? WHERE NOT EXISTS
+        (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='finance')`,
+        candidateId,id,JSON.stringify(payload),now,now,id);
+      const inserted=await dbFirst(env.DB,
+        "SELECT id,payload_json FROM action_candidates WHERE document_id=? AND candidate_kind='finance'",id);
+      if(!inserted||JSON.parse(inserted.payload_json).topup_destination!=='Suica')
+        bad('充值候选创建结果未确认，请刷新','TOPUP_PREPARE_UNCONFIRMED',503);
+      return json({ok:true,candidate_id:inserted.id,reused:inserted.id!==candidateId});
+    }
     if(method==='POST'&&rest==='manual-income'){
       const doc=await ownedDocument(env.DB,id,p,'active');
       if(doc.category!=='salary'||!isSalaryDepositNotice(doc.extracted_text_ja||''))bad('仅支持在未注明金额的工资到账邮件中补录收入','NOT_SALARY_DEPOSIT',409);
