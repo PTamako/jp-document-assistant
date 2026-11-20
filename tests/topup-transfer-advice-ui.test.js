@@ -14,7 +14,9 @@ test('Suica top-up requires explicit review before creating a finance transfer c
  assert.match(app,/api\/documents\/.*topup\/prepare/);
  assert.match(app,/candidatePrepaidTopup/);
  assert.match(app,/ledgerOptions\.prepaidTargets/);
- assert.match(app,/扣款来源请在下方/);
+ assert.match(app,/扣款来源请本人选择/);
+ assert.match(app,/openChoice\('ledgerPrepaidTarget'\)/);
+ assert.match(app,/candidate-static-field/);
  assert.doesNotMatch(app,/当前家計簿安全接口只支持收入／支出/);
 });
 test('sensitive top-up amount stays hidden until explicit reveal',()=>{
