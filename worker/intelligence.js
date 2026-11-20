@@ -165,8 +165,10 @@ export function extractGeminiResponseText(body) {
 }
 // JSON-only output saves tokens and gives the parser a predictable shape.
 export function cloudflareGenerationConfig(){
+ // Document extraction needs concise JSON, not the model's default xhigh reasoning.
+ // Keep thinking disabled even if the provider changes its default behavior.
  return {response_format:{type:'json_object'},chat_template_kwargs:{enable_thinking:false},
-  max_completion_tokens:2600,stream:false};
+  reasoning_effort:'low',max_completion_tokens:2200,stream:false};
 }
 export function extractCloudflareResponseText(response){
  const choice=response?.choices?.[0];
