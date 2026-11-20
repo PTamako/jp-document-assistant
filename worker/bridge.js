@@ -110,6 +110,8 @@ async function checkedFields(env,docId){
   }
   return approved;
 }
+const isPrepaidTopupCandidate=x=>x?.kind==='transfer'&&x?.transfer_kind==='prepaid'&&
+  x?.category==='topup'&&x?.topup_destination==='Suica'&&x?.merchant==='Suicaチャージ';
 function ledgerEntryType(x,merchant=x.merchant){
   if(['expense','transfer'].includes(x.kind)&&inferSbiInvestmentKind(merchant))return 'transfer';
   return x.kind;
@@ -153,6 +155,19 @@ export function validatedPayload(target,item,approved,body){
     // Reviewed source fields take precedence; do not trust browser-supplied
     // entry types, merchants or investment purposes.
     const merchant=trim(approved.get('merchant')||x.merchant,100);
+    if(isPrepaidTopupCandidate(x)){
+      const timestamp=String(approved.get('transaction_at')||'');
+      const target=trim(body.transfer_target,100);
+      const source=trim(body.payment_source,100);
+      if(timestamp!==x.transaction_at||timestamp.slice(0,10)!==body.date||
+        body.transfer_date!==body.date||target!=='prepaid:'+x.topup_destination||
+        source===x.topup_destination||!source||trim(body.category,80)!=='投資・資産移動')
+        bad('请核对实际完成时间、本人扣款来源与 Suica 充值账户','TOPUP_MAPPING_INVALID',409);
+      return {operation:'entry',type:'transfer',date:body.date,
+        time:timestamp.slice(11,16),amount,category:'投資・資産移動',
+        paymentSource:source,merchant:'Suicaチャージ',note:trim(body.note,180),
+        transferTarget:target,transferDate:body.date,source_kind:'document_assistant'};
+    }
     if(isUnsupportedBalanceMovement(merchant))
       bad('储值卡充值、积分兑换或余额转移不是家庭收入支出，请使用家計簿资产转移入口核对双方账户','ASSET_MOVEMENT_REQUIRES_TRANSFER',409);
     const type=ledgerEntryType(x,merchant);
@@ -260,7 +275,10 @@ export async function ledgerPickerOptions(env,userId,kind,merchant='',recognized
   const category=categories.some(x=>x.value===suggested.category)?suggested.category:'';
   const payment_source=paymentSources.some(x=>x.value===suggested.payment_source)?suggested.payment_source:'';
   const variablePlans=safeList(parsed.variable_plans,160);
-  return {data:{categories,paymentSources,variablePlans,suggested:{category,payment_source}}};
+  const prepaidTargets=safeList(parsed.prepaid_targets,100)
+    .filter(x=>x.value.startsWith('prepaid:')&&x.value.slice(8)===x.label);
+  return {data:{categories,paymentSources,variablePlans,prepaidTargets,
+    suggested:{category,payment_source}}};
  }catch(e){
   const reason=String(e?.message||'');
   if(stage==='sign')return {error:'家計簿联动签名失败，请检查服务端配置'};
@@ -337,13 +355,14 @@ export async function candidatePreview(request,env,p,id){
   const payload=JSON.parse(item.payload_json);
   const verifiedMerchant=fields.get('merchant')||payload.merchant;
   const entryType=target==='kakebo'?ledgerEntryType(payload,verifiedMerchant):null;
-  const unsupportedMovement=target==='kakebo'&&isUnsupportedBalanceMovement(verifiedMerchant);
+  const prepaidTopup=target==='kakebo'&&isPrepaidTopupCandidate(payload);
+  const unsupportedMovement=target==='kakebo'&&isUnsupportedBalanceMovement(verifiedMerchant)&&!prepaidTopup;
   // Only Kakeibo family-ledger mutations require a household approval.
   // Private tasks and study cards go straight to the verified person's account.
   // Member SBI/asset movements are not family income/expense approvals.
  // They require a separately verified personal-asset executor; the legacy
  // household entry bridge must never silently take this path.
- const memberPersonalTransfer=p.role==='member'&&target==='kakebo'&&entryType==='transfer';
+ const memberPersonalTransfer=p.role==='member'&&target==='kakebo'&&entryType==='transfer'&&!prepaidTopup;
  const approvalRequired=p.role!=='owner'&&target==='kakebo'&&!memberPersonalTransfer;
   const approvalActionEnabled=approvalRequired&&p.auth_source==='homeflow'&&
     !!p.homeflow_user_id&&!!p.homeflow_household_id&&
@@ -396,6 +415,7 @@ export async function commitCandidate(request,env,p,id){
   // A verified member uses only the dedicated personal SBI journal, NEVER
   // the legacy household owner-ledger bridge or HomeFlow income/expense review.
   if(p.role==='member'&&target==='kakebo'&&
+     !isPrepaidTopupCandidate(JSON.parse(item.payload_json))&&
      ledgerEntryType(JSON.parse(item.payload_json),verified?.get('merchant')||undefined)==='transfer')
     return commitPersonalSbiCandidate(request,env,p,item,verified);
   // Only household ledger changes require administrator review. Personal
