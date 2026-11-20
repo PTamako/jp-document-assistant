@@ -17,7 +17,11 @@ test('variable-bill month uses the same bounded picker layout as the day input',
 
 test('date and month controls stay within the iPhone sheet and preserve a separate clear hit target',()=>{
   assert.match(css,/\.bottom-sheet\{[^}]*overflow-x:hidden;overflow-y:auto/);
-  assert.match(css,/\.date-control\{\s*display:grid;grid-template-columns:minmax\(0,1fr\) auto/);
+  assert.match(css,/\.date-control\{\s*position:relative;display:block/);
+  assert.match(css,/\.date-control \.date-clear\{\s*position:absolute;top:50%;right:4px/);
+  assert.match(css,/padding:11px 56px 11px 13px/);
+  assert.match(css,/\.bottom-sheet\.candidate-sheet\{[\s\S]*?overflow:hidden/);
+  assert.match(css,/\.candidate-form-body\{[\s\S]*?overflow-y:auto/);
   assert.match(css,/\.date-control>input\[type="date"\],\.date-control>input\[type="month"\]/);
   assert.match(css,/display:block;width:100%;min-width:0;max-width:100%/);
   assert.match(css,/\.date-control \.date-clear\{[\s\S]*?width:44px;height:44px;min-width:44px;min-height:44px/);
