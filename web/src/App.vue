@@ -1516,7 +1516,8 @@ async function prepareCandidate(item){
  candidateDraft.category=candidatePersonalTransfer.value?'投資・資産移動':
   ledgerOptions.value.suggested?.category||
   (candidateApprovalRequired.value&&candidateDraft.entry_type==='transfer'?'投資・資産移動':'');
- candidateDraft.payment_source=item.payload?.transfer_kind==='prepaid'?'':(ledgerOptions.value.suggested?.payment_source||'');
+ candidateDraft.payment_source=ledgerOptions.value.suggested?.payment_source||'';
+ if(item.payload?.transfer_kind==='prepaid')candidateDraft.payment_source='';
  candidateDraft.transfer_target=item.payload?.transfer_kind==='prepaid'?
   (ledgerOptions.value.prepaidTargets||[]).find(x=>x.value==='prepaid:'+item.payload?.topup_destination)?.value||'':'sbi';
  financeStableAccounts.value=[];financeStableAccountsError.value='';candidateDraft.account_id='';
