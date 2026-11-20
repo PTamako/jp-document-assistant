@@ -1162,6 +1162,14 @@ export default {
       const response=err?.status
         ?failure(err.code||'ERROR',err.message,err.status)
         :failure('INTERNAL_ERROR','服务暂时不可用',500);
+      // Only log a bounded, sanitized error code and HTTP status on server
+      // failures. Never log URLs (calendar bearer tokens), identities, input
+      // text, provider exceptions, request headers or credentials.
+      if(response.status>=500){
+        const code=typeof err?.code==='string'&&/^[A-Z][A-Z0-9_]{0,47}$/.test(err.code)
+          ?err.code:'INTERNAL_ERROR';
+        console.error(JSON.stringify({event:'jpda_server_error',status:response.status,code}));
+      }
       return protectedResponse(response,request);
     }
   },
