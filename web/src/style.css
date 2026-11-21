@@ -788,17 +788,27 @@ input[type="date"],input[type="month"],input[type="datetime-local"]{
 }
 .form-label{min-width:0;max-width:100%}
 .form-label>label{display:block;margin-bottom:6px;font-size:14px;font-weight:600}
+/* iOS WebKit may paint the native date input as a rectangular surface
+   even when the CSS input has rounded corners. The wrapper owns the
+   visible border/radius and clips the native surface at both ends. */
 .date-control{
   position:relative;display:block;
   width:100%;min-width:0;max-width:100%;margin-top:6px;
+  border:1px solid var(--glass-outline);
+  border-radius:13px;background:var(--glass-input);
+  overflow:hidden;isolation:isolate;
 }
 .date-control>input[type="date"],.date-control>input[type="month"],
 .date-control>input[type="datetime-local"]{
   display:block;width:100%;min-width:0;max-width:100%;
   min-height:50px;margin:0;padding:11px 56px 11px 13px;
+  border:0;border-radius:0;box-shadow:none;
+  background:transparent;
   text-align:left;overflow:hidden;-webkit-appearance:auto;appearance:auto;
 }
 .date-control>input::-webkit-date-and-time-value{text-align:left}
+.date-control:focus-within{outline:3px solid #6ca1e4;outline-offset:2px}
+.date-control>input:focus-visible{outline:0}
 /* Keep the iPhone-sized touch target, but show only the clear glyph.
    The former 44px filled square looked like a second input inside the date field. */
 .date-control .date-clear{
