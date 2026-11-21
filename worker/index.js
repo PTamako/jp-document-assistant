@@ -267,7 +267,10 @@ async function analyzeStored(env,doc,force=false){
 async function analyzeIfEnabled(env,doc,ctx){
   try{
     const result=await enqueueDocumentAi(env,doc);
-    if(result.ai_status==='queued'&&ctx?.waitUntil)ctx.waitUntil(processDocumentAiJob(env,doc.id));
+    // Workers AI generation may take longer than the HTTP waitUntil 30-second window.
+    // Queue it for the scheduled handler instead; keep fast, explicitly bounded Gemini immediate.
+    if(result.ai_status==='queued'&&doc.ai_provider==='gemini'&&ctx?.waitUntil)
+      ctx.waitUntil(processDocumentAiJob(env,doc.id));
     return result;
   }catch{return {ai_status:'failed_safe'};}
 }
