@@ -799,15 +799,17 @@ input[type="date"],input[type="month"],input[type="datetime-local"]{
   text-align:left;overflow:hidden;-webkit-appearance:auto;appearance:auto;
 }
 .date-control>input::-webkit-date-and-time-value{text-align:left}
+/* Keep the iPhone-sized touch target, but show only the clear glyph.
+   The former 44px filled square looked like a second input inside the date field. */
 .date-control .date-clear{
   position:absolute;top:50%;right:4px;z-index:1;
   display:grid;place-items:center;transform:translateY(-50%);
   width:44px;height:44px;min-width:44px;min-height:44px;padding:0;
-  border:0;border-radius:11px;
-  background:color-mix(in srgb,var(--glass-outline) 42%,transparent);
+  border:0;border-radius:11px;background:transparent;
   color:var(--secondary);
 }
 .date-control .date-clear:active{background:var(--glass-blue)}
+.date-control .date-clear .ui-icon{width:17px;height:17px;flex:none}
 @media(max-width:390px){
   .google-source-row{gap:7px;padding-inline:9px;grid-template-columns:32px minmax(0,1fr) auto}
   .google-source-item-icon{width:32px;height:32px}
@@ -968,9 +970,18 @@ input[type="date"],input[type="month"],input[type="datetime-local"]{
 .candidate-helper{
   margin:4px 0 12px;color:var(--secondary);font-size:12px;line-height:1.5;
 }
+/* This footer is part of the sheet, not a second white rectangular card.
+   Keep it outside the scrolling form so the submit action stays accessible. */
 .candidate-sheet .candidate-actions{
   flex:none;position:static;z-index:auto;
-  margin:0;padding:12px 0 2px;
-  border-top:1px solid var(--glass-outline);
-  background:var(--glass-sheet);
+  margin:0;padding:10px 0 2px;
+  border:0;background:transparent;box-shadow:none;
+  -webkit-backdrop-filter:none;backdrop-filter:none;
 }
+.candidate-sheet .candidate-actions>button{
+  min-height:48px;max-height:none;padding:11px 10px;
+  border-radius:13px;font-size:14px;line-height:1.3;
+  white-space:normal;overflow-wrap:anywhere;
+}
+.candidate-sheet .candidate-actions>button:first-child{flex:0 1 43%}
+.candidate-sheet .candidate-actions>button:last-child{flex:1 1 57%}
