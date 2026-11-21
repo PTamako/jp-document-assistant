@@ -47,3 +47,15 @@ test('rule-based re-extraction is named and displayed only on the field tab',()=
  assert.match(fields,/aria-label="重新提取字段"/);
  assert.match(css,/width:44px;height:44px;min-width:44px;min-height:44px/);
 });
+
+// Regression: the slow Workers AI call must never start in an HTTP waitUntil.
+test('Workers AI background jobs are claimed by the minute Cron and capped',()=>{
+ const entry=readFileSync(new URL('../worker/index.js',import.meta.url),'utf8');
+ const jobs=readFileSync(new URL('../worker/ai-jobs.js',import.meta.url),'utf8');
+ const config=readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8');
+ assert.match(entry,/result\.ai_status==='queued'&&doc\.ai_provider==='gemini'&&ctx\?\.waitUntil/);
+ assert.match(jobs,/const WORKERS_AI_TIMEOUT_MS=100000/);
+ assert.match(jobs,/boundedAnalysis\(env,doc,job\.provider\)/);
+ assert.match(jobs,/failure_code:status/);
+ assert.match(config,/"crons": \["\* \* \* \* \*"\]/);
+});
