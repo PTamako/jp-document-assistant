@@ -2,7 +2,8 @@ import {hashString,isoNow} from './security.js';
 import {analyzeDocumentAi,getDocumentAiCache} from './intelligence.js';
 
 const MAX_AUTO_ATTEMPTS=2; // initial call + one transient 5xx/network retry
-const STALE_RUNNING_MS=120000;
+const STALE_RUNNING_MS=3*60*1000;
+const WORKERS_AI_TIMEOUT_MS=100000; // Cron has time for longer model calls; never leave an infinite running job.
 const RETRY_BASE_MS=15*60*1000; // Wait about 15 minutes before one Google 5xx retry.
 const active=new Set();
 const get=(db,sql,...args)=>db.prepare(sql).bind(...args).first();
@@ -12,6 +13,18 @@ const validProvider=p=>p==='gemini'||p==='cloudflare';
 // network/timeout failure. A user may retry explicitly after checking status.
 const retryable=new Set(['gemini_service_overloaded','gemini_service_unavailable','gemini_retry_cooldown']);
 const finalStates=new Set(['success','cached']);
+// Cloudflare inference is launched by Cron (not the 30-second HTTP waitUntil).
+// Bound the UI-visible wait and do not silently issue a second paid/free-tier inference.
+async function boundedAnalysis(env,doc,provider){
+  if(provider!=='cloudflare')return analyzeDocumentAi(env,doc);
+  let timer;
+  try{
+    return await Promise.race([
+      analyzeDocumentAi(env,doc),
+      new Promise(resolve=>{timer=setTimeout(()=>resolve({ai_status:'cloudflare_timeout'}),WORKERS_AI_TIMEOUT_MS);})
+    ]);
+  }finally{if(timer!==undefined)clearTimeout(timer);}
+}
 
 export async function enqueueDocumentAi(env,doc){
   const provider=doc.ai_provider||'none';
@@ -70,10 +83,17 @@ export async function processDocumentAiJob(env,id){
       return {ai_status:'stale_or_deleted'};
     }
     let result;
-    try{result=await analyzeDocumentAi(env,doc);}
+    try{result=await boundedAnalysis(env,doc,job.provider);}
     catch{result={ai_status:'provider_failed'};}
     // An old result may have arrived after source edit or provider switch.
     const status=result.ai_status;
+    if(status==='cloudflare_timeout'){
+      // Release a pending analysis for an explicit user retry; a late valid
+      // provider completion still wins because its persisted success is authoritative.
+      await run(env.DB,`UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=?
+        WHERE document_id=? AND source_sha=? AND state='pending'`,
+        JSON.stringify({failure_code:status}),isoNow(),id,job.source_sha);
+    }
     if(finalStates.has(status)){
       await finish(env.DB,id,job.attempts,job.source_sha,'done');
     }else if(retryable.has(status)&&job.attempts<MAX_AUTO_ATTEMPTS){

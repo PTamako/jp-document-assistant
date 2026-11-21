@@ -53,8 +53,9 @@
   },
   "workers_dev": true,
   "preview_urls": false,
-  // Immediate AI jobs run on import; 15-minute Cron is bounded retry/recovery only.
-  "triggers": {"crons": ["*/15 * * * *"]},
+  // Cloudflare Workers AI executes on minute Cron to avoid HTTP waitUntil's 30-second lifetime.
+  // Gemini keeps its short immediate request. Single production Worker; no new resources.
+  "triggers": {"crons": ["* * * * *"]},
   // Privacy-conscious diagnostic sample. No request bodies or document text
   // are written to console; do not turn on 100% logs without reviewing costs.
   "observability": {

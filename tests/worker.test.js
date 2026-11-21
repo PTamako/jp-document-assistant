@@ -348,6 +348,11 @@ test('selected Cloudflare AI analyzes a source once and caches grounded study ca
  }});
  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
  assert.equal(imported.data.ai_status,'queued');
+ // HTTP import only queues the slow Qwen request; minute Cron owns execution.
+ assert.equal(calls,0);
+ const waiting=[];
+ await app.scheduled({},env,{waitUntil:p=>waiting.push(p)});
+ await Promise.all(waiting);
  assert.equal(calls,1);
  const id=imported.data.document_id;
  const detail=await req(env,'/api/documents/'+id,auth(u));
