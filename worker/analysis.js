@@ -24,6 +24,15 @@ const storedValueTopup = text =>
   /(?:Suica|PASMO|ICOCA|TOICA|Kitaca|SUGOCA|nimoca|はやかけん|楽天Edy|nanaco|WAON|PayPay|電子マネー|プリペイド|交通系IC)/i.test(text) &&
   /(?:チャージ|受取完了|残高への入金)/.test(text);
 
+// Booking acceptance is evidence of a visit; it is NOT a payment or deadline.
+export function isConfirmedMedicalAppointment(raw) {
+  const text=String(raw||'').normalize('NFKC');
+  if(!/(?:クリニック|病院|医院|診療所)/.test(text))return false;
+  if(!/(?:ご予約を承りました|ご予約が確定|予約が確定|予約確定|予約完了|ご予約が完了|本予約とさせて)/.test(text))return false;
+  if(/(?:予約(?:を|が)?キャンセル(?:しました|完了|済)|キャンセル(?:を承りました|完了しました)|予約を取り消しました|予約取消完了)/.test(text))return false;
+  return true;
+}
+
 export function classifyText(text) {
   if (storedValueTopup(text)) return 'topup';
   if (isSalaryDepositNotice(text)) return 'salary';
@@ -37,7 +46,8 @@ export function classifyText(text) {
   if (/(カードご利用|利用速報|クレジットカード|ご請求額|利用確定)/.test(text)) return 'bank';
   if (/(納付書|納付期限|税額|保険料|年金保険料)/.test(text)) return 'tax';
   if (/(保険金請求|給付金請求|保険証券|保険契約)/.test(text)) return 'insurance';
-  if (/(診療予約|処方箋|受診案内|健診結果)/.test(text)) return 'medical';
+  if (/(診療予約|処方箋|受診案内|健診結果)/.test(text) ||
+      (/(?:クリニック|病院|医院|診療所)/.test(text)&&/(?:ご予約|来院時刻|来院日時|予約日時|本予約)/.test(text))) return 'medical';
   if (/(住民票|区役所|市役所|行政手続)/.test(text)) return 'government';
   if (/(契約更新|家賃|賃貸借)/.test(text)) return 'housing';
   if (/(キャンペーン|ポイント還元|併用不可|対象商品|対象外|エントリー)/.test(text)) return 'campaign';
@@ -274,6 +284,27 @@ export function extractCampaignActionHints(text){
   }
   return [];
 }
+// Only creates a suggestion: the date must be reviewed and the HomeFlow bridge
+// still requires explicit confirmation. Never submit a medical visit automatically.
+export function medicalAppointmentTaskSuggestion(parsed,raw,{visibility='private',today=new Intl.DateTimeFormat('sv-SE',{
+  timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'
+}).format(new Date())}={}) {
+  if(parsed?.category!=='medical'||!isConfirmedMedicalAppointment(raw))return null;
+  const event=parsed.fields?.find(f=>f.field_key==='event_date'&&f.value_type==='date');
+  if(!event||!/^20\\d\\d-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])$/.test(event.normalized_value)||
+     event.normalized_value<today)return null;
+  const text=String(raw||'').normalize('NFKC');
+  const clinic=/湘南美容クリニック[^\\r\\n]{0,18}?院/.exec(text)?.[0]||
+    /[^\\r\\n]{0,25}クリニック[^\\r\\n]{0,12}?院/.exec(text)?.[0]||
+    '医疗机构';
+  // Only the ARRIVAL time is used; never confuse 終了予定時刻 with the appointment.
+  const arrival=/(?:ご?来院(?:時刻|時間)|受付(?:時刻|時間)|予約時刻)[ \\t　]*[:：]?[ \\t　]*(?:([01]?\\d|2[0-3])):([0-5]\\d)/.exec(text);
+  const time=arrival?String(Number(arrival[1])).padStart(2,'0')+':'+arrival[2]:'';
+  return {task_type:'medical_appointment',date_field_key:'event_date',
+    title:('到院预约｜'+clinic+(time?' '+time:'')).slice(0,120),
+    due_on:event.normalized_value,visibility,requires_confirmation:true};
+}
+
 export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   const text = String(raw || '').slice(0,100000);
   const category = classifyText(text);
@@ -289,6 +320,15 @@ export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   if (category==='bank'||category==='delivery'){
     const event=dates.find(d=>/(?:口座引落|引き落とし|お届け予定|配達予定|配送予定)/.test(text.slice(Math.max(0,d.index-90),d.index+d.source_quote.length)));
     if(event && event!==due)fields.push({field_key:'event_date',value_type:'date',normalized_value:event.date,source_quote:event.source_quote,review_state:'unreviewed'});
+  }
+  // A confirmed medical booking's visit day is an event, not a payment deadline.
+  // Require the date's own source line to identify it as a booking/visit date:
+  // email headers, dates in footers and estimated finish times are not enough.
+  if(category==='medical'&&isConfirmedMedicalAppointment(text)){
+    const visit=dates.find(d=>!d.weekday_mismatch&&
+      /(?:ご?予約を承りました|でご予約|予約日時|ご?予約日|来院日|ご来院日時|ご来院日|診療予約日)/.test(d.source_quote));
+    if(visit)fields.push({field_key:'event_date',value_type:'date',
+      normalized_value:visit.date,source_quote:visit.source_quote,review_state:'unreviewed'});
   }
   if (dates.some(x=>x.weekday_mismatch)) issues.push('日期与原文星期不一致，请核对原件');
   if(!due && fields.some(f=>f.field_key==='due_date_partial'))issues.push('原文仅有月日：已暂按日本当前年份补全，年份须人工确认后才能创建正式待办');
