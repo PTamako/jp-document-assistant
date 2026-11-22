@@ -90,8 +90,11 @@ export function extractDates(text) {
       if(year<1900||year>2100)continue;
       const parsed=validDate(year,month,day,week);
       if(!parsed)continue;
-      const line=text.slice(text.lastIndexOf('\n',match.index-1)+1, text.indexOf('\n',match.index)===-1?text.length:text.indexOf('\n',match.index)).trim().slice(0,180);
-      all.push({...parsed,source_quote:line || match[0],due_hint:dueHint.test(line),index:match.index});
+      // The era/year matcher starts with \\s*: a newline can be consumed BEFORE
+      // the actual date. Anchor evidence to the date token, not to that newline.
+      const dateIndex=match.index+match[0].search(/\S/);
+      const line=text.slice(text.lastIndexOf('\n',dateIndex-1)+1, text.indexOf('\n',dateIndex)===-1?text.length:text.indexOf('\n',dateIndex)).trim().slice(0,180);
+      all.push({...parsed,source_quote:line || match[0].trim(),due_hint:dueHint.test(line),index:dateIndex});
     }
   }
   return all.sort((a,b)=>a.index-b.index);
