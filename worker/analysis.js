@@ -291,14 +291,14 @@ export function medicalAppointmentTaskSuggestion(parsed,raw,{visibility='private
 }).format(new Date())}={}) {
   if(parsed?.category!=='medical'||!isConfirmedMedicalAppointment(raw))return null;
   const event=parsed.fields?.find(f=>f.field_key==='event_date'&&f.value_type==='date');
-  if(!event||!/^20\\d\\d-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])$/.test(event.normalized_value)||
+  if(!event||!/^20\d\d-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/.test(event.normalized_value)||
      event.normalized_value<today)return null;
   const text=String(raw||'').normalize('NFKC');
-  const clinic=/湘南美容クリニック[^\\r\\n]{0,18}?院/.exec(text)?.[0]||
-    /[^\\r\\n]{0,25}クリニック[^\\r\\n]{0,12}?院/.exec(text)?.[0]||
+  const clinic=/湘南美容クリニック[^\r\n]{0,18}?院/.exec(text)?.[0]||
+    /[^\r\n]{0,25}クリニック[^\r\n]{0,12}?院/.exec(text)?.[0]||
     '医疗机构';
   // Only the ARRIVAL time is used; never confuse 終了予定時刻 with the appointment.
-  const arrival=/(?:ご?来院(?:時刻|時間)|受付(?:時刻|時間)|予約時刻)[ \\t　]*[:：]?[ \\t　]*(?:([01]?\\d|2[0-3])):([0-5]\\d)/.exec(text);
+  const arrival=/(?:ご?来院(?:時刻|時間)|受付(?:時刻|時間)|予約時刻)[ \t　]*[:：]?[ \t　]*(?:([01]?\d|2[0-3])):([0-5]\d)/.exec(text);
   const time=arrival?String(Number(arrival[1])).padStart(2,'0')+':'+arrival[2]:'';
   return {task_type:'medical_appointment',date_field_key:'event_date',
     title:('到院预约｜'+clinic+(time?' '+time:'')).slice(0,120),
