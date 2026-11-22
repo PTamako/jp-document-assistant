@@ -193,12 +193,13 @@ export function validatedPayload(target,item,approved,body){
       source_kind:'document_assistant'};
   }
   if(target==='homeflow'){
-    const dateField=x.task_type==='delivery'?'event_date':'due_date';
+    const dateField=['delivery','medical_appointment'].includes(x.task_type)?'event_date':'due_date';
     const date=approved.get(dateField);
-    if(!validCivilDate(date)||date!==x.due_on)bad(dateField==='event_date'?'配送日期未经人工核验':'截止日期未经人工核验','REVIEW_REQUIRED',409);
-    if(x.task_type==='delivery'){
+    if(!validCivilDate(date)||date!==x.due_on)bad(dateField==='event_date'?'预约／配送日期未经人工核验':'截止日期未经人工核验','REVIEW_REQUIRED',409);
+    if(['delivery','medical_appointment'].includes(x.task_type)){
       const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-      if(date<today)bad('配送日期已过期，不允许创建过期配送待办','DELIVERY_DATE_PASSED',409);
+      if(date<today)bad(x.task_type==='delivery'?'配送日期已过期，不允许创建过期配送待办':'预约日期已过期，不允许创建过期预约待办',
+        x.task_type==='delivery'?'DELIVERY_DATE_PASSED':'APPOINTMENT_DATE_PASSED',409);
     }
     if(!['private','household'].includes(body.visibility))bad('任务可见性无效');
     // Only a deliberately confirmed task is shared. The source document,

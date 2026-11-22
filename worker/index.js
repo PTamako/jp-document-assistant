@@ -1,5 +1,5 @@
 import { randomToken, hashString, hmacHex, safeEqual, newCredential, checkPassword, parseCookie, cookieForSession, clearingCookie, sameOrigin, normalizedEmail, validatePassword, isoNow } from './security.js';
-import { parseJapaneseText,extractCampaignActionHints } from './analysis.js';
+import { parseJapaneseText,extractCampaignActionHints,medicalAppointmentTaskSuggestion } from './analysis.js';
 import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
 import {isSalaryDepositNotice} from './payment-notices.js';
 import { deliveryTaskSuggestion } from './delivery-task.js';
@@ -258,7 +258,9 @@ async function analyzeStored(env,doc,force=false){
   }
   const due=result.fields.find(f=>f.field_key==='due_date'&&!f.source_quote?.startsWith('年份自动补全'));
   const deliveryTask=deliveryTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
+  const appointmentTask=medicalAppointmentTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
   if(deliveryTask){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify(deliveryTask),now,now]);}
+  else if(appointmentTask){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify(appointmentTask),now,now]);}
   else if(due){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify({title:`确认：${doc.title.slice(0,40)}`,due_on:due.normalized_value,visibility:doc.visibility,requires_confirmation:true}),now,now]);}
   for(const v of result.vocabulary){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'vocabulary',JSON.stringify({term:v.term,reading:v.reading,meaning_zh:v.meaning_zh,language:'ja',source:'rules-v1',requires_privacy_review:true}),now,now]);}
   await batch(env.DB,stmts);

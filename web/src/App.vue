@@ -1781,7 +1781,7 @@ function todayReviewBadge(d){
   const reviewed=documentReviewLabel(d);
   return reviewed==='已核验'||reviewed==='部分核验'||reviewed==='待核验'?reviewed:due;
 }
-const labelFor=(key)=>current.value?.category==='campaign'&&key==='due_date'?'活动截止日期':current.value?.category==='campaign'&&key==='due_date_partial'?'原文活动期限（月日）':key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
+const labelFor=(key)=>current.value?.category==='medical'&&key==='event_date'?'预约／到院日期':current.value?.category==='campaign'&&key==='due_date'?'活动截止日期':current.value?.category==='campaign'&&key==='due_date_partial'?'原文活动期限（月日）':key==='amount_jpy'&&current.value?.category==='utility'?'本次请款金额（日元）':(fieldLabel[key]||key);
 const displayValue=(f)=>f.value_type==='money'&&!amountVisible.value?'••••••':f.normalized_value||'待确认';
 let aiStatusInterval=null,aiPolling=false;
 async function pollAiStatus(force=false){
