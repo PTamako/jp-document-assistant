@@ -99,7 +99,7 @@ export function extractCardPurchaseFields(raw){
 export function isCommerceOrder(raw){
  const t=norm(raw);
  return /(?:ご?注文(?:確認|内容|明細|番号|日)|お買(?:い)?上(?:げ)?金額)/.test(t)&&
-   /(?:注文金額合計|ご?注文合計(?:金額)?|お支払(?:い)?合計(?:金額)?|お支払(?:い)?金額|ご?注文(?:番号|明細)|お買(?:い)?上(?:げ)?金額)/.test(t);
+   /(?:注文金額合計|ご?注文合計(?:金額)?|お支払(?:い)?合計(?:金額)?|お支払(?:い)?金額|お支払(?:い)?方法|決済方法)/.test(t);
 }
 export function commerceOrderAmount(raw){
  if(!isCommerceOrder(raw))return null;
