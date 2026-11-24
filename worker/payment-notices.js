@@ -104,7 +104,11 @@ export function isCommerceOrder(raw){
 export function commerceOrderAmount(raw){
  if(!isCommerceOrder(raw))return null;
  const t=norm(raw);
- if(/(?:注文(?:を|が|の)?(?:キャンセル|取消|取り消し)(?:しました|されました|完了|済|となりました)|キャンセル(?:が|を)?(?:完了|承りました)|注文取消|返金(?:完了|しました|いたしました|されました)|返品(?:完了|受付完了)|決済(?:失敗|エラー|できません|できませんでした)|支払(?:い)?(?:失敗|未完了)|注文(?:未確定|失敗)|見積書|見積金額|カート(?:内|の中)|発送(?:完了|通知)|出荷(?:完了|通知))/.test(t))return null;
+ // A promised future shipping email is not a shipping-completed event.
+ // Remove only that narrowly scoped phrase; independent cancellation/refund/
+ // completed-shipment evidence elsewhere must still block a new expense.
+ const stateText=t.replace(/(?:発送|出荷)(?:完了|通知)の(?:メール|お知らせ)(?:を|は)[^\r\n。]{0,35}?(?:配信|送信|送付|お送り)(?:いたします|します|予定です|させていただきます)/g,'');
+ if(/(?:注文(?:を|が|の)?(?:キャンセル|取消|取り消し)(?:しました|されました|完了|済|となりました)|キャンセル(?:が|を)?(?:完了|承りました)|注文取消|返金(?:完了|しました|いたしました|されました)|返品(?:完了|受付完了)|決済(?:失敗|エラー|できません|できませんでした)|支払(?:い)?(?:失敗|未完了)|注文(?:未確定|失敗)|見積書|見積金額|カート(?:内|の中)|発送(?:完了|通知)|出荷(?:完了|通知))/.test(stateText))return null;
  if(!/(?:お支払(?:い)?方法|決済方法|お支払(?:い)?手段)/.test(t))return null;
  const lines=String(raw||'').split(/\r?\n/);
  const found=[];
@@ -125,6 +129,12 @@ export function extractCommerceFields(raw){
   const merchant=norm(matches[0]).trim().replace(merchantLabel,'').trim();
   if(merchant&&merchant.length<=100&&!/(?:請求|引落|返金|取消|チャージ)/.test(merchant))
    fields.push(fld('merchant','text',merchant,matches[0]));
+ }
+ // A store explicitly named in the order's own greeting is source evidence,
+ // not a guess from a sender address or product brand. Keep it unreviewed.
+ if(!fields.some(f=>f.field_key==='merchant')&&isCommerceOrder(raw)){
+  const greetings=lines.map(source=>({source,match:/^(?:この度は|このたびは)\s*(.{2,80}?(?:オンラインストア|オンラインショップ|公式通販サイト))\s*をご利用いただき(?:誠に)?ありがとうございます[。.]?$/.exec(norm(source).trim())})).filter(x=>x.match);
+  if(greetings.length===1)fields.push(fld('merchant','text',greetings[0].match[1],greetings[0].source));
  }
  const amount=commerceOrderAmount(raw);
  if(amount)fields.push(amount);

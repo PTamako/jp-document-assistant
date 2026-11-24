@@ -3417,3 +3417,31 @@ test('shopping notices without valid final charge evidence never propose a new e
  }
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
 });
+
+
+test('shopping order with future shipping-notification footer still produces net expense, but real shipment does not (#137)',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const text='この度はTESTオンラインストアをご利用いただきありがとうございます。\n'+shopping137+
+ '\n※当社配送センターから商品が出荷された日の19時頃に出荷完了のメールを配信いたします。\n※在庫切れが発生する場合がございます。この場合、ご注文はキャンセルとさせていただきます。';
+ async function create(source){
+  const r=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{title:'脱敏注文',text:source,source_type:'text',retention:'summary',ai_provider:'none'}});
+  assert.equal(r.response.status,201,JSON.stringify(r.data));return r.data.document_id;
+ }
+ const candidates=async id=>(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.filter(c=>c.candidate_kind==='finance');
+ const id=await create(text);
+ const initial=await candidates(id);
+ assert.equal(initial.length,1);
+ assert.equal(initial[0].payload.amount_jpy,9868);
+ assert.equal(initial[0].payload.merchant,'TESTオンラインストア');
+ // Existing order saved while the footer bug was active.
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='finance'").run(id);
+ env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=? AND field_key IN ('amount_jpy','merchant')").run(id);
+ const reparse=async()=>assert.equal((await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}})).response.status,200);
+ await reparse();const fixed=await candidates(id);
+ assert.equal(fixed.length,1);assert.equal(fixed[0].payload.amount_jpy,9868);
+ await reparse();assert.equal((await candidates(id))[0].id,fixed[0].id);
+ for(const status of ['出荷完了','発送完了','注文をキャンセルしました','返金完了']){
+   assert.equal((await candidates(await create(text+'\n'+status))).length,0,status);
+ }
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+});
