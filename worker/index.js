@@ -1,7 +1,7 @@
 import { randomToken, hashString, hmacHex, safeEqual, newCredential, checkPassword, parseCookie, cookieForSession, clearingCookie, sameOrigin, normalizedEmail, validatePassword, isoNow } from './security.js';
 import { parseJapaneseText,extractCampaignActionHints,medicalAppointmentTaskSuggestion } from './analysis.js';
 import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
-import {isSalaryDepositNotice} from './payment-notices.js';
+import {isSalaryDepositNotice,commerceOrderAmount} from './payment-notices.js';
 import { deliveryTaskSuggestion } from './delivery-task.js';
 import { json, failure, readJson, bad, validString } from './http.js';
 import { attachmentTrash, attachmentRestore, attachmentDelete, attachmentList } from './lifecycle.js';
@@ -244,11 +244,12 @@ async function analyzeStored(env,doc,force=false){
   ];
   for(const f of result.fields){stmts.push(['INSERT INTO document_fields(id,document_id,field_key,normalized_value,value_type,original_currency,source_quote,review_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',randomToken(16),doc.id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);}
   const amount=result.fields.find(f=>f.field_key==='net_salary'||f.field_key==='amount_jpy');
-  if(amount && !['bank','topup','travel','hotel','shopping','delivery','medical','policy','terms','manual','campaign'].includes(result.category)){
+  const orderAmount=result.category==='shopping'?commerceOrderAmount(doc.extracted_text_ja):null;
+  if(amount && (orderAmount?.normalized_value===amount.normalized_value || !['bank','topup','travel','hotel','shopping','delivery','medical','policy','terms','manual','campaign'].includes(result.category))){
     const merchant=result.fields.find(f=>f.field_key==='merchant');
     const kind=result.category==='salary'?'income':inferSbiInvestmentKind(merchant?.normalized_value)?'transfer':'expense';
     const stamp=result.fields.find(f=>['transaction_at','transaction_date'].includes(f.field_key));
-    const note=result.category==='card_spend'?'信用卡单笔消费通知，需核对卡片、交易状态及是否已记账':'必须人工确认实际到账/付款并防重';
+    const note=result.category==='shopping'?'购物订单金额（已扣除优惠）；请核对实际付款、支付卡片及是否已有信用卡消费记录，避免重复记账':result.category==='card_spend'?'信用卡单笔消费通知，需核对卡片、交易状态及是否已记账':'必须人工确认实际到账/付款并防重';
     stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'finance',
       JSON.stringify({kind,amount_jpy:Number(amount.normalized_value),currency:'JPY',payment_confirmed:false,category:result.category,
         transaction_date:stamp?.normalized_value?.slice(0,10)||null,
@@ -1068,7 +1069,7 @@ ELSE 'unreviewed' END review_status,
       // Add only previously missing fields: never overwrite approved/corrected/
       // rejected values, destroy candidates, or regenerate remote idempotency keys.
       const added=parsed.fields.filter(x=>!keys.has(x.field_key));
-      const nextCategory=doc.category==='other'||(doc.category==='bank'&&['card_spend','utility'].includes(parsed.category))?parsed.category:doc.category;
+      const nextCategory=doc.category==='other'||(doc.category==='bank'&&['card_spend','utility','shopping'].includes(parsed.category))||(doc.category==='delivery'&&parsed.category==='shopping')?parsed.category:doc.category;
       const nextVisibility=requiresPrivateDefault(nextCategory,doc.extracted_text_ja)?'private':doc.visibility;
       const manualSalary=existing.find(x=>x.field_key==='net_salary'&&x.review_state==='corrected'&&parsed.category==='salary');
       const explanation=manualSalary?parsed.explanation_zh+'\n金额说明：已根据银行明细人工填写工资金额，原文未提供此数额，请在字段中核对。':parsed.explanation_zh;
@@ -1078,20 +1079,31 @@ ELSE 'unreviewed' END review_status,
         randomToken(16),id,f.field_key,f.normalized_value,f.value_type,f.original_currency||null,f.source_quote,f.review_state,now]);
       // Legacy bank-labelled card/utility notices may receive one missing expense
       // candidate. Keep reviewed values and any existing sync/idempotency ID.
-      const invoiceAmount=['card_spend','utility'].includes(parsed.category)?parsed.fields.find(x=>x.field_key==='amount_jpy'):null;
+      const shoppingAmount=parsed.category==='shopping'&&nextCategory==='shopping'?commerceOrderAmount(doc.extracted_text_ja):null;
+      const invoiceAmount=shoppingAmount||(['card_spend','utility'].includes(parsed.category)?parsed.fields.find(x=>x.field_key==='amount_jpy'):null);
       const previousAmount=existing.find(x=>x.field_key==='amount_jpy');
-      const usableAmount=invoiceAmount&&(!previousAmount||(previousAmount.review_state!=='rejected'&&previousAmount.normalized_value===invoiceAmount.normalized_value));
+      // Old bank-classified orders may have a wrongly extracted subtotal. Only
+      // replace an unreviewed value when no finance candidate exists. This is
+      // guarded again inside the atomic batch, so concurrent review wins.
+      if(shoppingAmount&&previousAmount?.review_state==='unreviewed'&&previousAmount.normalized_value!==shoppingAmount.normalized_value){
+        statements.push([`UPDATE document_fields SET normalized_value=?,source_quote=?,updated_at=?
+          WHERE document_id=? AND field_key='amount_jpy' AND review_state='unreviewed' AND normalized_value=?
+          AND NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='finance')`,
+          shoppingAmount.normalized_value,shoppingAmount.source_quote,now,id,previousAmount.normalized_value,id]);
+      }
+      const usableAmount=invoiceAmount&&(!previousAmount||(previousAmount.review_state!=='rejected'&&(previousAmount.normalized_value===invoiceAmount.normalized_value||(shoppingAmount&&previousAmount.review_state==='unreviewed'))));
       if(usableAmount){
         const merchant=parsed.fields.find(x=>x.field_key==='merchant');
         const date=parsed.fields.find(x=>x.field_key==='transaction_at'||x.field_key==='transaction_date');
         statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
-          SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='finance')`,
+          SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='finance')
+          AND EXISTS (SELECT 1 FROM document_fields WHERE document_id=? AND field_key='amount_jpy' AND normalized_value=? AND review_state!='rejected')`,
           randomToken(16),id,'finance',JSON.stringify({kind:'expense',amount_jpy:Number(invoiceAmount.normalized_value),currency:'JPY',
             category:parsed.category,payment_confirmed:false,transaction_date:date?.normalized_value?.slice(0,10)||null,
             transaction_at:date?.value_type==='datetime'?date.normalized_value:null,
-            payment_source_hint:/Olive/i.test(doc.extracted_text_ja.normalize('NFKC'))?'Olive':null,
+            payment_source_hint:parsed.category==='card_spend'&&/Olive/i.test(doc.extracted_text_ja.normalize('NFKC'))?'Olive':null,
             merchant:merchant?.normalized_value||(parsed.category==='utility'?utilityLedgerLabel(doc.extracted_text_ja):null),
-            note:parsed.category==='utility'?'公共料金账单仅确认应缴金额，尚未证明实际扣款；优先同步为定期费用待确认草稿，避免重复支出':'信用卡消费通知，核对金额、卡片、是否已入账，避免与月度账单重复记账'}),now,now,id]);
+            note:parsed.category==='shopping'?'购物订单金额（已扣除优惠）；请核对实际付款、支付卡片及是否已有信用卡消费记录，避免重复记账':parsed.category==='utility'?'公共料金账单仅确认应缴金额，尚未证明实际扣款；优先同步为定期费用待确认草稿，避免重复支出':'信用卡消费通知，核对金额、卡片、是否已入账，避免与月度账单重复记账'}),now,now,id,id,invoiceAmount.normalized_value]);
       }
       // Backfill one missing *future* delivery suggestion for an old imported mail.
       // Do not recreate existing linked task IDs or override a rejected/corrected date.
