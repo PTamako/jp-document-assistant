@@ -3343,3 +3343,77 @@ test('shared PWA reader can request cached translation but never opens Google co
   assert.match(source,/else if\(!canManageCurrent\.value\)\{\s*\/\/ Shared viewers/);
   assert.match(source,/if\(!id\|\|!text\|\|!canManageCurrent\.value\|\|!translationConsent\.value\|\|translationBusy\.value\)return;/);
 });
+
+
+// Regression #137: anonymized shopping confirmation, no real ledger writes.
+const shopping137=[
+ '【ご注文日】2026年11月24日','【ご注文明細】',
+ '1. 商品A 価格：￥4,389 x 数量：1 = 合計：￥4,389',
+ '2. 商品B 価格：￥6,589 x 数量：1 = 合計：￥6,589',
+ '【お買上金額】','商品金額合計：￥10,978','送料：￥0',
+ 'ポイント等使用（値引き）：110ポイント','クーポン値引き総額:-￥1,000',
+ '注文金額合計：￥9,868','【お支払方法】クレジットカード','【管理コード】TEST-ORDER'
+].join('\n');
+test('shopping order net amount produces exactly one review-only finance proposal, including safe legacy repair (#137)',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const create=async text=>{
+   const r=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{title:'脱敏注文',text,source_type:'text',retention:'summary',ai_provider:'none'}});
+   assert.equal(r.response.status,201,JSON.stringify(r.data));return r.data.document_id;
+ };
+ const candidates=async id=>(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items.filter(c=>c.candidate_kind==='finance');
+ const detail=async id=>(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const reparse=async id=>assert.equal((await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}})).response.status,200);
+ const id=await create(shopping137);
+ const doc=await detail(id);
+ assert.equal(doc.category,'shopping');
+ assert.equal(doc.fields.find(f=>f.field_key==='amount_jpy').normalized_value,'9868');
+ assert.equal(doc.fields.find(f=>f.field_key==='transaction_date').normalized_value,'2026-11-24');
+ const initial=await candidates(id);
+ assert.equal(initial.length,1);
+ assert.equal(initial[0].payload.amount_jpy,9868);
+ assert.equal(initial[0].payload.transaction_date,'2026-11-24');
+ assert.equal(initial[0].payload.payment_confirmed,false);
+ assert.equal(initial[0].payload.payment_source_hint,null);
+ await reparse(id);
+ assert.equal((await candidates(id))[0].id,initial[0].id);
+ // Simulate old bank categorization and incorrectly extracted subtotal.
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='finance'").run(id);
+ env.DB.sql.prepare("UPDATE documents SET category='bank' WHERE id=?").run(id);
+ env.DB.sql.prepare("UPDATE document_fields SET normalized_value='10978' WHERE document_id=? AND field_key='amount_jpy'").run(id);
+ await reparse(id);
+ const fixed=await candidates(id);
+ assert.equal(fixed.length,1);
+ assert.equal(fixed[0].payload.amount_jpy,9868);
+ assert.equal((await detail(id)).fields.find(f=>f.field_key==='amount_jpy').normalized_value,'9868');
+ await reparse(id);
+ assert.equal((await candidates(id))[0].id,fixed[0].id);
+ // An explicitly reviewed conflicting amount is never overwritten or auto-proposed.
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=? AND candidate_kind='finance'").run(id);
+ env.DB.sql.prepare("UPDATE document_fields SET normalized_value='10978',review_state='confirmed' WHERE document_id=? AND field_key='amount_jpy'").run(id);
+ await reparse(id);
+ assert.equal((await detail(id)).fields.find(f=>f.field_key==='amount_jpy').normalized_value,'10978');
+ assert.equal((await candidates(id)).length,0);
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+});
+test('shopping notices without valid final charge evidence never propose a new expense (#137)',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ for(const text of [
+   shopping137.replace('注文金額合計：￥9,868',''),
+   shopping137+'\n注文金額合計：￥8,000',
+   shopping137+'\n注文をキャンセルしました',
+   shopping137+'\n返金完了',
+   shopping137+'\n決済失敗',
+   shopping137+'\n発送完了',
+   shopping137+'\nカート内の商品',
+   shopping137.replace('【お支払方法】クレジットカード','')
+ ]){
+   const r=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{title:'脱敏非支出通知',text,source_type:'text',retention:'summary',ai_provider:'none'}});
+   assert.equal(r.response.status,201,JSON.stringify(r.data));
+   const id=r.data.document_id;
+   const list=async()=>(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+   assert.equal((await list()).some(c=>c.candidate_kind==='finance'),false,text);
+   assert.equal((await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}})).response.status,200);
+   assert.equal((await list()).some(c=>c.candidate_kind==='finance'),false,text);
+ }
+ assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+});
