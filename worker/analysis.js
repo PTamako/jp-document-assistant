@@ -1,6 +1,6 @@
 import { explainNotice } from './notice-context.js';
 import { chineseExplanation } from '../web/src/chinese-explanation.js';
-import {isSalaryDepositNotice,isCardPurchaseNotice,extractCardPurchaseFields,extractSalaryDepositFields,extractCommerceFields} from './payment-notices.js';
+import {isSalaryDepositNotice,isCardPurchaseNotice,extractCardPurchaseFields,extractSalaryDepositFields,extractCommerceFields,isCommerceOrder} from './payment-notices.js';
 // Safe, deterministic Japanese document pre-analysis. This is NOT OCR or a generative translation.
 const gloss = [
   ['納付期限', '缴纳期限', 'のうふきげん'],
@@ -40,6 +40,8 @@ export function classifyText(text) {
   // A utility bill mentioning a credit card, payment date, or ご請求額 is
   // still a utility invoice, not an independent bank/card transaction.
   if (/(電気料金|ガス料金|水道料金|電力使用量|検針期間)/.test(text)) return 'utility';
+  // A shopping order mentioning its credit-card payment method is not a bank statement.
+  if (isCommerceOrder(text)) return 'shopping';
   if (/(?:口座引[き]?落[とし]?|口座振替|引落(?:し)?(?:予定日|金額|額))/.test(text)) return 'bank';
   if (/(?:お届け予定日時|配達予定日|配送予定日|お荷物のお届け)/.test(text)) return 'delivery';
   if (/(給与明細|差引支給|支給総額|賞与明細)/.test(text)) return 'salary';
@@ -337,6 +339,7 @@ export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   if(!due && fields.some(f=>f.field_key==='due_date_partial'))issues.push('原文仅有月日：已暂按日本当前年份补全，年份须人工确认后才能创建正式待办');
   for(const {key,re} of priority){
     if(fields.some(f=>f.field_key===key))continue; // Prioritize explicitly labelled amounts and prevent duplicates.
+    if(category==='shopping' && isCommerceOrder(text) && key==='amount_jpy')continue; // Never substitute subtotal, discount or item price for a missing/ambiguous final amount.
     if(category==='topup' && key==='amount_jpy')continue; // No payment or income inference from a top-up.
     re.lastIndex=0;
     const m=re.exec(text);
