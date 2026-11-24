@@ -19,7 +19,7 @@ const fld=(field_key,value_type,normalized_value,source_quote)=>({
 const extractStamp=(raw,kind)=>{
  const lines=String(raw||'').split(/\r?\n/);
  const marker=kind==='deposit'?/(?:入金日時|お振込日時|振込日時)/:
-  /(?:ご利用日時|利用日時|利用日(?:時)?|取引日時|購入日時|注文日時|決済日時|お買(?:い)?上げ日時|購入日|決済日)/;
+  /(?:ご利用日時|利用日時|利用日(?:時)?|取引日時|購入日時|注文日時|決済日時|お買(?:い)?上げ日時|購入日|決済日|ご?注文日)/;
  const found=lines.findIndex(line=>marker.test(norm(line)));
  if(found<0)return null;
  const source=lines[found];
@@ -95,6 +95,27 @@ export function extractCardPurchaseFields(raw){
 }
 // Explicit source labels on shopping orders and receipts. No merchant guess
 // from the email sender, document title, opening hours, or nearby addresses.
+// Order confirmation is evidence for a *draft*, not proof of a completed charge.
+export function isCommerceOrder(raw){
+ const t=norm(raw);
+ return /(?:ご?注文(?:確認|内容|明細|番号|日)|お買(?:い)?上(?:げ)?金額)/.test(t)&&
+   /(?:注文金額合計|ご?注文合計(?:金額)?|お支払(?:い)?合計(?:金額)?|お支払(?:い)?金額|ご?注文(?:番号|明細)|お買(?:い)?上(?:げ)?金額)/.test(t);
+}
+export function commerceOrderAmount(raw){
+ if(!isCommerceOrder(raw))return null;
+ const t=norm(raw);
+ if(/(?:注文(?:を|が|の)?(?:キャンセル|取消|取り消し)(?:しました|されました|完了|済|となりました)|キャンセル(?:が|を)?(?:完了|承りました)|注文取消|返金(?:完了|しました|いたしました|されました)|返品(?:完了|受付完了)|決済(?:失敗|エラー|できません|できませんでした)|支払(?:い)?(?:失敗|未完了)|注文(?:未確定|失敗)|見積書|見積金額|カート(?:内|の中)|発送(?:完了|通知)|出荷(?:完了|通知))/.test(t))return null;
+ if(!/(?:お支払(?:い)?方法|決済方法|お支払(?:い)?手段)/.test(t))return null;
+ const lines=String(raw||'').split(/\r?\n/);
+ const found=[];
+ for(const source of lines){
+   const line=norm(source).trim();
+   const match=/^[【\[■□◆◇\s]*(?:注文金額合計|ご?注文合計(?:金額)?|お支払(?:い)?合計(?:金額)?|お支払(?:い)?金額)[】\]\s]*[:：]?\s*(?:¥\s*)?([0-9][0-9,]{0,14})\s*円?\s*$/.exec(line);
+   if(match){const value=money(match[1]);if(value)found.push({value,source});}
+ }
+ if(!found.length||new Set(found.map(x=>x.value)).size!==1)return null;
+ return fld('amount_jpy','money',found[0].value,found[0].source);
+}
 export function extractCommerceFields(raw){
  const lines=String(raw||'').split(/\r?\n/);
  const merchantLabel=/^[◇◆■□\s]*(?:ご利用先|利用店舗|購入店舗|販売店|販売元|加盟店(?:名)?|店舗名|ショップ名|購入先)\s*[:：]\s*/;
@@ -105,6 +126,8 @@ export function extractCommerceFields(raw){
   if(merchant&&merchant.length<=100&&!/(?:請求|引落|返金|取消|チャージ)/.test(merchant))
    fields.push(fld('merchant','text',merchant,matches[0]));
  }
+ const amount=commerceOrderAmount(raw);
+ if(amount)fields.push(amount);
  const stamp=extractStamp(raw,'commerce');
  if(stamp)fields.push(stamp);
  return fields;
