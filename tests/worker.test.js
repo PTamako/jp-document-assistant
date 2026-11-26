@@ -15,7 +15,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql','0019_document_translation_cache.sql','0020_homeflow_identity_links.sql','0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql','0027_gemini_expanded_quota.sql','0028_document_translation_jobs.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql','0019_document_translation_cache.sql','0020_homeflow_identity_links.sql','0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql','0023_document_member_sync_intents.sql','0024_document_execution_reservation.sql','0025_document_task_execution_reservation.sql','0026_document_study_execution_reservation.sql','0027_gemini_expanded_quota.sql','0028_document_translation_jobs.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -348,7 +348,7 @@ test('selected Cloudflare AI analyzes a source once and caches grounded study ca
  }});
  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
  assert.equal(imported.data.ai_status,'queued');
- // HTTP import only queues the slow Qwen request; minute Cron owns execution.
+ // HTTP import only queues the slow Qwen request; five-minute Cron owns execution.
  assert.equal(calls,0);
  const waiting=[];
  await app.scheduled({},env,{waitUntil:p=>waiting.push(p)});
