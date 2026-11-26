@@ -15,7 +15,7 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const root = new URL('../', import.meta.url);
 function d1() {
   const sql=new DatabaseSync(':memory:');
-  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql','0019_document_translation_cache.sql','0020_homeflow_identity_links.sql','0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql','0027_gemini_expanded_quota.sql','0028_document_translation_jobs.sql']){
+  for (const migration of ['0001_init.sql','0002_indexes.sql','0003_password_auth.sql','0004_organize.sql','0005_single_household.sql','0006_document_version.sql','0007_ocr_attempts.sql','0008_bridge_fingerprint.sql','0009_calendar_subscriptions.sql','0010_ocr_utc_budget.sql','0011_document_ai_provider.sql','0012_document_ai_analysis.sql','0013_google_oauth_grants.sql','0014_google_browser_redirect.sql','0015_ocr_space_utc_budget.sql','0016_gemini_daily_budget.sql','0017_google_oauth_callback_error.sql','0018_document_ai_jobs.sql','0019_document_translation_cache.sql','0020_homeflow_identity_links.sql','0021_homeflow_sso_pending.sql','0022_homeflow_session_proofs.sql','0023_document_member_sync_intents.sql','0024_document_execution_reservation.sql','0025_document_task_execution_reservation.sql','0026_document_study_execution_reservation.sql','0027_gemini_expanded_quota.sql','0028_document_translation_jobs.sql']){
     sql.exec(fs.readFileSync(new URL(`migrations/${migration}`,root),'utf8'));
   }
   const wrap = statement => ({
@@ -348,7 +348,7 @@ test('selected Cloudflare AI analyzes a source once and caches grounded study ca
  }});
  assert.equal(imported.response.status,201,JSON.stringify(imported.data));
  assert.equal(imported.data.ai_status,'queued');
- // HTTP import only queues the slow Qwen request; minute Cron owns execution.
+ // HTTP import only queues the slow Qwen request; five-minute Cron owns execution.
  assert.equal(calls,0);
  const waiting=[];
  await app.scheduled({},env,{waitUntil:p=>waiting.push(p)});
@@ -3444,4 +3444,25 @@ test('shopping order with future shipping-notification footer still produces net
    assert.equal((await candidates(await create(text+'\n'+status))).length,0,status);
  }
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
+});
+
+test('approval history blocks permanent delete before R2 is touched',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const f=new FormData();
+ f.append('file',new File([new Uint8Array([255,216,255,224,1,2,3,4])],'protected.jpg',{type:'image/jpeg'}));
+ f.append('retention','original');
+ const imported=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:f});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id,doc=env.DB.sql.prepare('SELECT * FROM documents WHERE id=?').get(id);
+ const now=new Date().toISOString();
+ env.DB.sql.prepare("INSERT INTO homeflow_identity_links(homeflow_user_id,homeflow_household_id,local_user_id,verified_at) VALUES(?,?,?,?)").run('hf-owner','hf-family',doc.owner_id,now);
+ env.DB.sql.prepare("INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)").run('approval-test-candidate',id,'finance','{}',now,now);
+ env.DB.sql.prepare("INSERT INTO document_member_sync_intents(candidate_id,document_id,local_user_id,homeflow_user_id,homeflow_household_id,target_app,candidate_kind,document_version,candidate_updated_at,payload_sha256,payload_cipher,payload_iv,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run('approval-test-candidate',id,doc.owner_id,'hf-owner','hf-family','kakebo','finance',doc.version,now,'a'.repeat(64),'cipher','iv',now,now);
+ assert.equal((await req(env,'/api/documents/'+id+'/trash',{method:'POST',...auth(owner),data:{}})).response.status,200);
+ const denied=await req(env,'/api/documents/'+id+'/permanent-delete',{method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(denied.response.status,409,JSON.stringify(denied.data));
+ assert.equal(denied.data.code,'APPROVAL_HISTORY_LOCKED');
+ assert.equal(env._blobs.size,1);
+ assert.equal(env.DB.sql.prepare('SELECT lifecycle FROM documents WHERE id=?').get(id).lifecycle,'trashed');
+ assert.equal((await req(env,'/api/documents/'+id+'/restore',{method:'POST',...auth(owner),data:{}})).response.status,200);
 });

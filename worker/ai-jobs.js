@@ -58,11 +58,11 @@ export async function getDocumentAiJob(db,id,doc=null){
   return {state:job.state,attempts:job.attempts,next_attempt_at:job.next_attempt_at,last_error:job.last_error};
 }
 
-async function finish(db,id,attempts,sourceSha,state,error=null,at=isoNow()){
+async function finish(db,id,job,state,error=null,at=isoNow()){
   await run(db,`UPDATE document_ai_jobs SET state=?,next_attempt_at=?,last_error=?,updated_at=?
-    WHERE document_id=? AND attempts=? AND source_sha=?
-      AND (state='running' OR (state='failed' AND last_error='processing_timeout_unconfirmed' AND ?='done'))`,
-    state,at,error,isoNow(),id,attempts,sourceSha,state);
+    WHERE document_id=? AND attempts=? AND source_sha=? AND provider=? AND started_at=?
+      AND state='running'`,
+    state,at,error,isoNow(),id,job.attempts,job.source_sha,job.provider,job.started_at);
 }
 
 export async function processDocumentAiJob(env,id){
@@ -75,11 +75,12 @@ export async function processDocumentAiJob(env,id){
        AND next_attempt_at<=?`,now,now,id,now);
     if(claim.meta?.changes!==1)return {ai_status:'in_progress'};
     const job=await get(env.DB,'SELECT * FROM document_ai_jobs WHERE document_id=?',id);
+    if(!job||job.state!=='running'||job.started_at!==now)return {ai_status:'in_progress'};
     const doc=await get(env.DB,`SELECT id,category,household_id,visibility,ai_provider,ai_consent_at,extracted_text_ja
        FROM documents WHERE id=? AND lifecycle='active'`,id);
     if(!doc||doc.ai_provider!==job.provider||!doc.extracted_text_ja||
        await hashString(doc.extracted_text_ja)!==job.source_sha){
-      await finish(env.DB,id,job.attempts,job.source_sha,'failed','stale_or_deleted');
+      await finish(env.DB,id,job,'failed','stale_or_deleted');
       return {ai_status:'stale_or_deleted'};
     }
     let result;
@@ -91,19 +92,22 @@ export async function processDocumentAiJob(env,id){
       // Release a pending analysis for an explicit user retry; a late valid
       // provider completion still wins because its persisted success is authoritative.
       await run(env.DB,`UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=?
-        WHERE document_id=? AND source_sha=? AND state='pending'`,
-        JSON.stringify({failure_code:status}),isoNow(),id,job.source_sha);
+        WHERE document_id=? AND source_sha=? AND provider=? AND state='pending'
+        AND EXISTS (SELECT 1 FROM document_ai_jobs j WHERE j.document_id=? AND j.provider=? AND j.source_sha=?
+          AND j.state='running' AND j.attempts=? AND j.started_at=?)`,
+        JSON.stringify({failure_code:status}),isoNow(),id,job.source_sha,job.provider,
+        id,job.provider,job.source_sha,job.attempts,job.started_at);
     }
     if(finalStates.has(status)){
-      await finish(env.DB,id,job.attempts,job.source_sha,'done');
+      await finish(env.DB,id,job,'done');
     }else if(retryable.has(status)&&job.attempts<MAX_AUTO_ATTEMPTS){
       const jitter=Math.floor(Math.random()*15000);
       const delay=status==='gemini_retry_cooldown'
         ?Math.max(RETRY_BASE_MS,(result.retry_after_seconds||60)*1000):RETRY_BASE_MS;
-      await finish(env.DB,id,job.attempts,job.source_sha,'retry_wait',status,
+      await finish(env.DB,id,job,'retry_wait',status,
         new Date(Date.now()+delay+jitter).toISOString());
     }else{
-      await finish(env.DB,id,job.attempts,job.source_sha,'failed',status);
+      await finish(env.DB,id,job,'failed',status);
     }
     return result;
   }finally{active.delete(id);}

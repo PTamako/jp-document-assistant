@@ -229,6 +229,8 @@ async function analyzeStored(env,doc,force=false){
   const emitted=await dbFirst(env.DB,`SELECT COUNT(*) count FROM integration_links
     WHERE candidate_id IN (SELECT id FROM action_candidates WHERE document_id=?)
       AND attempt_count>0`,doc.id);
+  const approvalHistory=await dbFirst(env.DB,'SELECT 1 AS linked FROM document_member_sync_intents WHERE document_id=? LIMIT 1',doc.id);
+  if(approvalHistory)bad('已存在审批快照，不能重新生成候选','APPROVAL_HISTORY_LOCKED',409);
   if(Number(emitted?.count||0)>0)
     bad('已尝试过跨应用联动，重新解析会更换候选幂等键；请保留已同步记录','INTEGRATION_HISTORY_LOCKED',409);
   if(!doc.extracted_text_ja)bad('尚无可处理的日文文字。图片 OCR 未接入，请先粘贴文字','OCR_NOT_READY',422);
@@ -577,7 +579,23 @@ async function permanentlyDelete(env,p,id){
     bad('文书不存在或无权删除','NOT_FOUND',404);
   }
   if(!['trashed','deletion_pending'].includes(doc.lifecycle))bad('请先将文书移入回收站','TRASH_FIRST',409);
-  if(doc.lifecycle!=='deletion_pending')await dbRun(env.DB,"UPDATE documents SET lifecycle='deletion_pending',deletion_started_at=?,updated_at=? WHERE id=?",isoNow(),isoNow(),id);
+  // Reserve deletion before touching R2. Keep approval snapshots and execution
+  // receipts intact: their RESTRICT foreign keys deliberately protect history.
+  const linked=await dbFirst(env.DB, `SELECT 1 AS linked FROM document_member_sync_intents WHERE document_id=?
+    UNION ALL SELECT 1 FROM document_member_execution_reservations WHERE document_id=?
+    UNION ALL SELECT 1 FROM document_task_execution_reservations WHERE document_id=?
+    UNION ALL SELECT 1 FROM document_study_execution_reservations WHERE document_id=? LIMIT 1`,id,id,id,id);
+  if(linked)bad('文书关联家庭审批或执行记录，不能永久删除；可保留在回收站','APPROVAL_HISTORY_LOCKED',409);
+  const deletionAt=isoNow();
+  const claimed=await dbRun(env.DB,`UPDATE documents SET lifecycle='deletion_pending',
+    deletion_started_at=COALESCE(deletion_started_at,?),updated_at=?,version=version+1
+    WHERE id=? AND owner_id=? AND lifecycle IN ('trashed','deletion_pending')
+      AND NOT EXISTS (SELECT 1 FROM document_member_sync_intents WHERE document_id=?)
+      AND NOT EXISTS (SELECT 1 FROM document_member_execution_reservations WHERE document_id=?)
+      AND NOT EXISTS (SELECT 1 FROM document_task_execution_reservations WHERE document_id=?)
+      AND NOT EXISTS (SELECT 1 FROM document_study_execution_reservations WHERE document_id=?)`,
+    deletionAt,deletionAt,id,p.user_id,id,id,id,id);
+  if(claimed.meta?.changes!==1)bad('文书状态或审批记录已变化，请刷新后重试','VERSION_CONFLICT',409);
   const attachments=await dbAll(env.DB,'SELECT object_id FROM attachments WHERE document_id=? AND object_id IS NOT NULL',id);
   const ids=[...new Set(attachments.map(x=>x.object_id))];
   const clearObjects=[];
