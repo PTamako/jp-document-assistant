@@ -308,10 +308,13 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  }
  const now=isoNow();
  const claim=old?
-  await run(env.DB,"UPDATE document_ai_analyses SET provider=?,source_sha=?,model_id=?,prompt_version=?,state='pending',result_json=NULL,updated_at=? WHERE document_id=? AND updated_at=? AND (state!='pending' OR updated_at<?)",
-   provider,sourceHash,model,PROMPT,now,doc.id,old.updated_at,new Date(Date.now()-120000).toISOString()):
-  await run(env.DB,"INSERT OR IGNORE INTO document_ai_analyses(document_id,provider,source_sha,model_id,prompt_version,state,updated_at) VALUES(?,?,?,?,?,'pending',?)",
-   doc.id,provider,sourceHash,model,PROMPT,now);
+  await run(env.DB,`UPDATE document_ai_analyses SET provider=?,source_sha=?,model_id=?,prompt_version=?,state='pending',result_json=NULL,updated_at=?
+   WHERE document_id=? AND updated_at=? AND (state!='pending' OR updated_at<? OR provider<>? OR source_sha<>?)
+   AND EXISTS (SELECT 1 FROM documents d WHERE d.id=? AND d.lifecycle='active' AND d.ai_provider=? AND d.extracted_text_ja=?)`,
+   provider,sourceHash,model,PROMPT,now,doc.id,old.updated_at,new Date(Date.now()-120000).toISOString(),provider,sourceHash,doc.id,provider,source):
+  await run(env.DB,`INSERT OR IGNORE INTO document_ai_analyses(document_id,provider,source_sha,model_id,prompt_version,state,updated_at)
+   SELECT ?,?,?,?,?,'pending',? WHERE EXISTS (SELECT 1 FROM documents d WHERE d.id=? AND d.lifecycle='active' AND d.ai_provider=? AND d.extracted_text_ja=?)`,
+   doc.id,provider,sourceHash,model,PROMPT,now,doc.id,provider,source);
  if(claim.meta?.changes!==1)return {ai_status:'in_progress'};
  // A provider switch or fresh claim must not allow an old request to write
  // over its replacement. Fence all terminal writes with the claim timestamp.
