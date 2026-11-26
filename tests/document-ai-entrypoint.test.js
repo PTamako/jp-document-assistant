@@ -49,7 +49,7 @@ test('rule-based re-extraction is named and displayed only on the field tab',()=
 });
 
 // Regression: the slow Workers AI call must never start in an HTTP waitUntil.
-test('Workers AI background jobs are claimed by the minute Cron and capped',()=>{
+test('Workers AI background jobs are claimed by the five-minute Cron and capped',()=>{
  const entry=readFileSync(new URL('../worker/index.js',import.meta.url),'utf8');
  const jobs=readFileSync(new URL('../worker/ai-jobs.js',import.meta.url),'utf8');
  const config=readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8');
@@ -57,5 +57,5 @@ test('Workers AI background jobs are claimed by the minute Cron and capped',()=>
  assert.match(jobs,/const WORKERS_AI_TIMEOUT_MS=100000/);
  assert.match(jobs,/boundedAnalysis\(env,doc,job\.provider\)/);
  assert.match(jobs,/failure_code:status/);
- assert.match(config,/"crons": \["\* \* \* \* \*"\]/);
+ assert.match(config,/"crons": \["\*\/5 \* \* \* \*"\]/);
 });
