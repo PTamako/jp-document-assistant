@@ -15,7 +15,7 @@
 - OCR.space 已加入失败后五分钟冷却、同一原件最多一次明确重试、D1 原子抢占与每日预算保护；成功结果命中缓存时不重复调用。失败不自动重试。
 - Google Drive 为全盘**只读搜索权限**（`drive.readonly`），而不是 Picker 的 `drive.file`；仅用户点击导入时才读取指定文件，不做后台全盘镜像。用户需理解授权范围。
 - 旧 OPUS-MT 大模型中转 API 已从正在运行的 Worker 路由移除，不再提供手机端下载路径；历史本地模型源文件暂保留供测试与迁移参考。
-- AI 中文解读使用 D1 持久队列，Google 503 最多自动重试 1 次；同一正式 Worker 使用**每 15 分钟** Cron 兜底恢复中断任务，导入时仍通过 `waitUntil` 立即触发处理。疑似超时且结果不明的 AI 请求不会自动重发。不创建 Preview 资源。
+- AI 中文解读使用 D1 持久队列，Google 503 最多自动重试 1 次；同一正式 Worker 使用**每 5 分钟** Cron 兜底恢复中断任务，Gemini 导入时仍通过 `waitUntil` 立即触发处理，Workers AI 由 Cron 调度。疑似超时且结果不明的 AI 请求不会自动重发。不创建 Preview 资源。
 - GitHub PR CI 运行 JavaScript 语法、Node 单元测试、Python/D1 测试及前端构建；当前账户未配置此项目的 Cloudflare Builds 触发器；`main` 合并不等于上线，正式发布须采用现有 Wrangler 手动流程并核实 Cloudflare Worker 版本。持续集成不触及生产文书或真实账务。
 - 新版正式静态文件由 Cloudflare Workers Static Assets 直接提供，除 `/api/*` 与专用 OCR worker-entry 外无需运行 Worker；由 `web/public/_headers` 保留原先的安全 CSP、X-Frame-Options 等响应头。成功与失败的动态 API 响应统一应用防护响应头，健康接口显示 Worker 实际版本 ID。
 - Cloudflare 当前资源配置见 [wrangler.jsonc](wrangler.jsonc)；使用 1% 采样的 Workers Observability，关闭 invocation logs 并对请求 URL 查询参数执行脱敏（日志容量及费用须持续审查）。业务代码合并到 `main` 后需明确执行正式发布并验证版本；不可仅凭仓库提交认定已上线。PR CI 只做检查、测试、构建，不接触生产数据库、不创建 Preview。
