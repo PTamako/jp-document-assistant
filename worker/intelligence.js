@@ -238,8 +238,11 @@ async function addStudyCandidates(env,doc,result){
   for(const item of result[kind==='vocabulary'?'vocabulary':'sentences']){
    const key=kind+':'+(item.term||item.sentence);
    if(seen.has(key))continue;seen.add(key);
-   await run(env.DB,'INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',
-    randomToken(16),doc.id,kind,JSON.stringify(item),now,now);
+   await run(env.DB,`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
+    SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM documents d WHERE d.id=? AND d.lifecycle='active' AND d.ai_provider=? AND d.extracted_text_ja=?)
+    AND NOT EXISTS (SELECT 1 FROM action_candidates c WHERE c.document_id=? AND c.candidate_kind=?
+      AND COALESCE(json_extract(c.payload_json,'$.term'),json_extract(c.payload_json,'$.sentence'))=?)`,
+    randomToken(16),doc.id,kind,JSON.stringify(item),now,now,doc.id,doc.ai_provider,doc.extracted_text_ja,doc.id,kind,item.term||item.sentence);
   }
  }
 }
@@ -252,11 +255,21 @@ async function addGroundedFieldSuggestions(env,doc,result){
    const inserted=await run(env.DB,`INSERT INTO document_fields
      (id,document_id,field_key,normalized_value,value_type,source_quote,review_state,updated_at)
      SELECT ?,?,?,?,?,?,'unreviewed',?
-     WHERE NOT EXISTS (SELECT 1 FROM document_fields WHERE document_id=? AND field_key=?)`,
-     randomToken(16),doc.id,item.field_key,item.normalized_value,'text',item.source_quote,now,doc.id,item.field_key);
+     WHERE NOT EXISTS (SELECT 1 FROM document_fields WHERE document_id=? AND field_key=?)
+     AND EXISTS (SELECT 1 FROM documents d WHERE d.id=? AND d.lifecycle='active' AND d.ai_provider=? AND d.extracted_text_ja=?)`,
+     randomToken(16),doc.id,item.field_key,item.normalized_value,'text',item.source_quote,now,doc.id,item.field_key,doc.id,doc.ai_provider,doc.extracted_text_ja);
    if(inserted.meta?.changes===1){keys.add(item.field_key);added++;}
  }
  return added;
+}
+// Derived suggestions can be recovered from a successful cached result.
+// Never convert a successfully paid inference into a failed inference merely
+// because a later candidate/field write failed.
+async function persistDerivedSuggestions(env,doc,result,status){
+ let added_fields=0,derived_pending=false;
+ try{await addStudyCandidates(env,doc,result);}catch{derived_pending=true;}
+ try{added_fields=await addGroundedFieldSuggestions(env,doc,result);}catch{derived_pending=true;}
+ return {ai_status:status,result,added_fields,derived_pending};
 }
 export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  const provider=doc.ai_provider||'none';
@@ -283,8 +296,7 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
  if(old?.provider===provider&&old?.source_sha===sourceHash&&old?.model_id===model&&SUCCESS_PROMPT_VERSIONS.has(old?.prompt_version)){
   if(old.state==='success'){
    const result=JSON.parse(old.result_json);
-   const added_fields=await addGroundedFieldSuggestions(env,doc,result);
-   return {ai_status:'cached',result,added_fields};
+   return persistDerivedSuggestions(env,doc,result,'cached');
   }
   const delta=Date.now()-Date.parse(old.updated_at);
   if(Number.isFinite(delta)&&delta<3600000&&provider!=='gemini'&&old.prompt_version===PROMPT&&old.state==='failed')return {ai_status:'cooldown'};
@@ -301,30 +313,33 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
   await run(env.DB,"INSERT OR IGNORE INTO document_ai_analyses(document_id,provider,source_sha,model_id,prompt_version,state,updated_at) VALUES(?,?,?,?,?,'pending',?)",
    doc.id,provider,sourceHash,model,PROMPT,now);
  if(claim.meta?.changes!==1)return {ai_status:'in_progress'};
+ // A provider switch or fresh claim must not allow an old request to write
+ // over its replacement. Fence all terminal writes with the claim timestamp.
+ const claimWhere="document_id=? AND provider=? AND source_sha=? AND model_id=? AND prompt_version=? AND updated_at=? AND state='pending'";
+ const claimArgs=[doc.id,provider,sourceHash,model,PROMPT,now];
+ const failClaim=(code)=>run(env.DB,`UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=? WHERE ${claimWhere}`,JSON.stringify({failure_code:code}),isoNow(),...claimArgs);
  // Gemini daily quota belongs to the Google project's Pacific calendar day;
  // both household members share the same atomic D1 counter.
  if(provider==='gemini'){
   let quota;
   try{quota=await reserveGeminiRequest(env.DB);}catch{
-   try{await run(env.DB,"UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=? WHERE document_id=? AND source_sha=?",
-    JSON.stringify({failure_code:'gemini_budget_unavailable'}),isoNow(),doc.id,sourceHash);}catch{}
+   try{await failClaim('gemini_budget_unavailable');}catch{}
    return {ai_status:'gemini_budget_unavailable'};
   }
   if(!quota.allowed){
-   await run(env.DB,"UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=? WHERE document_id=? AND source_sha=?",
-    JSON.stringify({failure_code:quota.code}),isoNow(),doc.id,sourceHash);
+   await failClaim(quota.code);
    return {ai_status:quota.code};
   }
  }
  // Cloudflare Workers AI keeps its independent 5/day cap.
  if(provider==='cloudflare'){
   const n=Number(env.AI_ANALYSIS_DAILY_LIMIT??5),limit=Number.isSafeInteger(n)?Math.max(0,Math.min(5,n)):0;
-  if(!limit){await run(env.DB,"UPDATE document_ai_analyses SET state='failed',updated_at=? WHERE document_id=?",isoNow(),doc.id);return {ai_status:'budget_disabled'};}
+  if(!limit){await failClaim('budget_disabled');return {ai_status:'budget_disabled'};}
   const day=new Date().toISOString().slice(0,10);
   await run(env.DB,'INSERT OR IGNORE INTO ai_analysis_daily(day_utc) VALUES(?)',day);
   const allowed=await run(env.DB,'UPDATE ai_analysis_daily SET calls=calls+1 WHERE day_utc=? AND calls<?',day,limit);
   if(allowed.meta?.changes!==1){
-   await run(env.DB,"UPDATE document_ai_analyses SET state='failed',updated_at=? WHERE document_id=?",isoNow(),doc.id);
+   await failClaim('budget_exhausted');
    return {ai_status:'budget_exhausted'};
   }
  }
@@ -334,18 +349,17 @@ export async function analyzeDocumentAi(env,doc,{sensitive=false}={}){
   const current=await first(env.DB,"SELECT extracted_text_ja,ai_provider,lifecycle FROM documents WHERE id=?",doc.id);
   if(!current||current.lifecycle!=='active'||current.ai_provider!==provider||
      await hashString(current.extracted_text_ja||'')!==sourceHash)return {ai_status:'stale_document'};
-  await run(env.DB,"UPDATE document_ai_analyses SET state='success',result_json=?,updated_at=? WHERE document_id=? AND provider=? AND source_sha=?",
-   JSON.stringify(result),isoNow(),doc.id,provider,sourceHash);
-  await addStudyCandidates(env,doc,result);
-  const added_fields=await addGroundedFieldSuggestions(env,doc,result);
-  return {ai_status:'success',result,added_fields};
+  const saved=await run(env.DB,`UPDATE document_ai_analyses SET state='success',result_json=?,updated_at=? WHERE ${claimWhere}
+    AND EXISTS (SELECT 1 FROM documents d WHERE d.id=? AND d.lifecycle='active' AND d.ai_provider=? AND d.extracted_text_ja=?)`,
+    JSON.stringify(result),isoNow(),...claimArgs,doc.id,provider,source);
+  if(saved.meta?.changes!==1)return {ai_status:'stale_document'};
+  return persistDerivedSuggestions(env,doc,result,'success');
  }catch(error){
   const message=String(error?.message||'');
   const failureCode=provider==='gemini'&&/^gemini_[a-z_]+$/.test(message)?message:
    provider==='cloudflare'?classifyCloudflareError(error):'provider_failed';
   // Persist only the safe error category, so a PWA reopen can show what failed.
-  await run(env.DB,"UPDATE document_ai_analyses SET state='failed',result_json=?,updated_at=? WHERE document_id=? AND source_sha=?",
-   JSON.stringify({failure_code:failureCode}),isoNow(),doc.id,sourceHash);
+  await failClaim(failureCode);
   return {ai_status:failureCode};
  }
 }
