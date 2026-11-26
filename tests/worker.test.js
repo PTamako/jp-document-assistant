@@ -3445,3 +3445,24 @@ test('shopping order with future shipping-notification footer still produces net
  }
  assert.equal(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n,0);
 });
+
+test('approval history blocks permanent delete before R2 is touched',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const f=new FormData();
+ f.append('file',new File([new Uint8Array([255,216,255,224,1,2,3,4])],'protected.jpg',{type:'image/jpeg'}));
+ f.append('retention','original');
+ const imported=await req(env,'/api/documents/import/file',{method:'POST',...auth(owner),form:f});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id,doc=env.DB.sql.prepare('SELECT * FROM documents WHERE id=?').get(id);
+ const now=new Date().toISOString();
+ env.DB.sql.prepare("INSERT INTO homeflow_identity_links(homeflow_user_id,homeflow_household_id,local_user_id,verified_at) VALUES(?,?,?,?)").run('hf-owner','hf-family',doc.owner_id,now);
+ env.DB.sql.prepare("INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)").run('approval-test-candidate',id,'finance','{}',now,now);
+ env.DB.sql.prepare("INSERT INTO document_member_sync_intents(candidate_id,document_id,local_user_id,homeflow_user_id,homeflow_household_id,target_app,candidate_kind,document_version,candidate_updated_at,payload_sha256,payload_cipher,payload_iv,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run('approval-test-candidate',id,doc.owner_id,'hf-owner','hf-family','kakebo','finance',doc.version,now,'a'.repeat(64),'cipher','iv',now,now);
+ assert.equal((await req(env,'/api/documents/'+id+'/trash',{method:'POST',...auth(owner),data:{}})).response.status,200);
+ const denied=await req(env,'/api/documents/'+id+'/permanent-delete',{method:'POST',...auth(owner),data:{confirm:'DELETE_FOREVER'}});
+ assert.equal(denied.response.status,409,JSON.stringify(denied.data));
+ assert.equal(denied.data.code,'APPROVAL_HISTORY_LOCKED');
+ assert.equal(env._blobs.size,1);
+ assert.equal(env.DB.sql.prepare('SELECT lifecycle FROM documents WHERE id=?').get(id).lifecycle,'trashed');
+ assert.equal((await req(env,'/api/documents/'+id+'/restore',{method:'POST',...auth(owner),data:{}})).response.status,200);
+});
