@@ -282,11 +282,15 @@ export async function requestDocumentMemberApproval(request,env,p,id){
    (candidate_id,document_id,local_user_id,homeflow_user_id,
     homeflow_household_id,target_app,candidate_kind,document_version,
     candidate_updated_at,payload_sha256,payload_cipher,payload_iv,status,created_at,updated_at)
-   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)
+   SELECT ?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?
+   WHERE EXISTS (SELECT 1 FROM documents d JOIN action_candidates c ON c.document_id=d.id
+     WHERE d.id=? AND d.owner_id=? AND d.lifecycle='active' AND d.version=?
+       AND c.id=? AND c.updated_at=?)
    ON CONFLICT(candidate_id) DO NOTHING`,
    id,item.document_id,p.user_id,p.homeflow_user_id,p.homeflow_household_id,
    target,item.candidate_kind,item.document_version,item.updated_at,
-   digest,sealed.payload_cipher,sealed.payload_iv,now,now);
+   digest,sealed.payload_cipher,sealed.payload_iv,now,now,
+   item.document_id,p.user_id,item.document_version,id,item.updated_at);
  }
  const stored=await dbFirst(env.DB,
   'SELECT * FROM document_member_sync_intents WHERE candidate_id=?',id);
