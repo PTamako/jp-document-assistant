@@ -37,7 +37,7 @@ function pdfResources(){
   const pkgRoot=resolve(process.cwd(),'node_modules/pdfjs-dist');
   const version=JSON.parse(readFileSync(resolve(pkgRoot,'package.json'),'utf8')).version;
   const prefix='/pdf-resources/'+version+'/';
-  const folders=['cmaps','standard_fonts'];
+  const folders=['cmaps','standard_fonts','wasm','iccs'];
   return {
     name:'pdf-resources',
     configureServer(server){
@@ -45,7 +45,7 @@ function pdfResources(){
         const path=(req.url||'').split('?')[0];
         if(!path.startsWith(prefix))return next();
         const rel=path.slice(prefix.length);
-        if(!/^(cmaps|standard_fonts)\/[A-Za-z0-9_.-]+$/.test(rel)||rel.endsWith('/..')||rel.endsWith('/.')){
+        if(!/^(cmaps|standard_fonts|wasm|iccs)\/[A-Za-z0-9_.-]+$/.test(rel)||rel.endsWith('/..')||rel.endsWith('/.')){
           res.statusCode=404;return res.end();
         }
         const file=resolve(pkgRoot,rel);
