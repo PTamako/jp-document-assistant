@@ -434,7 +434,7 @@ const aiProvider=ref(''),geminiConsent=ref(false),docAiProvider=ref('none'),docG
 const sessions=ref([]),sessionsNext=ref(null);
 
 const missingYearDateDraft=ref(''),missingYearConfirmed=ref(false);
-const fieldLabel={due_date_partial:'原文截止日（月日）',required_action:'必须办理的事项',review_action:'需要确认的内容',merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',card_advance_date:'信用卡垫付日期'};
+const fieldLabel={due_date_partial:'原文截止日（月日）',required_action:'必须办理的事项',review_action:'需要确认的内容',merchant:'消费商户',deposit_from:'工资转入方',transaction_date:'交易日期',due_date:'办理／缴费期限',event_date:'扣款／配送日期',amount_jpy:'金额（日元）',net_salary:'实发金额（日元）',transaction_at:'交易完成时间',service_name:'服务名称',meter_period_start:'检针期间开始',meter_period_end:'检针期间结束',period_charge_jpy:'期间电费（日元）',usage_kwh:'用电量（kWh）',usage_m3:'燃气用量（m³）',billing_month:'账单月份',bill_issue_date:'发行日',meter_read_date:'本次检针日',next_meter_date:'下次检针预计日',payment_method:'支付方式',payment_status:'支付状态',card_advance_date:'信用卡垫付日期'};
 const candidateLabel={finance:'家計簿 · 待确认记账',homeflow_task:'HomeFlow 待办',vocabulary:'知学生词',sentence:'知学句子'};
 const financeTypeLabel=item=>item?.payload?.kind==='income'?'收入':
   (item?.payload?.kind==='transfer'||inferSbiInvestmentKind(item?.payload?.merchant))?'资产转移':'支出';
@@ -1619,9 +1619,10 @@ function chooseVariableBillPlan(){
  const sourceValue=key=>fields.find(f=>f.field_key===key&&f.review_state!=='rejected')?.normalized_value||'';
  const advance=sourceValue('card_advance_date');
  const start=sourceValue('meter_period_start');
+ const billingMonth=sourceValue('billing_month');
  if(current.value?.category==='utility'&&/^20\d\d-\d\d-\d\d$/.test(advance))
   candidateDraft.date=advance;
- candidateDraft.variable_bill_period=/^20\d\d-\d\d-\d\d$/.test(start)
+ candidateDraft.variable_bill_period=/^20\d\d-(0[1-9]|1[0-2])$/.test(billingMonth)?billingMonth:/^20\d\d-\d\d-\d\d$/.test(start)
   ?start.slice(0,7):current.value?.category==='utility'?'':candidateDraft.date.slice(0,7);
 }
 async function commitApprovedCandidate(){
@@ -2042,7 +2043,7 @@ onBeforeUnmount(()=>{if(aiStatusInterval!==null)clearInterval(aiStatusInterval);
           <p v-if="!topupAdvice.reviewed" class="fine-print">先在「字段」核验充值金额与完成时间，再生成候选。</p>
         </div>
         <div class="content-card" v-for="item in detailCandidates.filter(c=>['finance','homeflow_task'].includes(c.candidate_kind))" :key="item.id"><h3>{{candidateLabel[item.candidate_kind]}}</h3><p class="muted" v-if="item.candidate_kind==='finance'">{{financeTypeLabel(item)}} ¥{{Number(item.payload.amount_jpy).toLocaleString('ja-JP')}} · {{item.payload.merchant||'商户待确认'}} · {{item.payload.transaction_at||item.payload.transaction_date||'日期待确认'}}</p><p v-if="item.integration_state==='failed'" class="detail-note" role="status">上次同步未成功，未确认已记账。请核对后重试。</p>
-          <p v-if="item.candidate_kind==='homeflow_task'" class="muted">{{(item.payload.task_type==='delivery'?'预计配送：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p>
+          <p v-if="item.candidate_kind==='homeflow_task'" class="muted">{{(item.payload.task_type==='delivery'?'预计配送：':item.payload.task_type==='utility_meter'?'预计检针：':'截止日：')+item.payload.due_on+(item.payload.delivery_window?' '+item.payload.delivery_window:'')}}</p>
           <p v-if="item.candidate_kind==='finance'&&['synced','linked_existing'].includes(item.integration_state)" class="detail-note" role="status">
             {{financeStatusLabels[financeTargetStatus[item.id]]||'曾同步；家計簿当前状态尚未核对'}}
           </p>
