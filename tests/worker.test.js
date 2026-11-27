@@ -3503,3 +3503,42 @@ test('gas PDF text generates verified-source fields, one ledger draft and one me
  assert.deepEqual((await candidates()).filter(x=>['finance','homeflow_task'].includes(x.candidate_kind)).map(x=>x.id).sort(),ids);
  assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
 });
+
+test('actual SVF layout with reversed gas PDF rows recovers all fields and candidates without duplicates',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ // Sanitized layout fixture: no customer identifier, address or account data.
+ const text=['発行日：','ご使用量ならびに料金のお知らせ','東京ガス株式会社','支払方法：カード払い','支払状況：請求中',
+ '2099年 11月 請求分','10%対象 4,200円','4,200円','(内消費税等 381円)','1/2',
+ '2099年11月27日','(内消費税等 381円)','ガス内訳',
+ '2099年10月28日-2099年11月25日(29日間)使用期間',
+ '4,200円ガス料金（税率10%対象）','909円基本料金','3,291.28円従量料金',
+ '使用量 12m3','2099年11月25日検針日','11m3前月使用量(32日間)',
+ '2099年12月23日最新の次回検針予定日','2/2'].join('\r\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text}});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const getDoc=async()=>(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ const candidates=async()=>(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ const expected={amount_jpy:'4200',billing_month:'2099-11',meter_period_start:'2099-10-28',meter_period_end:'2099-11-25',bill_issue_date:'2099-11-27',meter_read_date:'2099-11-25',next_meter_date:'2099-12-23',payment_method:'カード払い',payment_status:'請求中',usage_m3:'12'};
+ const check=async()=>{
+  const d=await getDoc(),f=Object.fromEntries(d.fields.map(x=>[x.field_key,x.normalized_value]));
+  for(const [k,v] of Object.entries(expected))assert.equal(f[k],v,k);
+  assert.equal(f.due_date,undefined);
+  const c=await candidates();
+  assert.equal(c.filter(x=>x.candidate_kind==='finance').length,1);
+  assert.equal(c.find(x=>x.candidate_kind==='finance').payload.amount_jpy,4200);
+  assert.equal(c.filter(x=>x.candidate_kind==='homeflow_task').length,1);
+  assert.equal(c.find(x=>x.candidate_kind==='homeflow_task').payload.due_on,'2099-12-23');
+  return c.filter(x=>['finance','homeflow_task'].includes(x.candidate_kind)).map(x=>x.id).sort();
+ };
+ await check();
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=?").run(id);
+ env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=? AND field_key NOT IN ('payment_method','payment_status','usage_m3')").run(id);
+ const old=await getDoc();
+ const refresh=async()=>req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ const result=await refresh();assert.equal(result.response.status,200,JSON.stringify(result.data));assert.equal(result.data.added_fields,7);
+ const ids=await check();assert.equal((await refresh()).response.status,200);
+ assert.deepEqual(await check(),ids);
+ for(const f of old.fields)assert.equal((await getDoc()).fields.find(x=>x.field_key===f.field_key).id,f.id);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+});
