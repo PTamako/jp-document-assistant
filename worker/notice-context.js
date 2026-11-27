@@ -37,8 +37,17 @@ export function explainNotice({text,category,fields}){
    if(/Olive|Ｏｌｉｖｅ/i.test(text))lines.push('卡片线索：原文出现 Olive／クレジット；记账时仍须本人选择正确的信用卡账户。');
    lines.push('建议：可以作为家計簿支出候选，确认金额、交易日、支付卡片和是否已经记录后再入账，避免重复记账；通知不一定代表最终入账，退款、取消和金额更正可能发生。');
  }else if(category==='utility'){
-   const electric=/(?:電気|電力|検針|kWh)/i.test(text);
-   if(electric){
+   const gas=/(?:東京ガス|ガス料金|ガス内訳)/.test(text);
+   const electric=!gas&&/(?:電気|電力|検針|kWh)/i.test(text);
+   if(gas){
+     summary='燃气账单／用量通知';
+     lines.push('这是燃气费用通知；账单金额并不证明已付款。');
+     const labels={billing_month:'账单月份',meter_period_start:'使用期间开始',meter_period_end:'使用期间结束',meter_read_date:'本次检针日',next_meter_date:'下次检针预计日',bill_issue_date:'发行日',payment_method:'支付方式',payment_status:'支付状态'};
+     if(amount)lines.push('本次请款金额：'+amount+'（需核对原件）。');
+     for(const [key,label] of Object.entries(labels)){const f=field(fields,key);if(f)lines.push(label+'：'+f.normalized_value);}
+     const usage=field(fields,'usage_m3');if(usage)lines.push('燃气用量：'+usage.normalized_value+' m³。');
+     lines.push('下次检针预计日不是缴费截止日。可核验后生成检针提醒，并将请款金额作为家計簿待确认账单。');
+   }else if(electric){
      summary='电费账单／用电量通知';
      lines.push('这是什么：日本电费通知，包含计量期间、用电量、该期间显示的电费及本次请款金额。各金额不一定相等，不能混为一笔款项。');
      const from=field(fields,'meter_period_start'),to=field(fields,'meter_period_end');
