@@ -1,5 +1,5 @@
 import { randomToken, hashString, hmacHex, safeEqual, newCredential, checkPassword, parseCookie, cookieForSession, clearingCookie, sameOrigin, normalizedEmail, validatePassword, isoNow } from './security.js';
-import { parseJapaneseText,extractCampaignActionHints,medicalAppointmentTaskSuggestion } from './analysis.js';
+import { parseJapaneseText,extractCampaignActionHints,medicalAppointmentTaskSuggestion,utilityMeterTaskSuggestion } from './analysis.js';
 import { inferSbiInvestmentKind } from '../shared/sbi-investment.js';
 import {isSalaryDepositNotice,commerceOrderAmount} from './payment-notices.js';
 import { deliveryTaskSuggestion } from './delivery-task.js';
@@ -31,7 +31,7 @@ import {handleDocumentTranslation,documentTranslationBudgetUsage} from './docume
 // One production Worker. No R2 LIST, no browser-owned R2 credentials.
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_LIST = 10;
-const fieldsOf = ['due_date','event_date','amount_jpy','net_salary'];
+const fieldsOf = ['due_date','event_date','next_meter_date','amount_jpy','net_salary'];
 const sensitiveCategories=new Set(['salary','tax','bank','card_spend','topup','insurance','medical','government','housing','travel','hotel']);
 const sensitiveSource=/(?:マイナンバー|個人番号|在留カード|旅券|パスポート|運転免許証|保険証|口座番号|銀行口座|診療明細|給与明細)/;
 function requiresPrivateDefault(category,sourceText=''){
@@ -217,7 +217,7 @@ function listShape(d,p){return {id:d.id,category:d.category,title:d.title,visibi
 // A bill type is not proof of which company charged the household.
 // Use a neutral utility label until the person selects the actual Kakeibo plan.
 function utilityLedgerLabel(text){
-  if(/(?:ガス料金|都市ガス)/.test(text))return 'ガス料金';
+  if(/(?:ガス料金|都市ガス|東京ガス|ガス内訳)/.test(text))return 'ガス料金';
   if(/(?:水道料金|水道局)/.test(text))return '水道料金';
   return '電気料金';
 }
@@ -261,7 +261,7 @@ async function analyzeStored(env,doc,force=false){
   }
   const due=result.fields.find(f=>f.field_key==='due_date'&&!f.source_quote?.startsWith('年份自动补全'));
   const deliveryTask=deliveryTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
-  const appointmentTask=medicalAppointmentTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility});
+  const appointmentTask=medicalAppointmentTaskSuggestion(result,doc.extracted_text_ja,{visibility:doc.visibility})||utilityMeterTaskSuggestion(result,{visibility:doc.visibility});
   if(deliveryTask){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify(deliveryTask),now,now]);}
   else if(appointmentTask){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify(appointmentTask),now,now]);}
   else if(due){stmts.push(['INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',randomToken(16),doc.id,'homeflow_task',JSON.stringify({title:`确认：${doc.title.slice(0,40)}`,due_on:due.normalized_value,visibility:doc.visibility,requires_confirmation:true}),now,now]);}
@@ -493,7 +493,7 @@ async function updateField(request,env,p,fieldId){
   }
   let remoteLinks=[];
   if(normalized!==String(field.normalized_value??'') && fieldsOf.includes(field.field_key)){
-    const target=['due_date','event_date'].includes(field.field_key)?'homeflow':'kakebo';
+    const target=['due_date','event_date','next_meter_date'].includes(field.field_key)?'homeflow':'kakebo';
     remoteLinks=await dbAll(env.DB,`SELECT l.remote_id,l.target FROM integration_links l
       JOIN action_candidates c ON c.id=l.candidate_id
       WHERE c.document_id=? AND l.target=? AND l.state IN ('synced','linked_existing')`,field.document_id,target);
@@ -1128,7 +1128,11 @@ ELSE 'unreviewed' END review_status,
       const previousEvent=existing.find(x=>x.field_key==='event_date');
       const sourceEvent=parsed.fields.find(x=>x.field_key==='event_date');
       const canSuggest=!previousEvent||(previousEvent.review_state!=='rejected'&&previousEvent.normalized_value===sourceEvent?.normalized_value);
-      const proposed=canSuggest?deliveryTaskSuggestion(parsed,doc.extracted_text_ja,{visibility:nextVisibility}):null;
+      const oldMeter=existing.find(x=>x.field_key==='next_meter_date');
+      const newMeter=parsed.fields.find(x=>x.field_key==='next_meter_date');
+      const canSuggestMeter=!oldMeter||(oldMeter.review_state!=='rejected'&&oldMeter.normalized_value===newMeter?.normalized_value);
+      const proposed=(canSuggest?deliveryTaskSuggestion(parsed,doc.extracted_text_ja,{visibility:nextVisibility}):null)||
+        (canSuggestMeter?utilityMeterTaskSuggestion(parsed,{visibility:nextVisibility}):null);
       if(proposed)statements.push([`INSERT INTO action_candidates(id,document_id,candidate_kind,payload_json,created_at,updated_at)
         SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM action_candidates WHERE document_id=? AND candidate_kind='homeflow_task')`,
         randomToken(16),id,'homeflow_task',JSON.stringify(proposed),now,now,id]);
