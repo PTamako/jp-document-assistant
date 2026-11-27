@@ -39,7 +39,7 @@ export function classifyText(text) {
   if (isCardPurchaseNotice(text)) return 'card_spend';
   // A utility bill mentioning a credit card, payment date, or ご請求額 is
   // still a utility invoice, not an independent bank/card transaction.
-  if (/(電気料金|ガス料金|水道料金|電力使用量|検針期間)/.test(text)) return 'utility';
+  if (/(電気料金|ガス料金|水道料金|電力使用量|検針期間|東京ガス|ガス内訳)/.test(text)) return 'utility';
   // A shopping order mentioning its credit-card payment method is not a bank statement.
   if (isCommerceOrder(text)) return 'shopping';
   if (/(?:口座引[き]?落[とし]?|口座振替|引落(?:し)?(?:予定日|金額|額))/.test(text)) return 'bank';
@@ -209,6 +209,51 @@ function extractElectricityFields(text) {
   return fields;
 }
 
+
+// Tokyo Gas paper/PDF invoices use Japanese calendar labels and a hyphen
+// between service dates. Preserve label evidence; do not infer payment.
+function extractGasFields(raw){
+  const text=String(raw||'').normalize('NFKC');
+  const fields=[];
+  const add=(key,type,value,quote)=>{
+    if(value==null||value===''||fields.some(f=>f.field_key===key))return;
+    fields.push({field_key:key,value_type:type,normalized_value:String(value),
+      ...(type==='money'?{original_currency:'JPY'}:{}),source_quote:quote.trim().slice(0,190),review_state:'unreviewed'});
+  };
+  const gap='[\\s:：]*';
+  const date='(?:19|20)\\d{2}\\s*年\\s*\\d{1,2}\\s*月\\s*\\d{1,2}\\s*日|(?:19|20)\\d{2}\\s*[/.-]\\s*\\d{1,2}\\s*[/.-]\\s*\\d{1,2}';
+  const parseDate=s=>extractDates(s)[0]?.date;
+  const amount=/(?:(20\d{2})\s*年\s*(\d{1,2})\s*月\s*請求分)[\s:：]*(?:¥\s*)?(\d[\d,]*)\s*円/.exec(text);
+  if(amount){
+    const n=Number(amount[3].replace(/,/g,''));
+    if(Number.isSafeInteger(n)&&n>=0)add('amount_jpy','money',n,amount[0]);
+    if(Number(amount[2])>=1&&Number(amount[2])<=12)add('billing_month','text',amount[1]+'-'+amount[2].padStart(2,'0'),amount[0]);
+  }
+  if(!fields.some(f=>f.field_key==='amount_jpy')){
+    const m=/(?:ガス料金(?:\s*[（(]税率[^)\r\n]*[）)])?)[ \t:：]*(?:\r?\n[ \t]*)?(?:¥\s*)?(\d[\d,]*)\s*円/.exec(text);
+    if(m){const n=Number(m[1].replace(/,/g,''));if(Number.isSafeInteger(n)&&n>=0)add('amount_jpy','money',n,m[0]);}
+  }
+  const period=new RegExp('(?:ご?使用期間|検針期間)'+gap+'('+date+')\\s*(?:[-‐‑‒–—−~〜～]|から|至)\\s*('+date+')').exec(text);
+  if(period){const a=parseDate(period[1]),b=parseDate(period[2]);if(a&&b&&a<=b){add('meter_period_start','date',a,period[0]);add('meter_period_end','date',b,period[0]);}}
+  for(const [label,key] of [['発行日','bill_issue_date'],['(?:最新の\\s*)?次回検針予定日','next_meter_date'],['(?<!次回)検針日','meter_read_date']]){
+    const m=new RegExp(label+gap+'('+date+')').exec(text);
+    if(m)add(key,'date',parseDate(m[1]),m[0]);
+  }
+  const usage=/(?:^|\n)\s*(?:ご?使用量)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*m3\b/im.exec(text);
+  if(usage)add('usage_m3','text',usage[1],usage[0]);
+  const method=/支払方法[\s:：]*(カード払い|クレジットカード払い|口座振替|払込書払い)/.exec(text);
+  if(method)add('payment_method','text',method[1],method[0]);
+  const status=/支払状況[\s:：]*(請求中|支払済み|支払済|未払い|未払)/.exec(text);
+  if(status)add('payment_status','text',status[1],status[0]);
+  return fields;
+}
+export function utilityMeterTaskSuggestion(parsed,{visibility='private',today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}={}){
+  if(parsed?.category!=='utility')return null;
+  const f=parsed.fields?.find(x=>x.field_key==='next_meter_date'&&x.review_state!=='rejected');
+  if(!f||!/^20\d\d-\d\d-\d\d$/.test(f.normalized_value)||f.normalized_value<today)return null;
+  return {task_type:'utility_meter',date_field_key:'next_meter_date',title:'燃气检针提醒',due_on:f.normalized_value,visibility,requires_confirmation:true};
+}
+
 // Relative dates and requested actions are useful review fields, but must
 // never be promoted to a schedulable YYYY-MM-DD deadline without a year.
 // This also works when an AI summary exists but is not part of document_fields.
@@ -316,7 +361,7 @@ export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   const clauses=interpretCriticalClauses(text);
   const issues=[];
   const dates=extractDates(text);
-  const fields=category==='topup'?extractTopupFields(text):category==='utility'?extractElectricityFields(text):category==='card_spend'?extractCardPurchaseFields(text):category==='shopping'?extractCommerceFields(text):category==='salary'&&isSalaryDepositNotice(text)?extractSalaryDepositFields(text):[];
+  const fields=category==='topup'?extractTopupFields(text):category==='utility'?(/(?:東京ガス|ガス料金|ガス内訳)/.test(text)?extractGasFields(text):extractElectricityFields(text)):category==='card_spend'?extractCardPurchaseFields(text):category==='shopping'?extractCommerceFields(text):category==='salary'&&isSalaryDepositNotice(text)?extractSalaryDepositFields(text):[];
   const due=dates.find(d=>d.due_hint && !/(?:お届け予定|配達予定|配送予定|口座引落|引き落とし予定|受取完了)/.test(d.source_quote));
   if (due) fields.push({field_key:'due_date',value_type:'date',normalized_value:due.date,source_quote:due.source_quote,review_state:'unreviewed'});
   for(const item of extractActionableTextFields(text,!!due,{defaultYear:referenceYear,category}))fields.push(item);
@@ -340,6 +385,7 @@ export function parseJapaneseText(raw,{referenceYear=currentJapanYear()}={}) {
   for(const {key,re} of priority){
     if(fields.some(f=>f.field_key===key))continue; // Prioritize explicitly labelled amounts and prevent duplicates.
     if(category==='shopping' && isCommerceOrder(text) && key==='amount_jpy')continue; // Never substitute subtotal, discount or item price for a missing/ambiguous final amount.
+    if(category==='utility' && /(?:東京ガス|ガス料金|ガス内訳)/.test(text) && key==='amount_jpy')continue; // Do not substitute a tax or basic charge for the total.
     if(category==='topup' && key==='amount_jpy')continue; // No payment or income inference from a top-up.
     re.lastIndex=0;
     const m=re.exec(text);
