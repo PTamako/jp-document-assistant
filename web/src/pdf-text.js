@@ -11,7 +11,8 @@ function pdfResourceOptions(pdfjs){
   const browser=typeof window!=='undefined';
   const root=browser?new URL('/pdf-resources/'+pdfjs.version+'/',window.location.origin).href:
     process.cwd()+'/node_modules/pdfjs-dist/';
-  return {cMapUrl:root+'cmaps/',cMapPacked:true,standardFontDataUrl:root+'standard_fonts/'};
+  return {cMapUrl:root+'cmaps/',cMapPacked:true,standardFontDataUrl:root+'standard_fonts/',
+    wasmUrl:root+'wasm/',iccUrl:root+'iccs/',useWorkerFetch:browser};
 }
 export function isUsablePdfText(text){
   const s=String(text||'').replace(/\s/g,'');
@@ -29,7 +30,7 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
     pdfjs.GlobalWorkerOptions.workerSrc=worker.default;
   }
   const task=pdfjs.getDocument({data:bytes,disableAutoFetch:true,disableStream:true,
-    ...pdfResourceOptions(pdfjs),stopAtErrors:false,isEvalSupported:false,useSystemFonts:true,disableFontFace:true});
+    ...pdfResourceOptions(pdfjs),stopAtErrors:true,isEvalSupported:false,useSystemFonts:true,disableFontFace:typeof window==='undefined'});
   let document;
   try{
     document=await task.promise;
@@ -57,7 +58,11 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
         }
         result=result.trim();
         if(result&&!isUsablePdfText(result)){textFailed.push(pageNumber);result='';}
-        if(!result && typeof ocrPage==='function' && ocrCount<maxOcrPages && !ocrStoppedReason){
+        // A logo or page number alone is not a successful document extraction.
+        const sparse=result.replace(/\s/g,'').length<24;
+        const originalText=result;
+        if(sparse && result && !textFailed.includes(pageNumber))textFailed.push(pageNumber);
+        if((!result || sparse) && typeof ocrPage==='function' && ocrCount<maxOcrPages && !ocrStoppedReason){
           ocrCount++;
           try {
             onProgress?.(`扫描第 ${pageNumber}/${document.numPages} 页，正在本机识别日文…`);
@@ -75,7 +80,8 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
               await page.render({canvasContext:context,viewport}).promise;
               const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.92));
               if(!blob)throw Error('无法将扫描页转换成图片');
-              result=String((await ocrPage(blob,pageNumber))?.text||'').trim();
+              const candidate=String((await ocrPage(blob,pageNumber))?.text||'').trim();
+              if(isUsablePdfText(candidate)&&candidate.length>originalText.length)result=candidate;
             }finally{canvas.width=0;canvas.height=0;}
           }catch(e){
             const reason=String(e?.message||'识别失败').slice(0,180);
@@ -87,15 +93,16 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
           }
         }
         if(result.length+pages.reduce((n,s)=>n+s.length,0)>maxChars)throw Error('PDF 文字超过 10 万字符，请拆分导入');
+        if(sparse && result===originalText && result)empty.push(pageNumber);
         if(result)pages.push(`【PDF 第 ${pageNumber} 页】\n${result}`);
         else empty.push(pageNumber);
       }finally{page.cleanup();}
     }
     return {kind:'pdf',title:file.name.replace(/\.[^.]+$/,''),source_type:'local_file',
-      text:pages.join('\n\n'),pages_read:document.numPages,needs_manual:pages.length===0,
+      text:pages.join('\n\n'),pages_read:document.numPages,needs_manual:pages.length===0||empty.length===document.numPages,
       pages_without_text:empty,text_layer_failed_pages:textFailed,ocr_pages_attempted:ocrCount,ocr_failed:ocrFailed,
       warning:empty.length?
-        (`第 ${empty.join('、')} 页仍未识别出文字。`+(textFailed.length?'部分 PDF 文字层读取异常或乱码。':'')+
+        (`第 ${empty.join('、')} 页文字识别不完整或未识别出文字。`+(textFailed.length?'部分 PDF 文字层读取异常或乱码。':'')+
          (ocrFailed.length?('失败原因：'+ocrFailed.slice(0,2).map(x=>`第${x.page}页 ${x.reason}`).join('；')+'。'+(ocrStoppedReason?'后续扫描页已暂停本机 OCR，避免重复失败。可使用 OCR.space 备用识别。':'')):'请核对原件或使用 OCR.space 备用识别。')):
          (ocrCount?'扫描页已使用本机 OCR，内容仍须逐项核对原件。':'已提取 PDF 文字层，金额、日期和版面应核对原件。')};
   }finally{
@@ -116,7 +123,7 @@ export async function renderPdfOcrPreview(file,{pageNumber=1,maxBytes=900*1024}=
   const pdfjs=await import('pdfjs-dist/legacy/build/pdf.mjs');
   const worker=await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
   pdfjs.GlobalWorkerOptions.workerSrc=worker.default;
-  const task=pdfjs.getDocument({data:bytes,disableAutoFetch:true,disableStream:true,...pdfResourceOptions(pdfjs),stopAtErrors:false,isEvalSupported:false,useSystemFonts:true,disableFontFace:true});
+  const task=pdfjs.getDocument({data:bytes,disableAutoFetch:true,disableStream:true,...pdfResourceOptions(pdfjs),stopAtErrors:false,isEvalSupported:false,useSystemFonts:true,disableFontFace:typeof window==='undefined'});
   let doc=null;
   try{
     doc=await task.promise;
