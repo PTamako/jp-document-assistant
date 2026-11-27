@@ -59,7 +59,7 @@ export async function extractPdfText(file,{maxPages=30,maxChars=100000,ocrPage=n
         result=result.trim();
         if(result&&!isUsablePdfText(result)){textFailed.push(pageNumber);result='';}
         // A logo or page number alone is not a successful document extraction.
-        const sparse=result.replace(/\s/g,'').length<24;
+        const sparse=result.replace(/\s/g,'').length<24 && !/[\u3040-\u30ff\u3400-\u9fff]/.test(result);
         const originalText=result;
         if(sparse && result && !textFailed.includes(pageNumber))textFailed.push(pageNumber);
         if((!result || sparse) && typeof ocrPage==='function' && ocrCount<maxOcrPages && !ocrStoppedReason){
