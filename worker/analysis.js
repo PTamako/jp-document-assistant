@@ -213,7 +213,7 @@ function extractElectricityFields(text) {
 // Tokyo Gas paper/PDF invoices use Japanese calendar labels and a hyphen
 // between service dates. Preserve label evidence; do not infer payment.
 function extractGasFields(raw){
-  const text=String(raw||'').normalize('NFKC');
+  const text=String(raw||'').normalize('NFKC').replace(/\r\n?/g,'\n');
   const fields=[];
   const add=(key,type,value,quote)=>{
     if(value==null||value===''||fields.some(f=>f.field_key===key))return;
@@ -223,21 +223,37 @@ function extractGasFields(raw){
   const gap='[\\s:：]*';
   const date='(?:19|20)\\d{2}\\s*年\\s*\\d{1,2}\\s*月\\s*\\d{1,2}\\s*日|(?:19|20)\\d{2}\\s*[/.-]\\s*\\d{1,2}\\s*[/.-]\\s*\\d{1,2}';
   const parseDate=s=>extractDates(s)[0]?.date;
-  const amount=/(?:(20\d{2})\s*年\s*(\d{1,2})\s*月\s*請求分)[\s:：]*(?:¥\s*)?(\d[\d,]*)\s*円/.exec(text);
-  if(amount){
-    const n=Number(amount[3].replace(/,/g,''));
-    if(Number.isSafeInteger(n)&&n>=0)add('amount_jpy','money',n,amount[0]);
-    if(Number(amount[2])>=1&&Number(amount[2])<=12)add('billing_month','text',amount[1]+'-'+amount[2].padStart(2,'0'),amount[0]);
-  }
-  if(!fields.some(f=>f.field_key==='amount_jpy')){
-    const m=/(?:ガス料金(?:\s*[（(]税率[^)\r\n]*[）)])?)[ \t:：]*(?:\r?\n[ \t]*)?(?:¥\s*)?(\d[\d,]*)\s*円/.exec(text);
-    if(m){const n=Number(m[1].replace(/,/g,''));if(Number.isSafeInteger(n)&&n>=0)add('amount_jpy','money',n,m[0]);}
-  }
-  const period=new RegExp('(?:ご?使用期間|検針期間)'+gap+'('+date+')\\s*(?:[-‐‑‒–—−~〜～]|から|至)\\s*('+date+')').exec(text);
+  // PDF.js may emit label and value in either order. Match within a row
+  // first; never grab a number from an unrelated neighboring table row.
+  const money='(?:¥[ \\t]*)?(\\d[\\d,]*)[ \\t]*円';
+  const gasLabel='ガス料金(?:[ \\t]*\\(税率[^)\\r\\n]*\\))?';
+  const month=/(20\d{2})[ \t]*年[ \t]*(\d{1,2})[ \t]*月[ \t]*請求分/.exec(text);
+  if(month&&Number(month[2])>=1&&Number(month[2])<=12)
+    add('billing_month','text',month[1]+'-'+month[2].padStart(2,'0'),month[0]);
+  const totalLabel='(?:20\\d{2}[ \\t]*年[ \\t]*\\d{1,2}[ \\t]*月[ \\t]*請求分|今回のご請求金額(?:合計)?|ご請求金額(?:合計)?)';
+  const horizontal='[ \\t:：]*';
+  const amount=new RegExp('^'+horizontal+totalLabel+horizontal+money+'[ \\t]*$','m').exec(text)||
+    new RegExp('^'+horizontal+money+horizontal+totalLabel+'[ \\t]*$','m').exec(text)||
+    new RegExp('^'+horizontal+gasLabel+horizontal+money+'[ \\t]*$','m').exec(text)||
+    new RegExp('^'+horizontal+money+horizontal+gasLabel+'[ \\t]*$','m').exec(text)||
+    new RegExp('^'+horizontal+totalLabel+'[ \\t]*\\r?\\n[ \\t]*'+money+'[ \\t]*$','m').exec(text);
+  if(amount){const n=Number(amount[1].replace(/,/g,''));if(Number.isSafeInteger(n)&&n>0)add('amount_jpy','money',n,amount[0]);}
+  const range='('+date+')[ \\t]*(?:[-‐‑‒–—−~〜～]|から|至)[ \\t]*('+date+')(?:[ \\t]*\\(\\d+[ \\t]*日間\\))?';
+  const periodLabel='(?:ご?使用期間|検針期間)';
+  const period=new RegExp('^'+horizontal+periodLabel+gap+range+'[ \\t]*$','m').exec(text)||
+    new RegExp('^'+horizontal+range+horizontal+periodLabel+'[ \\t]*$','m').exec(text);
   if(period){const a=parseDate(period[1]),b=parseDate(period[2]);if(a&&b&&a<=b){add('meter_period_start','date',a,period[0]);add('meter_period_end','date',b,period[0]);}}
-  for(const [label,key] of [['発行日','bill_issue_date'],['(?:最新の\\s*)?次回検針予定日','next_meter_date'],['(?<!次回)検針日','meter_read_date']]){
-    const m=new RegExp(label+gap+'('+date+')').exec(text);
+  for(const [label,key] of [['発行日','bill_issue_date'],['(?:最新の[ \\t]*)?次回検針予定日','next_meter_date'],['検針日','meter_read_date']]){
+    const m=new RegExp('^'+horizontal+label+gap+'('+date+')[ \\t]*$','m').exec(text)||
+      new RegExp('^'+horizontal+'('+date+')'+horizontal+label+'[ \\t]*$','m').exec(text);
     if(m)add(key,'date',parseDate(m[1]),m[0]);
+  }
+  // Some SVF PDFs place the issue-date value far away from its label.
+  // Only use a standalone date when there is exactly one unambiguous
+  // candidate and the issue-date label is explicitly present but empty.
+  if(!fields.some(f=>f.field_key==='bill_issue_date')&&/^[ \t]*発行日[ \t:：]*$/m.test(text)){
+    const candidates=[...text.matchAll(new RegExp('^[ \\t]*('+date+')[ \\t]*$','gm'))];
+    if(candidates.length===1)add('bill_issue_date','date',parseDate(candidates[0][1]),'発行日（分離された日付行）: '+candidates[0][1]);
   }
   const usage=/(?:^|\n)\s*(?:ご?使用量)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*m3\b/im.exec(text);
   if(usage)add('usage_m3','text',usage[1],usage[0]);
