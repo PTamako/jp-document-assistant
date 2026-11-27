@@ -3466,3 +3466,40 @@ test('approval history blocks permanent delete before R2 is touched',async()=>{
  assert.equal(env.DB.sql.prepare('SELECT lifecycle FROM documents WHERE id=?').get(id).lifecycle,'trashed');
  assert.equal((await req(env,'/api/documents/'+id+'/restore',{method:'POST',...auth(owner),data:{}})).response.status,200);
 });
+
+test('gas PDF text generates verified-source fields, one ledger draft and one meter reminder; reinterpret is idempotent',async()=>{
+ const env=makeEnv(),owner=await boot(env);
+ const text=['東京ガス株式会社','発行日：2099年11月27日','支払方法：カード払い','支払状況：請求中',
+  '2099年 11月 請求分 4,200円','内消費税等 381円','ガス内訳',
+  '使用期間 2099年10月28日‑2099年11月25日(29日間)',
+  'ガス料金（税率10%対象） 4,200円','基本料金 909円',
+  '使用量 12m3','検針日 2099年11月25日','前月使用量 11m3','最新の次回検針予定日 2099年12月23日'].join('\n');
+ const imported=await req(env,'/api/documents/import/text',{method:'POST',...auth(owner),data:{source_type:'text',retention:'summary',text}});
+ assert.equal(imported.response.status,201,JSON.stringify(imported.data));
+ const id=imported.data.document_id;
+ const doc=(await req(env,'/api/documents/'+id,auth(owner))).data.document;
+ assert.equal(doc.category,'utility');
+ const fields=Object.fromEntries(doc.fields.map(f=>[f.field_key,f.normalized_value]));
+ assert.deepEqual(Object.fromEntries(['amount_jpy','billing_month','meter_period_start','meter_period_end','meter_read_date','next_meter_date','bill_issue_date','usage_m3','payment_method','payment_status'].map(k=>[k,fields[k]])),
+ {amount_jpy:'4200',billing_month:'2099-11',meter_period_start:'2099-10-28',meter_period_end:'2099-11-25',meter_read_date:'2099-11-25',next_meter_date:'2099-12-23',bill_issue_date:'2099-11-27',usage_m3:'12',payment_method:'カード払い',payment_status:'請求中'});
+ assert.equal(fields.due_date,undefined);
+ assert.match(doc.explanation_zh,/燃气/);
+ const candidates=async()=>(await req(env,'/api/documents/'+id+'/candidates',auth(owner))).data.items;
+ let items=await candidates();
+ assert.equal(items.filter(x=>x.candidate_kind==='finance').length,1);
+ assert.equal(items.find(x=>x.candidate_kind==='finance').payload.amount_jpy,4200);
+ assert.equal(items.find(x=>x.candidate_kind==='finance').payload.payment_confirmed,false);
+ assert.equal(items.find(x=>x.candidate_kind==='homeflow_task').payload.date_field_key,'next_meter_date');
+ assert.equal(items.find(x=>x.candidate_kind==='homeflow_task').payload.due_on,'2099-12-23');
+ env.DB.sql.prepare("DELETE FROM action_candidates WHERE document_id=?").run(id);
+ env.DB.sql.prepare("DELETE FROM document_fields WHERE document_id=?").run(id);
+ const updated=await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}});
+ assert.equal(updated.response.status,200,JSON.stringify(updated.data));
+ items=await candidates();
+ assert.equal(items.filter(x=>x.candidate_kind==='finance').length,1);
+ assert.equal(items.filter(x=>x.candidate_kind==='homeflow_task').length,1);
+ const ids=items.filter(x=>['finance','homeflow_task'].includes(x.candidate_kind)).map(x=>x.id).sort();
+ assert.equal((await req(env,'/api/documents/'+id+'/reinterpret',{method:'POST',...auth(owner),data:{}})).response.status,200);
+ assert.deepEqual((await candidates()).filter(x=>['finance','homeflow_task'].includes(x.candidate_kind)).map(x=>x.id).sort(),ids);
+ assert.equal(Number(env.DB.sql.prepare('SELECT COUNT(*) n FROM integration_links').get().n),0);
+});
